@@ -1,0 +1,246 @@
+package com.simpleaccount.app.ui.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavHostController
+import com.simpleaccount.app.data.entity.Category
+import com.simpleaccount.app.ui.components.CategoryIconCircle
+import com.simpleaccount.app.ui.components.parseColor
+import com.simpleaccount.app.util.IconMapper
+import kotlinx.coroutines.launch
+
+/** 可选图标库（预置图标名 → 显示用 ImageVector） */
+private val iconLibrary = listOf(
+    "restaurant", "directions_car", "shopping_cart", "movie", "local_hospital",
+    "school", "home", "phone", "attach_money", "card_giftcard", "trending_up", "work", "more_horiz"
+)
+
+/** 可选颜色库 */
+private val colorLibrary = listOf(
+    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FF9F43", "#A29BFE",
+    "#00B894", "#FDCB6E", "#2ECC71", "#E67E22", "#6C5CE7", "#00CEC9", "#2D8CF0", "#BDC3C7"
+)
+
+@Composable
+fun CategoryManageScreen(
+    navController: NavHostController,
+    viewModel: CategoryManageViewModel = hiltViewModel(),
+) {
+    val state by viewModel.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
+    var showAddDialog by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<Category?>(null) }
+    var confirmDeleteEmpty by remember { mutableStateOf<Category?>(null) }
+
+    Scaffold(
+        topBar = { SettingsSubToolbar("分类管理", onBack = { navController.popBackStack() }) },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showAddDialog = true }) {
+                Icon(Icons.Filled.Add, contentDescription = "新增分类")
+            }
+        }
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            TabRow(selectedTabIndex = if (state.type == Category.TYPE_EXPENSE) 0 else 1) {
+                Tab(
+                    selected = state.type == Category.TYPE_EXPENSE,
+                    onClick = { viewModel.setType(Category.TYPE_EXPENSE) },
+                    text = { Text("支出") }
+                )
+                Tab(
+                    selected = state.type == Category.TYPE_INCOME,
+                    onClick = { viewModel.setType(Category.TYPE_INCOME) },
+                    text = { Text("收入") }
+                )
+            }
+
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(state.categories, key = { it.id }) { cat ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CategoryIconCircle(cat, size = 40)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(cat.name, style = MaterialTheme.typography.bodyLarge)
+                            if (cat.isPreset) {
+                                Text(
+                                    "预置分类",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (!cat.isPreset) {
+                            IconButton(onClick = {
+                                scope.launch {
+                                    if (viewModel.isCategoryEmpty(cat.name)) {
+                                        confirmDeleteEmpty = cat
+                                    } else {
+                                        pendingDelete = cat
+                                    }
+                                }
+                            }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 新增分类对话框
+    if (showAddDialog) {
+        AddCategoryDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { name, icon, color ->
+                showAddDialog = false
+                scope.launch { viewModel.add(name, icon, color) }
+            }
+        )
+    }
+
+    // 删除二次确认（含迁移提示）
+    val delTarget = pendingDelete ?: confirmDeleteEmpty
+    if (delTarget != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null; confirmDeleteEmpty = null },
+            title = { Text("删除分类") },
+            text = { Text("删除「${delTarget.name}」分类？${if (pendingDelete != null) "\n该分类下的记录将转移到「其它」。" else ""}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        viewModel.delete(delTarget)
+                    }
+                    pendingDelete = null; confirmDeleteEmpty = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null; confirmDeleteEmpty = null }) { Text("取消") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AddCategoryDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var icon by remember { mutableStateOf("more_horiz") }
+    var color by remember { mutableStateOf("#BDC3C7") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新增分类") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("分类名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("选择图标", style = MaterialTheme.typography.titleSmall)
+                Row {
+                    iconLibrary.forEach { ic ->
+                        val selected = ic == icon
+                        Box(
+                            Modifier
+                                .padding(4.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (selected) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant)
+                                .clickable { icon = ic },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                IconMapper.map(ic),
+                                contentDescription = ic,
+                                tint = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("选择颜色", style = MaterialTheme.typography.titleSmall)
+                Row {
+                    colorLibrary.forEach { c ->
+                        val selected = c == color
+                        Box(
+                            Modifier
+                                .padding(4.dp)
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(parseColor(c))
+                                .border(
+                                    if (selected) 3.dp else 1.dp,
+                                    if (selected) Color.Black else Color.Transparent,
+                                    CircleShape
+                                )
+                                .clickable { color = c }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name, icon, color) }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}

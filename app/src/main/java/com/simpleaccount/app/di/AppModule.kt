@@ -1,0 +1,60 @@
+package com.simpleaccount.app.di
+
+import android.content.Context
+import androidx.room.Room
+import com.simpleaccount.app.data.dao.AiMessageDao
+import com.simpleaccount.app.data.dao.CategoryDao
+import com.simpleaccount.app.data.dao.ImportLogDao
+import com.simpleaccount.app.data.dao.MerchantDao
+import com.simpleaccount.app.data.dao.SettingDao
+import com.simpleaccount.app.data.dao.TransactionDao
+import com.simpleaccount.app.data.db.AppDatabase
+import com.simpleaccount.app.util.CategoryPresets
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import javax.inject.Named
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
+        return Room.databaseBuilder(context, AppDatabase::class.java, "simple_account.db")
+            .fallbackToDestructiveMigration()
+            .build()
+    }
+
+    @Provides
+    fun provideTransactionDao(db: AppDatabase): TransactionDao = db.transactionDao()
+
+    @Provides
+    fun provideCategoryDao(db: AppDatabase): CategoryDao = db.categoryDao()
+
+    @Provides
+    fun provideMerchantDao(db: AppDatabase): MerchantDao = db.merchantDao()
+
+    @Provides
+    fun provideImportLogDao(db: AppDatabase): ImportLogDao = db.importLogDao()
+
+    @Provides
+    fun provideAiMessageDao(db: AppDatabase): AiMessageDao = db.aiMessageDao()
+
+    @Provides
+    fun provideSettingDao(db: AppDatabase): SettingDao = db.settingDao()
+
+    @Provides
+    @Named("ioDispatcher")
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @Provides
+    @Named("expenseDefaultCategory")
+    fun provideExpenseDefaultCategory(): String = CategoryPresets.DEFAULT_EXPENSE_CATEGORY
+}
