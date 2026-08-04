@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -413,34 +415,51 @@ private fun DatePickerSheet(
     if (day > daysInMonth(year, month)) day = daysInMonth(year, month)
 
     val nowY = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+    val nowM = remember { java.util.Calendar.getInstance().get(java.util.Calendar.MONTH) + 1 }
+    val nowD = remember { java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH) }
+
+    val years = (2000..nowY + 5).toList()
+    val months = (1..12).toList()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text("选择日期", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${year}年${month}月${day}日",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(12.dp))
 
-            // 三个选择区
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // 年 (- / 值 / +)
-                DateStepper("年", "$year", {
-                    if (year > 2000) year -= 1
-                }, {
-                    if (year < nowY + 5) year += 1
-                }, modifier = Modifier.weight(1f))
-                DateStepper("月", "$month", {
-                    month = if (month > 1) month - 1 else 12
-                    if (day > daysInMonth(year, month)) day = daysInMonth(year, month)
-                }, {
-                    month = if (month < 12) month + 1 else 1
-                }, modifier = Modifier.weight(1f))
-                DateStepper("日", "$day", {
-                    day = if (day > 1) day - 1 else 1
-                }, {
-                    day = if (day < daysInMonth(year, month)) day + 1 else 1
-                }, modifier = Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth().height(200.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WheelColumn(
+                    label = "年",
+                    values = years.map { it.toString() },
+                    selected = year.toString(),
+                    height = 200,
+                    modifier = Modifier.weight(1.2f),
+                    onSelect = { year = it.toInt(); if (day > daysInMonth(year, month)) day = daysInMonth(year, month) }
+                )
+                WheelColumn(
+                    label = "月",
+                    values = months.map { it.toString() },
+                    selected = month.toString(),
+                    height = 200,
+                    modifier = Modifier.weight(1f),
+                    onSelect = { month = it.toInt(); if (day > daysInMonth(year, month)) day = daysInMonth(year, month) }
+                )
+                WheelColumn(
+                    label = "日",
+                    values = (1..daysInMonth(year, month)).map { it.toString() },
+                    selected = day.toString(),
+                    height = 200,
+                    modifier = Modifier.weight(1f),
+                    onSelect = { day = it.toInt() }
+                )
             }
-            Spacer(Modifier.height(20.dp))
 
+            Spacer(Modifier.height(16.dp))
             Button(
                 onClick = { onConfirm(year, month, day) },
                 modifier = Modifier.fillMaxWidth().height(48.dp)
@@ -452,25 +471,78 @@ private fun DatePickerSheet(
     }
 }
 
+/**
+ * 简单滚轮列：LazyColumn，中间高亮选中。纯 foundation，无 Material3 新 API，
+ * 兼容 Compose BOM 2024.02。滚动时实时高亮中线项，松手不回弹（无磁性吸附动画，避免卡顿）。
+ */
 @Composable
-private fun DateStepper(
+private fun WheelColumn(
     label: String,
-    value: String,
-    onMinus: () -> Unit,
-    onPlus: () -> Unit,
+    values: List<String>,
+    selected: String,
+    height: Int,
+    onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Row {
-            TextButton(onClick = onMinus, modifier = Modifier.size(40.dp)) { Text("−", fontSize = 20.sp) }
-            TextButton(onClick = onPlus, modifier = Modifier.size(40.dp)) { Text("＋", fontSize = 20.sp) }
+    val itemHeightDp = 44.dp
+    val scope = rememberCoroutineScope()
+
+    val startIndex = values.indexOf(selected).coerceAtLeast(0)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 2).coerceAtLeast(0))
+
+    // 顶/底板留白格数，使首/末项可滚到中线
+    val padTop = 2
+    val centerOffset = 2
+
+    // 由布局信息实时算"位于中线的 item 值"
+    val centeredValue = listState.layoutInfo.visibleItemsInfo
+        .firstOrNull { it.index == listState.firstVisibleItemIndex + centerOffset }
+        ?.let { values.getOrNull(it.index) }
+
+    // 只在中线值真正变化时才通知父级，避免循环
+    LaunchedEffect(centeredValue) {
+        val cur = centeredValue
+        if (cur != null && cur != selected) onSelect(cur)
+    }
+
+    Box(modifier.fillMaxSize().height(itemHeightDp * 5)) {
+        // 中间高亮线
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .height(itemHeightDp)
+                .background(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    RoundedCornerShape(8.dp)
+                )
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item { Spacer(Modifier.height(itemHeightDp * padTop)) }
+            itemsIndexed(values) { index, value ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(itemHeightDp)
+                        .clickable {
+                            // 点击该项使其滚到中线
+                            scope.launch { listState.animateScrollToItem((index - padTop + 1).coerceAtLeast(0)) }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        value,
+                        fontSize = 18.sp,
+                        fontWeight = if (index == listState.firstVisibleItemIndex + centerOffset) FontWeight.Bold else FontWeight.Normal,
+                        color = if (index == listState.firstVisibleItemIndex + centerOffset) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            item { Spacer(Modifier.height(itemHeightDp * padTop)) }
         }
     }
 }
