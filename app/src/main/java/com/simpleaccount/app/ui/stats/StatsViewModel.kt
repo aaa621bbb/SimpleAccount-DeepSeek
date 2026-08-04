@@ -9,13 +9,11 @@ import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.util.DateUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** 趋势点 */
@@ -40,83 +38,88 @@ class StatsViewModel @Inject constructor(
     private val categoryRepository: CategoryRepository,
 ) : ViewModel() {
 
-    private val monthFlow = MutableStateFlow(DateUtil.thisMonth())
-    private val typeFlow = MutableStateFlow(Transaction.TYPE_EXPENSE)
-    private val categoriesState = MutableStateFlow<List<Category>>(emptyList())
-    private val slicesState = MutableStateFlow<List<PieSlice>>(emptyList())
-    private val totalState = MutableStateFlow(0L)
-    private val trendState = MutableStateFlow<List<TrendPoint>>(emptyList())
+    private val monthFlow = kotlinx.coroutines.flow.MutableStateFlow(DateUtil.thisMonth())
+    private val typeFlow = kotlinx.coroutines.flow.MutableStateFlow(Transaction.TYPE_EXPENSE)
+    private val categoriesFlow = categoryRepository.observeAll()
 
-    init {
-        viewModelScope.launch {
-            categoriesState.value = categoryRepository.getAll()
-            loadTrend()
-            loadPie()
-        }
-    }
+    // 交易数据变更 Flow：任何增删改/清空都会重算统计
+    private val transactionsFlow = accountRepository.observeAll()
 
-    private suspend fun loadTrend() {
-        val months = DateUtil.recentMonths(12)
-        val start = DateUtil.monthStart(months.minOrNull() ?: DateUtil.thisMonth())
-        val end = DateUtil.monthEnd(months.maxOrNull() ?: DateUtil.thisMonth())
-        val rows: List<RangeRow> = accountRepository.rangeTotals(start, end)
-        trendState.value = buildTrend(rows, months)
-    }
+    private data class PieInput(
+        val month: String,
+        val type: String,
+        val txs: List<Transaction>,
+        val cats: List<Category>,
+    )
 
-    private suspend fun loadPie() {
-        val month = monthFlow.value
-        val type = typeFlow.value
-        val cats = categoriesState.value
-        val colorMap = cats.associate { it.name to it.colorHex }
+    private data class AllInput(
+        val pie: PieInput,
+        val cats: List<Category>,
+    )
 
-        val raw = if (month == "all") {
-            accountRepository.categoryTotalsAll(type)
-        } else {
-            accountRepository.categoryTotals(month, type)
-        }
-        val slices = raw
-            .map { PieSlice(it.category, colorMap[it.category] ?: "#BDC3C7", it.total ?: 0L) }
-            .sortedByDescending { it.value }
-        slicesState.value = slices
-        totalState.value = raw.sumOf { it.total ?: 0L }
-    }
-
-    private data class PieHolder(val month: String, val type: String, val slices: List<PieSlice>, val total: Long)
-    private data class TrendHolder(val trend: List<TrendPoint>, val cats: List<Category>)
-
-    val uiState: StateFlow<StatsUiState> =
+    val uiState: StateFlow<StatsUiState> = combine(
         combine(
-            combine(monthFlow, typeFlow, slicesState, totalState) { m, t, s, tot ->
-                PieHolder(m, t, s, tot)
-            },
-            combine(trendState, categoriesState) { tr, c ->
-                TrendHolder(tr, c)
-            }
-        ) { pie, tr ->
-            StatsUiState(
-                month = pie.month, months = DateUtil.recentMonths(12),
-                total = pie.total, slices = pie.slices, type = pie.type,
-                trend = tr.trend,
-                categoryColorMap = tr.cats.associate { it.name to it.colorHex }
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
+            combine(
+                monthFlow,
+                typeFlow,
+                transactionsFlow,
+                categoriesFlow
+            ) { month, type, txs, cats -> PieInput(month, type, txs, cats) },
+            categoriesFlow
+        ) { pie, cats ->
+            AllInput(pie, cats)
+        },
+        categoriesFlow
+    ) { all, cats ->
+        val pie = all.pie
+        val month = pie.month
+        val type = pie.type
+        val txs = pie.txs
+        val months = DateUtil.recentMonths(12)
+
+        // 饼图 & 总数
+        val colorMap = cats.associate { it.name to it.colorHex }
+        val filtered = when {
+            month == "all" -> txs.filter { it.type == type }
+            else -> txs.filter { it.type == type && it.date.startsWith(month) }
+        }
+        val byCat = filtered.groupBy { it.category }
+            .mapValues { (_, list) -> list.sumOf { it.amount } }
+            .toList()
+            .sortedByDescending { it.second }
+        val slices = byCat.map { (cat, total) ->
+            PieSlice(cat, colorMap[cat] ?: "#BDC3C7", total)
+        }
+        val total = filtered.sumOf { it.amount }
+
+        // 趋势
+        val trend = buildTrend(txs, months)
+
+        StatsUiState(
+            month = month,
+            months = months,
+            total = total,
+            slices = slices,
+            type = type,
+            trend = trend,
+            categoryColorMap = colorMap
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
 
     fun setMonth(m: String) {
         monthFlow.value = m
-        viewModelScope.launch { loadPie() }
     }
 
     fun setType(t: String) {
         typeFlow.value = t
-        viewModelScope.launch { loadPie() }
     }
 
-    private fun buildTrend(rows: List<RangeRow>, months: List<String>): List<TrendPoint> {
+    private fun buildTrend(txs: List<Transaction>, months: List<String>): List<TrendPoint> {
         val byMonthType = mutableMapOf<Pair<String, String>, Long>()
-        rows.forEach { r ->
-            val m = r.date.take(7)
-            val type = r.type
-            if (type != null) byMonthType[m to type] = (byMonthType[m to type] ?: 0L) + (r.total ?: 0L)
+        txs.forEach { t ->
+            if (t.amount <= 0) return@forEach
+            val m = t.date.take(7)
+            byMonthType[m to t.type] = (byMonthType[m to t.type] ?: 0L) + t.amount
         }
         return months.reversed().map { m ->
             TrendPoint(

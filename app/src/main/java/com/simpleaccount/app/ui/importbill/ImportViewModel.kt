@@ -40,8 +40,12 @@ class ImportViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 resolveContent(uri)
-            } catch (e: Exception) {
-                _state.value = ImportUiState(phase = ImportPhase.ERROR, error = e.message ?: "读取文件失败")
+            } catch (t: Throwable) {
+                // 用 Throwable 而非 Exception：POI/NoClassDefFoundError 等 Error 也需捕获，避免直接闪退
+                _state.value = ImportUiState(
+                    phase = ImportPhase.ERROR,
+                    error = (t.message ?: t.javaClass.simpleName).take(300)
+                )
             }
         }
     }

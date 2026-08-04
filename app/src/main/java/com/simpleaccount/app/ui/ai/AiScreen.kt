@@ -105,7 +105,7 @@ fun AiScreen(viewModel: AiViewModel = androidx.hilt.navigation.compose.hiltViewM
                 Spacer(Modifier.width(8.dp))
                 TextButton(
                     onClick = { viewModel.sendMessage(state.input) },
-                    enabled = state.enabled && state.input.isNotBlank() && !state.typing
+                    enabled = state.input.isNotBlank() && !state.typing
                 ) {
                     Text("发送")
                 }

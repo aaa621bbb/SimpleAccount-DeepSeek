@@ -7,19 +7,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -31,10 +36,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,15 +52,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavHostController
 import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.ui.components.CategoryIconCircle
-import com.simpleaccount.app.ui.navigation.Routes
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,12 +69,16 @@ fun AddTransactionScreen(
     editId: Long?,
 ) {
     val vm: AddTransactionViewModel = hiltViewModel()
-    // 需要给 vm 传 editId —— 通过 SavedStateHandle 已由 NavHost 参数提供
     val state by vm.state.collectAsState()
     val categories by vm.categoriesByType.collectAsState()
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
+
     var showCategorySheet by remember { mutableStateOf(false) }
+    var showDateSheet by remember { mutableStateOf(false) }
+    var showMerchantSheet by remember { mutableStateOf(false) }
+    var showProductSheet by remember { mutableStateOf(false) }
+    var showKeypad by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -79,9 +89,7 @@ fun AddTransactionScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         }
     ) { padding ->
@@ -106,53 +114,61 @@ fun AddTransactionScreen(
             }
             Spacer(Modifier.height(16.dp))
 
-            // 金额
-            OutlinedTextField(
-                value = state.amountText,
-                onValueChange = vm::onAmountChange,
-                label = { Text("金额（元）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // 分类：整块可点，单击打开 BottomSheet
-            CategorySelector(
-                selected = state.selectedCategory,
-                onClick = { showCategorySheet = true }
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // 日期
+            // 金额：可点击行 + 内置数字键盘
             Row(
-                Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .clickable { showKeypad = !showKeypad }
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = state.date,
-                    onValueChange = vm::onDateChange,
-                    label = { Text("日期（yyyy-MM-dd）") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
+                Text("金额", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (state.amountText.isEmpty()) "0.00" else state.amountText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(Color.Transparent)
+                )
+            }
+            if (showKeypad) {
+                NumberKeypad(
+                    value = state.amountText,
+                    onKey = vm::onAmountChange,
+                    style = NumberKeypadStyle.AMOUNT
                 )
             }
             Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = state.merchant,
-                onValueChange = vm::onMerchantChange,
-                label = { Text("商家（可选）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            // 分类
+            CategorySelector(selected = state.selectedCategory, onClick = { showCategorySheet = true })
+            Spacer(Modifier.height(12.dp))
+
+            // 日期：点选 年/月/日
+            PickerRow(
+                label = "日期",
+                value = state.date,
+                onClick = { showDateSheet = true }
             )
             Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = state.product,
-                onValueChange = vm::onProductChange,
-                label = { Text("商品（可选）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            // 商家：点选（搜索 + 候选 + 其他）
+            PickerRow(
+                label = "商家（可选）",
+                value = state.merchant.ifEmpty { "请选择/输入" },
+                isPlaceholder = state.merchant.isEmpty(),
+                onClick = { showMerchantSheet = true }
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // 商品：点选
+            PickerRow(
+                label = "商品（可选）",
+                value = state.product.ifEmpty { "请选择/输入" },
+                isPlaceholder = state.product.isEmpty(),
+                onClick = { showProductSheet = true }
             )
             Spacer(Modifier.height(12.dp))
 
@@ -170,7 +186,6 @@ fun AddTransactionScreen(
             }
 
             Spacer(Modifier.height(20.dp))
-
             Button(
                 onClick = {
                     scope.launch {
@@ -186,37 +201,303 @@ fun AddTransactionScreen(
         }
     }
 
-    // 分类选择 BottomSheet
     if (showCategorySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showCategorySheet = false },
-            sheetState = sheetState
-        ) {
-            LazyColumn(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp)
-            ) {
+        ModalBottomSheet(onDismissRequest = { showCategorySheet = false }, sheetState = sheetState) {
+            LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 item {
-                    Text(
-                        "选择分类",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("选择分类", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
                 items(categories) { cat ->
-                    CategorySheetRow(
-                        cat = cat,
-                        selected = state.selectedCategory?.name == cat.name,
-                        onClick = {
-                            vm.onCategorySelect(cat)
-                            showCategorySheet = false
-                        }
-                    )
+                    CategorySheetRow(cat, state.selectedCategory?.name == cat.name) {
+                        vm.onCategorySelect(cat); showCategorySheet = false
+                    }
                 }
             }
         }
+    }
+
+    if (showDateSheet) {
+        DatePickerSheet(
+            initialDate = state.date,
+            onDismiss = { showDateSheet = false },
+            onConfirm = { y, m, d ->
+                vm.onDateSet(y, m, d); showDateSheet = false
+            }
+        )
+    }
+
+    if (showMerchantSheet) {
+        TextPickerSheet(
+            title = "选择/输入商家",
+            placeholder = "搜索商家…",
+            current = state.merchant,
+            onDismiss = { showMerchantSheet = false },
+            onSelect = { vm.onMerchantChange(it); showMerchantSheet = false },
+            loadCandidates = { vm.knownMerchants() }
+        )
+    }
+
+    if (showProductSheet) {
+        TextPickerSheet(
+            title = "选择/输入商品",
+            placeholder = "搜索商品…",
+            current = state.product,
+            onDismiss = { showProductSheet = false },
+            onSelect = { vm.onProductChange(it); showProductSheet = false },
+            loadCandidates = { vm.knownProducts() }
+        )
+    }
+}
+
+/** 通用"点选行" */
+@Composable
+private fun PickerRow(
+    label: String,
+    value: String,
+    isPlaceholder: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (isPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null)
+    }
+}
+
+/** 内置键盘模式 */
+enum class NumberKeypadStyle { AMOUNT }
+
+/** 内置数字键盘：仅数字 + 小数点 + 退格 */
+@Composable
+private fun NumberKeypad(value: String, onKey: (String) -> Unit, style: NumberKeypadStyle) {
+    fun append(digit: Char) {
+        when (style) {
+            NumberKeypadStyle.AMOUNT -> {
+                val cur = value.replace(",", "")
+                if (digit == '.') {
+                    if (cur.contains('.')) return
+                    if (cur.isEmpty()) { onKey("0."); return }
+                } else {
+                    // 最多两位小数
+                    if (cur.contains('.')) {
+                        val dec = cur.substringAfter('.')
+                        if (dec.length >= 2) return
+                    }
+                    // 整数部分限长
+                    if (!cur.contains('.') && cur.length >= 9) return
+                }
+                onKey(cur + digit)
+            }
+        }
+    }
+    val keys = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0')
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .padding(8.dp)
+    ) {
+        // 每行显示, 布局网格
+        val rows = listOf(
+            listOf('1','2','3','4'),
+            listOf('5','6','7','8'),
+            listOf('9','.','0', '#'),
+        )
+        rows.forEach { rowKeys ->
+            Row(Modifier.fillMaxWidth()) {
+                rowKeys.forEach { k ->
+                    val weight = 1f
+                    Box(
+                        Modifier
+                            .weight(weight)
+                            .padding(4.dp)
+                            .height(52.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable {
+                                when (k) {
+                                    '#' -> { // 退格
+                                        if (value.isNotEmpty()) onKey(value.dropLast(1))
+                                    }
+                                    else -> append(k)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (k == '#') {
+                            Icon(Icons.Filled.Backspace, contentDescription = "删除")
+                        } else {
+                            Text("$k", style = MaterialTheme.typography.titleLarge)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 日期选择：年/月/日 三段式 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerSheet(
+    initialDate: String,
+    onDismiss: () -> Unit,
+    onConfirm: (Int, Int, Int) -> Unit,
+) {
+    val parts = initialDate.split("-").mapNotNull { it.toIntOrNull() }
+    var year by remember { mutableStateOf(parts.getOrNull(0) ?: 2026) }
+    var month by remember { mutableStateOf(parts.getOrNull(1) ?: 1) }
+    var day by remember { mutableStateOf(parts.getOrNull(2) ?: 1) }
+
+    fun daysInMonth(y: Int, m: Int): Int {
+        val dim = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        return if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) 29 else dim[m - 1]
+    }
+    if (day > daysInMonth(year, month)) day = daysInMonth(year, month)
+
+    val nowY = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text("选择日期", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+
+            // 三个选择区
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 年 (- / 值 / +)
+                DateStepper("年", "$year", {
+                    if (year > 2000) year -= 1
+                }, {
+                    if (year < nowY + 5) year += 1
+                }, modifier = Modifier.weight(1f))
+                DateStepper("月", "$month", {
+                    month = if (month > 1) month - 1 else 12
+                    if (day > daysInMonth(year, month)) day = daysInMonth(year, month)
+                }, {
+                    month = if (month < 12) month + 1 else 1
+                }, modifier = Modifier.weight(1f))
+                DateStepper("日", "$day", {
+                    day = if (day > 1) day - 1 else 1
+                }, {
+                    day = if (day < daysInMonth(year, month)) day + 1 else 1
+                }, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(20.dp))
+
+            Button(
+                onClick = { onConfirm(year, month, day) },
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Text("确定")
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun DateStepper(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Row {
+            TextButton(onClick = onMinus, modifier = Modifier.size(40.dp)) { Text("−", fontSize = 20.sp) }
+            TextButton(onClick = onPlus, modifier = Modifier.size(40.dp)) { Text("＋", fontSize = 20.sp) }
+        }
+    }
+}
+
+/** 文本选择器（商家/商品）：搜索 + 候选 + "其他" */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TextPickerSheet(
+    title: String,
+    placeholder: String,
+    current: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+    loadCandidates: suspend () -> List<String>,
+) {
+    val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf(current) }
+    var candidates by remember { mutableStateOf(mutableListOf<String>()) }
+
+    LaunchedEffect(Unit) {
+        candidates = loadCandidates().toMutableList()
+    }
+
+    val filtered = candidates.filter { it.contains(query.trim(), ignoreCase = true) || query.isBlank() }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp).fillMaxHeight(0.8f)) {
+            Text(title, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text(placeholder) },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                // "其他" 选项：始终可搜可选
+                item {
+                    CandidateRow("其他", query.isNotBlank() && "其他".contains(query, true)) {
+                        onSelect("其他")
+                    }
+                }
+                // 精确匹配当前输入 -> 允许直接使用输入内容
+                if (query.isNotBlank()) {
+                    item {
+                        CandidateRow("使用「$query」", false) { onSelect(query.trim()) }
+                    }
+                }
+                items(filtered, key = { it }) { cand ->
+                    CandidateRow(cand, cand == query.trim()) { onSelect(cand) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CandidateRow(text: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyLarge,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.weight(1f))
+        if (selected) Icon(Icons.Filled.Check, contentDescription = "已选择", tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -226,10 +507,7 @@ private fun CategorySelector(selected: Category?, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp)
-            .background(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                RoundedCornerShape(8.dp)
-            )
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -247,28 +525,15 @@ private fun CategorySelector(selected: Category?, onClick: () -> Unit) {
 }
 
 @Composable
-private fun CategorySheetRow(
-    cat: Category,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
+private fun CategorySheetRow(cat: Category, selected: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         CategoryIconCircle(cat, size = 36)
         Spacer(Modifier.size(12.dp))
         Text(cat.name, style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.weight(1f))
-        if (selected) {
-            Icon(
-                Icons.Filled.Check,
-                contentDescription = "已选择",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
+        if (selected) Icon(Icons.Filled.Check, contentDescription = "已选择", tint = MaterialTheme.colorScheme.primary)
     }
 }

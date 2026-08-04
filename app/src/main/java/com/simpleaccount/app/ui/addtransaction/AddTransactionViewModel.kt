@@ -104,9 +104,30 @@ class AddTransactionViewModel @Inject constructor(
         _state.value = _state.value.copy(date = date, error = null)
     }
 
+    fun onDateSet(y: Int, m: Int, d: Int) {
+        val date = "%04d-%02d-%02d".format(y, m, d)
+        _state.value = _state.value.copy(date = date, error = null)
+    }
+
     fun onMerchantChange(v: String) = _state.value.let { _state.value = it.copy(merchant = v) }
     fun onProductChange(v: String) = _state.value.let { _state.value = it.copy(product = v) }
     fun onNoteChange(v: String) = _state.value.let { _state.value = it.copy(note = v) }
+
+    /** 现有交易里出现过的商家名（去重排序，供选择） */
+    suspend fun knownMerchants(): List<String> =
+        accountRepository.getAll()
+            .map { it.merchant.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+
+    /** 现有交易里出现过的商品名（去重排序，供选择） */
+    suspend fun knownProducts(): List<String> =
+        accountRepository.getAll()
+            .map { it.product.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
 
     /** 校验并保存，返回 true 表示成功 */
     suspend fun save(): Boolean {
