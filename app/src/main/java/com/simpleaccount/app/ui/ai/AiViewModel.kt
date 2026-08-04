@@ -11,6 +11,8 @@ import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.repository.MerchantRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.data.service.AiService
+import com.simpleaccount.app.util.DateUtil
+import com.simpleaccount.app.util.MoneyUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -101,11 +103,16 @@ class AiViewModel @Inject constructor(
                 )
                 return@launch
             }
+            val sysContext = buildSystemContext()
             val result = aiService.chat(
                 baseUrl = settingsRepository.baseUrl(),
                 apiKey = apiKey,
                 model = settingsRepository.model(),
-                messages = context.map { it.role to it.content }
+                messages = buildList {
+                    // 账本上下文作为 system 提示，让 AI 能"看到"账本数据
+                    if (sysContext.isNotBlank()) add("system" to sysContext)
+                    addAll(context.map { it.role to it.content })
+                }
             )
             val replyMsg = AiMessage(
                 role = "assistant",
@@ -119,6 +126,40 @@ class AiViewModel @Inject constructor(
                 typing = false
             )
         }
+    }
+
+    /**
+     * 构建账本上下文（system 提示），让 AI 能"看到"当前账本数据。
+     * 提供整理后的数据：本月/全部收支汇总、本月分类统计、最近流水。
+     */
+    private suspend fun buildSystemContext(): String {
+        val month = DateUtil.thisMonth()
+        val all = accountRepository.getAll()
+        if (all.isEmpty()) return ""  // 没有账本数据就不注入
+
+        val monthSummary = accountRepository.monthSummary(month)
+        val allSummary = accountRepository.allSummary()
+        val recent = all.sortedByDescending { it.date }.take(30)
+
+        val expenseCats = accountRepository.categoryTotals(month, Transaction.TYPE_EXPENSE)
+        val incomeCats = accountRepository.categoryTotals(month, Transaction.TYPE_INCOME)
+
+        val sb = StringBuilder()
+        sb.appendLine("你是一个记账助手。以下是用户当前的账本数据（金额单位为元）：")
+        sb.appendLine("【本月(${month})汇总】支出=${MoneyUtil.fenToYuan(monthSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(monthSummary.income)} 元，结余=${MoneyUtil.fenToYuan(monthSummary.balance)} 元")
+        sb.appendLine("【全部汇总】支出=${MoneyUtil.fenToYuan(allSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(allSummary.income)} 元")
+        if (expenseCats.isNotEmpty()) {
+            sb.appendLine("【本月支出分类】" + expenseCats.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
+        }
+        if (incomeCats.isNotEmpty()) {
+            sb.appendLine("【本月收入分类】" + incomeCats.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
+        }
+        sb.appendLine("【最近流水(最多30条)】")
+        recent.forEach { t ->
+            val typeName = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+            sb.appendLine("- ${t.date} $typeName ${MoneyUtil.fenToYuan(t.amount)}元 分类:${t.category} 商家:${t.merchant} 商品:${t.product}")
+        }
+        return sb.toString()
     }
 
     /** 批量归类 pending 商家（每批 ≤20） */

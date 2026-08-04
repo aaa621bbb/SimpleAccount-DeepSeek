@@ -9,8 +9,18 @@ data class ParsedRow(
     val product: String,
 )
 
+/** 一条被跳过/失败的原始行及其原因 */
+data class ParseFailure(
+    /** 该行的原始内容摘要（日期/金额/对象等便于识别） */
+    val content: String,
+    /** 失败原因（中文，可直接展示） */
+    val reason: String,
+)
+
 /** 解析结果 */
 data class ParseResult(
     val rows: List<ParsedRow>,
     val skipCount: Int,
+    /** 失败明细（R1：逐条失败 + 原因） */
+    val failures: List<ParseFailure> = emptyList(),
 )

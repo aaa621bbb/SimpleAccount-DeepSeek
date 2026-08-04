@@ -1,7 +1,9 @@
 package com.simpleaccount.app.data.importdata
 
+import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.TransactionDao
+import com.simpleaccount.app.data.entity.ImportFailure
 import com.simpleaccount.app.data.entity.ImportLog
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.data.repository.CategoryRepository
@@ -19,6 +21,7 @@ import javax.inject.Singleton
 class ImportProcessor @Inject constructor(
     private val transactionDao: TransactionDao,
     private val importLogDao: ImportLogDao,
+    private val importFailureDao: ImportFailureDao,
     private val categoryRepository: CategoryRepository,
     private val classificationService: ClassificationService,
 ) {
@@ -26,6 +29,7 @@ class ImportProcessor @Inject constructor(
     data class ImportResult(
         val inserted: Int,
         val skipped: Int,
+        val failed: Int,
         val batchId: String,
     )
 
@@ -34,6 +38,7 @@ class ImportProcessor @Inject constructor(
         sourceType: String,
         fileName: String,
         parseSkip: Int,
+        failures: List<ParseFailure> = emptyList(),
     ): ImportResult {
         val batchId = UUID.randomUUID().toString()
         val existing = transactionDao.getAll()
@@ -113,7 +118,26 @@ class ImportProcessor @Inject constructor(
             )
         )
 
-        return ImportResult(inserted = inserted, skipped = skipped + parseSkip, batchId = batchId)
+        // R1：把本次解析失败的行写入 import_failures 表，供用户查看失败明细
+        if (failures.isNotEmpty()) {
+            importFailureDao.insertAll(
+                failures.map {
+                    ImportFailure(
+                        batchId = batchId,
+                        content = it.content,
+                        reason = it.reason,
+                        createdAt = now
+                    )
+                }
+            )
+        }
+
+        return ImportResult(
+            inserted = inserted,
+            skipped = skipped + parseSkip,
+            failed = failures.size,
+            batchId = batchId
+        )
     }
 
     private fun dedupKey(row: ParsedRow): String {

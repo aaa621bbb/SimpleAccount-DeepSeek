@@ -62,6 +62,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.TextRange
@@ -480,41 +481,64 @@ private fun WheelColumn(
     label: String,
     values: List<String>,
     selected: String,
-    height: Int,
+    height: Int = 200,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val itemHeightDp = 44.dp
+    val itemHeightPx = with(LocalDensity.current) { itemHeightDp.toPx() }
     val scope = rememberCoroutineScope()
 
     val startIndex = values.indexOf(selected).coerceAtLeast(0)
+    // 起始位置使选中项位于中间(中线=第 2.5 格)。spacer 2格 + 让选中项落在中线。
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 2).coerceAtLeast(0))
 
-    // 顶/底板留白格数，使首/末项可滚到中线
     val padTop = 2
-    val centerOffset = 2
 
-    // 由布局信息实时算"位于中线的 item 值"
-    val centeredValue = listState.layoutInfo.visibleItemsInfo
-        .firstOrNull { it.index == listState.firstVisibleItemIndex + centerOffset }
-        ?.let { values.getOrNull(it.index) }
+    // 找出"真正穿过中线"的 item：中线在 Box 高度 50% 处 = 2.5 个 item 高度。
+    // 取 visibleItemsInfo 中 offset 最接近中线的项，精确命中，不靠索引估算。
+    var centeredIndex = -1
+    var centeredValue: String? = null
+    val info = listState.layoutInfo
+    if (info.viewportEndOffset - info.viewportStartOffset > 0) {
+        val midPx = itemHeightPx * 2.5f
+        var bestDist = Float.MAX_VALUE
+        var bestIndex = -1
+        for (item in info.visibleItemsInfo) {
+            val itemMid = item.offset + item.size / 2f
+            val dist = kotlin.math.abs(itemMid - midPx)
+            if (dist < bestDist) {
+                bestDist = dist
+                bestIndex = item.index
+            }
+        }
+        if (bestIndex >= 0) {
+            centeredIndex = bestIndex
+            // item0/item1 是 spacer，真数据从 index=2 开始
+            val dataIdx = bestIndex - padTop
+            centeredValue = values.getOrNull(dataIdx)
+        }
+    }
 
-    // 只在中线值真正变化时才通知父级，避免循环
+    // 只在"所见中线值"变化时通知父级(vs 上次选定的)，避免循环
     LaunchedEffect(centeredValue) {
         val cur = centeredValue
         if (cur != null && cur != selected) onSelect(cur)
     }
 
+    // 判断某数据 index 是否是当前中线项（用于视觉高亮）
+    fun isCentered(dataIndex: Int): Boolean = (dataIndex + padTop) == centeredIndex
+
     Box(modifier.fillMaxSize().height(itemHeightDp * 5)) {
-        // 中间高亮线
+        // 中间高亮线（更明显的选中条）
         Box(
             Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
                 .height(itemHeightDp)
                 .background(
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    RoundedCornerShape(8.dp)
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                    RoundedCornerShape(10.dp)
                 )
         )
         LazyColumn(
@@ -523,22 +547,28 @@ private fun WheelColumn(
         ) {
             item { Spacer(Modifier.height(itemHeightDp * padTop)) }
             itemsIndexed(values) { index, value ->
+                val center = isCentered(index)
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(itemHeightDp)
                         .clickable {
-                            // 点击该项使其滚到中线
-                            scope.launch { listState.animateScrollToItem((index - padTop + 1).coerceAtLeast(0)) }
+                            // 点击该项使其滚到中线：滚动到该数据项位于 index=2(中线) 位置
+                            scope.launch {
+                                val target = (index + padTop - 2).coerceAtLeast(0)
+                                listState.animateScrollToItem(target)
+                            }
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         value,
-                        fontSize = 18.sp,
-                        fontWeight = if (index == listState.firstVisibleItemIndex + centerOffset) FontWeight.Bold else FontWeight.Normal,
-                        color = if (index == listState.firstVisibleItemIndex + centerOffset) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        // 选中项更大更黑，上下更小更灰（满足视觉要求）
+                        fontSize = if (center) 24.sp else 15.sp,
+                        fontWeight = if (center) FontWeight.Bold else FontWeight.Normal,
+                        color = if (center) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        maxLines = 1
                     )
                 }
             }

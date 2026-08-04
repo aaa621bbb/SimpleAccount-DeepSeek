@@ -135,6 +135,7 @@ object BillParser {
 
         val rows = mutableListOf<ParsedRow>()
         var skipped = 0
+        val failures = mutableListOf<ParseFailure>()
 
         for (r in headerRow + 1 until matrix.size) {
             val row = matrix[r]
@@ -150,17 +151,14 @@ object BillParser {
 
             // 类型方向
             val type = resolveType(flowCell, amountCell)
+            val rowSummary = "日期[$dateCell] 金额[$amountCell] 方向[$flowCell] 对象[$merchantCell]".take(80)
             if (type == TYPE_SKIP) {
                 skipped++
+                // 中性交易（退款/充值/提现等）：属"按规则跳过"，不是错误，不记入失败明细
                 continue
             }
             if (type == null) {
-                // 无法判断方向：用金额正负判断，否则跳过
-                val amountNum = MoneyUtil.parseToFen(amountCell)
-                if (amountNum != null && amountNum >= 0) {
-                    // 正向金额默认支出（微信常见），负向为收入
-                    // 这里交给 resolveType 已处理，仅兜底
-                }
+                failures.add(ParseFailure(rowSummary, "无法判断收支方向（收/支列不能识别）"))
                 skipped++
                 continue
             }
@@ -169,10 +167,12 @@ object BillParser {
             val absAmountCell = amountCell.replace("-", "").trim()
             val amount = MoneyUtil.parseToFen(absAmountCell)
             if (amount == null) {
+                failures.add(ParseFailure(rowSummary, "金额格式无法识别"))
                 skipped++
                 continue
             }
             if (amount <= 0) {
+                failures.add(ParseFailure(rowSummary, "金额不是有效正数"))
                 skipped++
                 continue
             }
@@ -180,6 +180,7 @@ object BillParser {
             // 日期
             val date = DateUtil.parseFlexible(dateCell)
             if (date == null) {
+                failures.add(ParseFailure(rowSummary, "日期格式无法识别"))
                 skipped++
                 continue
             }
@@ -195,7 +196,7 @@ object BillParser {
             )
         }
 
-        return ParseResult(rows, skipped)
+        return ParseResult(rows, skipped, failures)
     }
 
     private const val TYPE_SKIP = "skip"

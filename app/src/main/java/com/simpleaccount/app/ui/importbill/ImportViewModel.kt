@@ -4,8 +4,10 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.importdata.BillParser
 import com.simpleaccount.app.data.importdata.ImportProcessor
+import com.simpleaccount.app.data.entity.ImportFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,14 +24,18 @@ data class ImportUiState(
     val fileName: String = "",
     val inserted: Int = 0,
     val skipped: Int = 0,
+    val failed: Int = 0,
     val error: String? = null,
     val sourceType: String = "wechat",
+    /** 最近一次导入的失败明细（供"查看失败"入口） */
+    val failures: List<ImportFailure> = emptyList(),
 )
 
 @HiltViewModel
 class ImportViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val processor: ImportProcessor,
+    private val importFailureDao: ImportFailureDao,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ImportUiState())
@@ -74,15 +80,21 @@ class ImportViewModel @Inject constructor(
             rows = parsed.rows,
             sourceType = contentType,
             fileName = actualName,
-            parseSkip = parsed.skipCount
+            parseSkip = parsed.skipCount,
+            failures = parsed.failures
         )
+
+        // R1：导入完成后，从库里取本次批次失败明细，供界面展示"查看失败"
+        val batchFailures = importFailureDao.getByBatch(result.batchId)
 
         _state.value = ImportUiState(
             phase = ImportPhase.DONE,
             fileName = actualName,
             inserted = result.inserted,
             skipped = result.skipped,
-            sourceType = contentType
+            failed = result.failed,
+            sourceType = contentType,
+            failures = batchFailures
         )
     }
 

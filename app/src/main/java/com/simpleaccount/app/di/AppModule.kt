@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.simpleaccount.app.data.dao.AiMessageDao
 import com.simpleaccount.app.data.dao.CategoryDao
+import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.MerchantDao
 import com.simpleaccount.app.data.dao.SettingDao
@@ -28,6 +29,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
         return Room.databaseBuilder(context, AppDatabase::class.java, "simple_account.db")
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
     }
@@ -43,6 +45,9 @@ object AppModule {
 
     @Provides
     fun provideImportLogDao(db: AppDatabase): ImportLogDao = db.importLogDao()
+
+    @Provides
+    fun provideImportFailureDao(db: AppDatabase): ImportFailureDao = db.importFailureDao()
 
     @Provides
     fun provideAiMessageDao(db: AppDatabase): AiMessageDao = db.aiMessageDao()

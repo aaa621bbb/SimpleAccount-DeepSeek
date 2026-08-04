@@ -26,6 +26,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +52,8 @@ fun ImportScreen(
             viewModel.importFrom(uri)
         }
     }
+
+    var showFailures by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -118,6 +123,49 @@ fun ImportScreen(
                         "跳过 ${state.skipped} 条", fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // R1：失败明细入口
+                    if (state.failed > 0) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "失败 ${state.failed} 条", fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        androidx.compose.material3.TextButton(onClick = { showFailures = !showFailures }) {
+                            Text(if (showFailures) "收起失败明细 ▲" else "查看失败明细 ▼")
+                        }
+                        if (showFailures) {
+                            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                state.failures.forEachIndexed { idx, f ->
+                                    androidx.compose.material3.Surface(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                                    ) {
+                                        Column(Modifier.padding(10.dp)) {
+                                            Text(
+                                                "第 ${idx + 1} 条：${f.content}",
+                                                fontSize = 12.sp,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                "原因：${f.reason}",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                }
+                                if (state.failures.isEmpty()) {
+                                    Text(
+                                        "（本次失败明细为空）",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(24.dp))
                     Button(onClick = { navController.popBackStack() }) {
                         Text("返回")
