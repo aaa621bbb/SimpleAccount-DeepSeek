@@ -22,8 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -56,19 +55,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,14 +86,6 @@ fun AddTransactionScreen(
     var showMerchantSheet by remember { mutableStateOf(false) }
     var showProductSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
-    // 金额输入框状态（BasicTextField 需要，支持光标移动）
-    var amountField by remember { mutableStateOf(TextFieldValue("")) }
-    // 编辑加载/外部变化时同步到金额框
-    LaunchedEffect(state.amountText) {
-        if (state.amountText != amountField.text) {
-            amountField = TextFieldValue(state.amountText)
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -142,47 +124,28 @@ fun AddTransactionScreen(
             }
             Spacer(Modifier.height(16.dp))
 
-            // 金额：BasicTextField（可移动光标） + 内置数字键盘
-            val focusRequester = remember { FocusRequester() }
-            val keyboardController = LocalSoftwareKeyboardController.current
-            BasicTextField(
-                value = amountField,
-                onValueChange = { tf ->
-                    // 只允许数字与小写小数点，拒绝其他字符
-                    val newText = tf.text.filter { it.isDigit() || it == '.' }
-                    // 记录实际可用值, 调用 vm（vm 里会做两位小数等校验）
-                    vm.onAmountChange(newText)
-                    amountField = tf.copy(text = newText, selection = TextRange(newText.length))
-                },
-                textStyle = MaterialTheme.typography.headlineMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            // 金额：可点击行 + 内置数字键盘（不抢焦点，无光标）
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(60.dp)
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 16.dp)
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { focusState ->
-                        // 获得焦点时显示内置键盘；系统键盘立即收起
-                        if (focusState.isFocused) {
-                            keyboardController?.hide()
-                            showKeypad = true
-                        }
-                    }
-                    .pointerInput(Unit) { }
-            )
+                    .clickable { showKeypad = !showKeypad }
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("金额", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (state.amountText.isEmpty()) "0.00" else state.amountText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             if (showKeypad) {
                 NumberKeypad(
                     value = state.amountText,
-                    onKey = { newV ->
-                        vm.onAmountChange(newV)
-                        amountField = TextFieldValue(newV, selection = TextRange(newV.length))
-                    },
+                    onKey = vm::onAmountChange,
                     style = NumberKeypadStyle.AMOUNT
                 )
             }
@@ -490,13 +453,18 @@ private fun WheelColumn(
     val scope = rememberCoroutineScope()
 
     val startIndex = values.indexOf(selected).coerceAtLeast(0)
-    // 起始位置使选中项位于中间(中线=第 2.5 格)。spacer 2格 + 让选中项落在中线。
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 2).coerceAtLeast(0))
-
+    // 可见 5 行，上下各留 2 行空白让首末项都能滚到中线；
+    // 额外在底部再补足空白，确保最末项也能滚动到中线位置（修复"无法选中最后一个"）
     val padTop = 2
+    val padBottom = 2
+
+    val listState = rememberLazyListState(
+        // 让选中项初始位于中线：item 顶部偏移 = 2 格处（中心在 2.5 格=中线）
+        initialFirstVisibleItemIndex = (padTop + startIndex).coerceAtLeast(0),
+        initialFirstVisibleItemScrollOffset = (itemHeightPx * 2).toInt()
+    )
 
     // 找出"真正穿过中线"的 item：中线在 Box 高度 50% 处 = 2.5 个 item 高度。
-    // 取 visibleItemsInfo 中 offset 最接近中线的项，精确命中，不靠索引估算。
     var centeredIndex = -1
     var centeredValue: String? = null
     val info = listState.layoutInfo
@@ -507,30 +475,27 @@ private fun WheelColumn(
         for (item in info.visibleItemsInfo) {
             val itemMid = item.offset + item.size / 2f
             val dist = kotlin.math.abs(itemMid - midPx)
-            if (dist < bestDist) {
-                bestDist = dist
-                bestIndex = item.index
-            }
+            if (dist < bestDist) { bestDist = dist; bestIndex = item.index }
         }
         if (bestIndex >= 0) {
             centeredIndex = bestIndex
-            // item0/item1 是 spacer，真数据从 index=2 开始
+            // item0..padTop-1 是顶部占位，真数据从 index = padTop 开始
             val dataIdx = bestIndex - padTop
             centeredValue = values.getOrNull(dataIdx)
         }
     }
 
-    // 只在"所见中线值"变化时通知父级(vs 上次选定的)，避免循环
+    // 只在"所见中线值"变化时通知父级，避免循环
     LaunchedEffect(centeredValue) {
         val cur = centeredValue
         if (cur != null && cur != selected) onSelect(cur)
     }
 
-    // 判断某数据 index 是否是当前中线项（用于视觉高亮）
+    // 判断某数据 index 是否当前中线项（用于视觉高亮）
     fun isCentered(dataIndex: Int): Boolean = (dataIndex + padTop) == centeredIndex
 
     Box(modifier.fillMaxSize().height(itemHeightDp * 5)) {
-        // 中间高亮线（更明显的选中条）
+        // 中间高亮线
         Box(
             Modifier
                 .align(Alignment.Center)
@@ -553,17 +518,18 @@ private fun WheelColumn(
                         .fillMaxWidth()
                         .height(itemHeightDp)
                         .clickable {
-                            // 点击该项使其滚到中线：滚动到该数据项位于 index=2(中线) 位置
+                            // 点击该项使其精确滚动到中线位置
                             scope.launch {
-                                val target = (index + padTop - 2).coerceAtLeast(0)
-                                listState.animateScrollToItem(target)
+                                // 让数据项纵向中心对准中线（中线在 viewport 2.5 格处）：
+                                // item 顶部偏移 = 2.5格 - 0.5格 = 2格
+                                val li = (padTop + index).coerceAtLeast(0)
+                                listState.scrollToItem(li, scrollOffset = (itemHeightPx * 2).toInt())
                             }
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         value,
-                        // 选中项更大更黑，上下更小更灰（满足视觉要求）
                         fontSize = if (center) 24.sp else 15.sp,
                         fontWeight = if (center) FontWeight.Bold else FontWeight.Normal,
                         color = if (center) MaterialTheme.colorScheme.onSurface
@@ -572,7 +538,10 @@ private fun WheelColumn(
                     )
                 }
             }
-            item { Spacer(Modifier.height(itemHeightDp * padTop)) }
+            // 底部占位：确保末尾项也能滚到中线（关键修复）
+            item { Spacer(Modifier.height(itemHeightDp * padBottom)) }
+            // 额外大余量，保证最后一项能滚过中线
+            item { Spacer(Modifier.height(itemHeightDp * 3)) }
         }
     }
 }

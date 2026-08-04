@@ -66,13 +66,12 @@ fun StatsScreen(viewModel: StatsViewModel) {
             Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
         ) {
-            // 月份选择 + 收支切换
+            // 月份选择 + 收支切换（紧凑）
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box {
@@ -106,39 +105,42 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 )
             }
 
-            // 饼图
+            // 上半：饼图（固定矮高度，不滚动）
             PieChartView(
                 slices = state.slices,
                 centerLabel = if (state.type == Transaction.TYPE_EXPENSE) "总支出" else "总收入",
                 centerValue = "¥" + MoneyUtil.fenToYuan(state.total)
             )
-            Spacer(Modifier.height(8.dp))
 
-            // 图例
+            // 图例（压缩行距）
             if (state.slices.isEmpty()) {
                 Text(
                     "本月暂无数据",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp
+                    fontSize = 13.sp
                 )
             } else {
-                Column(Modifier.padding(horizontal = 16.dp)) {
+                Column(
+                    Modifier
+                        .height(150.dp)
+                        .padding(horizontal = 16.dp)
+                ) {
                     state.slices.forEach { s ->
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(Modifier.size(12.dp).background(parseColor(s.colorHex)))
-                            Spacer(Modifier.width(10.dp))
-                            Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
+                            Box(Modifier.size(10.dp).background(parseColor(s.colorHex)))
+                            Spacer(Modifier.width(8.dp))
+                            Text(s.categoryName, style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.weight(1f))
                             Text(
                                 "¥" + MoneyUtil.fenToYuan(s.value),
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -146,23 +148,21 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
             HorizontalDivider()
 
-            // 趋势折线（固定近12月）
+            // 趋势折线（压缩高度）
             Text(
                 "近 12 个月趋势",
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
             )
             LineTrendView(state.trend)
-            Row(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+            Row(Modifier.padding(start = 24.dp, top = 0.dp)) {
                 LegendDot(Color(0xFFFF6B6B), "支出")
                 Spacer(Modifier.width(20.dp))
                 LegendDot(Color(0xFF2ECC71), "收入")
             }
-            Spacer(Modifier.height(20.dp))
         }
     }
 }

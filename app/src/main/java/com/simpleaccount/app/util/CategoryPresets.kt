@@ -17,6 +17,7 @@ object CategoryPresets {
         Triple("教育", "school", "#A29BFE"),
         Triple("居住", "home", "#00B894"),
         Triple("通讯", "phone", "#FDCB6E"),
+        Triple("转账", "swap_horiz", "#8E44AD"),
         Triple("其它", "more_horiz", "#BDC3C7"),
     )
 
@@ -26,6 +27,7 @@ object CategoryPresets {
         Triple("奖金", "card_giftcard", "#E67E22"),
         Triple("投资", "trending_up", "#6C5CE7"),
         Triple("兼职", "work", "#00CEC9"),
+        Triple("退款", "assignment_return", "#1ABC9C"),
         Triple("其它收入", "more_horiz", "#636E72"),
     )
 
@@ -54,4 +56,9 @@ object CategoryPresets {
     /** 默认"其它"分类名（支出） */
     const val DEFAULT_EXPENSE_CATEGORY = "其它"
     const val DEFAULT_INCOME_CATEGORY = "其它收入"
+
+    /** 转账分类（支出） */
+    const val TRANSFER_CATEGORY = "转账"
+    /** 退款分类（收入） */
+    const val REFUND_CATEGORY = "退款"
 }

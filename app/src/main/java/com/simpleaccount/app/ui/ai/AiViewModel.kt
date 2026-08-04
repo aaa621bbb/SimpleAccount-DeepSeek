@@ -75,10 +75,19 @@ class AiViewModel @Inject constructor(
         _state.value = _state.value.copy(input = v)
     }
 
+    /** 刷新 enabled 状态（页面进入/返回时调用，避免缓存陈旧） */
+    fun refreshEnabled() {
+        val cur = settingsRepository.isAiEnabled()
+        if (cur != _state.value.enabled) {
+            _state.value = _state.value.copy(enabled = cur)
+        }
+    }
+
     fun sendMessage(content: String) {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return
-        val enabled = _state.value.enabled
+        // 实时读取启用状态，避免 ViewModel 缓存的 enabled 陈旧导致误报"未开启"
+        val enabled = settingsRepository.isAiEnabled()
         if (!enabled) {
             _state.value = _state.value.copy(error = "AI 功能未开启，请到「我的→AI辅助设置」开启并配置")
             return

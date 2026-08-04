@@ -1,5 +1,15 @@
 package com.simpleaccount.app.data.importdata
 
+/** 特殊类型标记 */
+enum class RowSpecial {
+    /** 普通 */
+    NORMAL,
+    /** 转账（独立"转账"分类） */
+    TRANSFER,
+    /** 退款（找对应付款抵消，找不到记收入"退款"） */
+    REFUND,
+}
+
 /** 解析出的一行账单原始数据 */
 data class ParsedRow(
     val date: String,        // yyyy-MM-dd
@@ -7,6 +17,8 @@ data class ParsedRow(
     val amount: Long,        // 分
     val merchant: String,
     val product: String,
+    /** 特殊类型标记（转账/退款），普通为 NORMAL */
+    val special: RowSpecial = RowSpecial.NORMAL,
 )
 
 /** 一条被跳过/失败的原始行及其原因 */

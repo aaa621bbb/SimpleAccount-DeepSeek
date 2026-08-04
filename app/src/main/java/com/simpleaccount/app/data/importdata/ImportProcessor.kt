@@ -56,49 +56,77 @@ class ImportProcessor @Inject constructor(
         val now = System.currentTimeMillis()
         val insertedKeys = HashSet<String>()
 
-        for (row in rows) {
+        // --- 阶段1：先处理非退款行（含转账独立成类），为退款抵消准备"付款"候选 ---
+        // 预收集本批次内"同商家付款"，用于退款抵消
+        val merchantPayments = mutableMapOf<String, MutableList<Pair<Int, Long>>>() // merchant -> list of (rowIdx, amount)
+
+        // 先把普通行入账，同时收集付款候选（仅支出，非退款/转账）
+        for ((i, row) in rows.withIndex()) {
             val key = dedupKey(row)
             if (importKeys.contains(key) || insertedKeys.contains(key)) {
                 skipped++
                 continue
             }
 
-            // 自动分类
+            // 转账：独立"转账"支出分类
+            if (row.special == RowSpecial.TRANSFER) {
+                insertRow(row, row.amount, Transaction.TYPE_EXPENSE, CategoryPresets.TRANSFER_CATEGORY, batchId, now)
+                insertedKeys.add(key)
+                inserted++
+                continue
+            }
+
+            // 退款：留到阶段2处理
+            if (row.special == RowSpecial.REFUND) continue
+
+            // 普通支出：记录为付款候选（供后续退款抵消）
+            if (row.type == Transaction.TYPE_EXPENSE) {
+                merchantPayments.getOrPut(row.merchant) { mutableListOf() }
+                    .add(i to row.amount)
+            }
+
             val rawCat = classificationService.classify(row.merchant, row.product)
             val cat = if (rawCat in validNames || rawCat in listOf(fallback)) rawCat else fallback
+            insertRow(row, row.amount, row.type, cat, batchId, now)
+            insertedKeys.add(key)
+            inserted++
+        }
 
-            // 是否存在同 key 的「手动」记录 → 被本次导入覆盖
-            val existingManual = existing.firstOrNull { dedupKey(it) == key && it.source == Transaction.SOURCE_MANUAL }
-            if (existingManual != null) {
-                transactionDao.update(
-                    existingManual.copy(
-                        amount = row.amount,
-                        type = row.type,
-                        category = cat,
-                        date = row.date,
-                        merchant = row.merchant,
-                        product = row.product,
-                        source = Transaction.SOURCE_IMPORT,
-                        importBatchId = batchId,
-                        updatedAt = now
-                    )
-                )
-            } else {
-                transactionDao.insert(
-                    Transaction(
-                        amount = row.amount,
-                        type = row.type,
-                        category = cat,
-                        date = row.date,
-                        merchant = row.merchant,
-                        product = row.product,
-                        source = Transaction.SOURCE_IMPORT,
-                        importBatchId = batchId,
-                        createdAt = now,
-                        updatedAt = now
-                    )
-                )
+        // --- 阶段2：处理退款行 ---
+        for ((i, row) in rows.withIndex()) {
+            if (row.special != RowSpecial.REFUND) continue
+            val key = dedupKey(row)
+            if (importKeys.contains(key) || insertedKeys.contains(key)) {
+                skipped++
+                continue
             }
+            val refundAmount = row.amount
+            val payCandidates = merchantPayments[row.merchant] ?: emptyList()
+            val matching = payCandidates.filter { it.second >= refundAmount }.sortedBy { it.first }
+            if (matching.isNotEmpty()) {
+                // 找到同商家且足够扣的付款 → 扣减最近一笔的金额，退款不入账
+                // 注意：阶段1已写入库，这里需要按发生顺序更新最近的付款
+                val target = matching.last()  // 最近（rowIdx 最大）的同商家足额付款
+                // 该付款已通过 dedupKey 入账，找到它的 Transaction 并减少金额
+                val targetRow = rows[target.first]
+                val tKey = dedupKey(targetRow)
+                val existingT = transactionDao.getAll()
+                    .firstOrNull { dedupKey(it) == tKey && it.source == Transaction.SOURCE_IMPORT && it.importBatchId == batchId }
+                if (existingT != null && existingT.amount >= refundAmount) {
+                    val newAmount = existingT.amount - refundAmount
+                    if (newAmount <= 0) {
+                        // 扣减到 0：删除该付款记录（退款完全抵消）
+                        transactionDao.delete(existingT)
+                    } else {
+                        transactionDao.update(existingT.copy(amount = newAmount))
+                    }
+                    insertedKeys.add(key)
+                    skipped++  // 退款被抵消，不新增
+                    continue
+                }
+            }
+            // 找不到可抵消的付款 → 记入收入，分类"退款"
+            insertRow(row, refundAmount, Transaction.TYPE_INCOME, CategoryPresets.REFUND_CATEGORY, batchId, now)
             insertedKeys.add(key)
             inserted++
         }
@@ -150,5 +178,50 @@ class ImportProcessor @Inject constructor(
         val hasDetail = t.merchant.isNotBlank() || t.product.isNotBlank()
         return if (hasDetail) "${t.date}|${t.amount}|${t.merchant.trim()}|${t.product.trim()}"
         else "${t.date}|${t.amount}"
+    }
+
+    /** 插入一条导入交易记录（若同 key 存在手动记录则覆盖为导入记录）。 */
+    private suspend fun insertRow(
+        row: ParsedRow,
+        amount: Long,
+        type: String,
+        category: String,
+        batchId: String,
+        now: Long,
+    ) {
+        val key = dedupKey(row)
+        val existingManual = transactionDao.getAll().firstOrNull {
+            dedupKey(it) == key && it.source == Transaction.SOURCE_MANUAL
+        }
+        if (existingManual != null) {
+            transactionDao.update(
+                existingManual.copy(
+                    amount = amount,
+                    type = type,
+                    category = category,
+                    date = row.date,
+                    merchant = row.merchant,
+                    product = row.product,
+                    source = Transaction.SOURCE_IMPORT,
+                    importBatchId = batchId,
+                    updatedAt = now
+                )
+            )
+        } else {
+            transactionDao.insert(
+                Transaction(
+                    amount = amount,
+                    type = type,
+                    category = category,
+                    date = row.date,
+                    merchant = row.merchant,
+                    product = row.product,
+                    source = Transaction.SOURCE_IMPORT,
+                    importBatchId = batchId,
+                    createdAt = now,
+                    updatedAt = now
+                )
+            )
+        }
     }
 }

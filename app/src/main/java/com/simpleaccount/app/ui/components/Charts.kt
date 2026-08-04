@@ -46,11 +46,11 @@ fun PieChartView(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(220.dp),
+            .height(150.dp),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(180.dp)) {
-            val strokeWidth = 36.dp.toPx()
+        Canvas(Modifier.size(120.dp)) {
+            val strokeWidth = 26.dp.toPx()
             val diameter = size.minDimension - strokeWidth
             val topLeft = Offset(
                 (size.width - diameter) / 2f,
@@ -112,7 +112,7 @@ fun LineTrendView(
     val padBottom = 22.dp
     val gridRows = 4
 
-    BoxWithConstraints(Modifier.fillMaxWidth().height(245.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(170.dp)) {
         val density = LocalDensity.current
         val pl = with(density) { padLeft.toPx() }
         val pr = with(density) { padRight.toPx() }

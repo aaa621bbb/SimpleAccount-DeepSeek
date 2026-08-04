@@ -27,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -41,6 +42,9 @@ import com.simpleaccount.app.data.entity.AiMessage
 @Composable
 fun AiScreen(viewModel: AiViewModel = androidx.hilt.navigation.compose.hiltViewModel()) {
     val state by viewModel.state.collectAsState()
+
+    // 进入 AI 页时刷新一次启用状态，避免设置页开关后返回时缓存陈旧
+    LaunchedEffect(Unit) { viewModel.refreshEnabled() }
 
     Scaffold(
         topBar = {

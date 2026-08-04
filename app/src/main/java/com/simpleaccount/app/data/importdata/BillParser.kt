@@ -19,9 +19,11 @@ object BillParser {
     /** 表头关键词 */
     private val HEADER_DATE_KW = listOf("交易时间", "创建时间", "时间", "日期")
     private val HEADER_AMOUNT_KW = listOf("金额")
-    private val HEADER_MONEY_FLOW_KW = listOf("收/支", "收支", "资金流向", "收/支")
+    private val HEADER_MONEY_FLOW_KW = listOf("收/支", "收支", "资金流向")
     private val HEADER_MERCHANT_KW = listOf("交易对方", "对方", "商户")
     private val HEADER_PRODUCT_KW = listOf("商品名称", "商品", "名称")
+    /** 交易分类列（支付宝特有，用于区分投资/退款/转账） */
+    private val HEADER_CATEGORY_KW = listOf("交易分类", "交易类型", "类型")
 
     /** 支出关键词 */
     private val EXPENSE_KW = listOf("支出", "付款", "付费")
@@ -29,6 +31,10 @@ object BillParser {
     private val INCOME_KW = listOf("收入", "收款")
     /** 应跳过类型（退款/充值/提现/理财/还款/转账） */
     private val SKIP_KW = listOf("退款", "充值", "提现", "理财", "还款", "转账")
+    /** 投资理财（全部跳过，不计） */
+    private val INVEST_KW = listOf("投资理财", "蚂蚁财富", "余额宝", "基金")
+    /** 转账类型 */
+    private val TRANSFER_KW = listOf("转账")
 
     fun parse(data: ByteArray, fileName: String): ParseResult {
         val ext = fileName.substringAfterLast('.', "").lowercase()
@@ -103,6 +109,7 @@ object BillParser {
         var colAmount = -1
         var colMerchant = -1
         var colProduct = -1
+        var colCategory = -1
 
         for (r in matrix.indices) {
             val row = matrix[r]
@@ -124,6 +131,7 @@ object BillParser {
                 if (HEADER_AMOUNT_KW.any { c.contains(it) }) colAmount = idx
                 if (HEADER_MERCHANT_KW.any { c.contains(it) }) colMerchant = idx
                 if (HEADER_PRODUCT_KW.any { c.contains(it) }) colProduct = idx
+                if (HEADER_CATEGORY_KW.any { c.contains(it) }) colCategory = idx
             }
             break
         }
@@ -149,21 +157,30 @@ object BillParser {
             // 空行跳过
             if (dateCell.isEmpty() && amountCell.isEmpty()) continue
 
-            // 类型方向
-            val type = resolveType(flowCell, amountCell)
+            val categoryCell = if (colCategory >= 0) row.getOrNull(colCategory)?.trim() ?: "" else ""
             val rowSummary = "日期[$dateCell] 金额[$amountCell] 方向[$flowCell] 对象[$merchantCell]".take(80)
-            if (type == TYPE_SKIP) {
-                skipped++
-                // 中性交易（退款/充值/提现等）：属"按规则跳过"，不是错误，不记入失败明细
-                continue
+
+            // 支付宝"不计收支 / 交易分类"处理：投资理财一律跳过；退款/转账打特殊标记
+            val special = when {
+                categoryCell.isNotEmpty() && INVEST_KW.any { categoryCell.contains(it) } -> {
+                    // 投资理财全部跳过，不计
+                    skipped++
+                    continue
+                }
+                categoryCell.contains("退款") || flowCell.contains("退款") -> RowSpecial.REFUND
+                categoryCell.contains("转账") -> RowSpecial.TRANSFER
+                else -> RowSpecial.NORMAL
             }
+
+            // 类型方向（收/支列）
+            val type = resolveType(flowCell, amountCell, categoryCell, special)
             if (type == null) {
                 failures.add(ParseFailure(rowSummary, "无法判断收支方向（收/支列不能识别）"))
                 skipped++
                 continue
             }
 
-            // 金额
+            // 金额（先解析，0元静默跳过则后续判断）
             val absAmountCell = amountCell.replace("-", "").trim()
             val amount = MoneyUtil.parseToFen(absAmountCell)
             if (amount == null) {
@@ -172,7 +189,7 @@ object BillParser {
                 continue
             }
             if (amount <= 0) {
-                failures.add(ParseFailure(rowSummary, "金额不是有效正数"))
+                // 金额为 0：静默跳过，不报失败（0元记录无记账意义）
                 skipped++
                 continue
             }
@@ -192,6 +209,7 @@ object BillParser {
                     amount = amount,
                     merchant = merchantCell,
                     product = productCell,
+                    special = special,
                 )
             )
         }
@@ -201,13 +219,40 @@ object BillParser {
 
     private const val TYPE_SKIP = "skip"
 
-    /** 根据收支/金额列判断方向。返回 expense/income/skip/null */
-    private fun resolveType(flowCell: String, amountCell: String): String? {
+    /**
+     * 根据收支/金额列 + 交易分类判断方向。返回 expense/income/skip/null。
+     * 支付宝"不计收支"的真实消费（日用百货/教育培训等）按支出处理。
+     */
+    private fun resolveType(
+        flowCell: String,
+        amountCell: String,
+        categoryCell: String,
+        special: RowSpecial,
+    ): String? {
+        // 转账/退款特殊标记：先定方向
+        if (special == RowSpecial.TRANSFER) return Transaction.TYPE_EXPENSE
+        if (special == RowSpecial.REFUND) return Transaction.TYPE_INCOME
+
         val flow = flowCell.lowercase()
+        val cat = categoryCell.lowercase()
+
+        // 支付宝"不计收支"：投资理财已在上游跳过；剩下的真实消费按支出/收入处理
+        if (flow.contains("不计收支") || flow == "") {
+            // 用金额正负判断：正向通常为支出（微信/支付宝付款），负向为收入
+            val trimmed = amountCell.replace("¥", "").trim()
+            return if (trimmed.startsWith("-")) Transaction.TYPE_INCOME
+            else Transaction.TYPE_EXPENSE
+        }
+
         if (flow.isNotEmpty()) {
             if (SKIP_KW.any { flow.contains(it) }) return TYPE_SKIP
             if (EXPENSE_KW.any { flow.contains(it) }) return Transaction.TYPE_EXPENSE
             if (INCOME_KW.any { flow.contains(it) }) return Transaction.TYPE_INCOME
+        }
+        // 交易分类辅助判断
+        if (cat.isNotEmpty()) {
+            if (EXPENSE_KW.any { cat.contains(it) } || cat.contains("支付") || cat.contains("消费")) return Transaction.TYPE_EXPENSE
+            if (INCOME_KW.any { cat.contains(it) } || cat.contains("收款")) return Transaction.TYPE_INCOME
         }
         // 用金额符号判断
         val trimmed = amountCell.trim()
