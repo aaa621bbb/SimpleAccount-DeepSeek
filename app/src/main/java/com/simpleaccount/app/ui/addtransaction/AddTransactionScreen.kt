@@ -1,7 +1,9 @@
 package com.simpleaccount.app.ui.addtransaction
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -50,8 +54,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,6 +93,14 @@ fun AddTransactionScreen(
     var showMerchantSheet by remember { mutableStateOf(false) }
     var showProductSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
+    // 金额输入框状态（BasicTextField 需要，支持光标移动）
+    var amountField by remember { mutableStateOf(TextFieldValue("")) }
+    // 编辑加载/外部变化时同步到金额框
+    LaunchedEffect(state.amountText) {
+        if (state.amountText != amountField.text) {
+            amountField = TextFieldValue(state.amountText)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -98,6 +120,9 @@ fun AddTransactionScreen(
                 .padding(padding)
                 .fillMaxSize()
                 .padding(16.dp)
+                .pointerInput(showKeypad) {
+                    detectTapGestures { showKeypad = false }
+                }
         ) {
             // 收支切换
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,29 +139,47 @@ fun AddTransactionScreen(
             }
             Spacer(Modifier.height(16.dp))
 
-            // 金额：可点击行 + 内置数字键盘
-            Row(
+            // 金额：BasicTextField（可移动光标） + 内置数字键盘
+            val focusRequester = remember { FocusRequester() }
+            val keyboardController = LocalSoftwareKeyboardController.current
+            BasicTextField(
+                value = amountField,
+                onValueChange = { tf ->
+                    // 只允许数字与小写小数点，拒绝其他字符
+                    val newText = tf.text.filter { it.isDigit() || it == '.' }
+                    // 记录实际可用值, 调用 vm（vm 里会做两位小数等校验）
+                    vm.onAmountChange(newText)
+                    amountField = tf.copy(text = newText, selection = TextRange(newText.length))
+                },
+                textStyle = MaterialTheme.typography.headlineMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(60.dp)
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable { showKeypad = !showKeypad }
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("金额", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (state.amountText.isEmpty()) "0.00" else state.amountText,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.background(Color.Transparent)
-                )
-            }
+                    .padding(horizontal = 16.dp)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        // 获得焦点时显示内置键盘；系统键盘立即收起
+                        if (focusState.isFocused) {
+                            keyboardController?.hide()
+                            showKeypad = true
+                        }
+                    }
+                    .pointerInput(Unit) { }
+            )
             if (showKeypad) {
                 NumberKeypad(
                     value = state.amountText,
-                    onKey = vm::onAmountChange,
+                    onKey = { newV ->
+                        vm.onAmountChange(newV)
+                        amountField = TextFieldValue(newV, selection = TextRange(newV.length))
+                    },
                     style = NumberKeypadStyle.AMOUNT
                 )
             }
