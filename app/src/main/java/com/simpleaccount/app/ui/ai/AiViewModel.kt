@@ -3,6 +3,7 @@ package com.simpleaccount.app.ui.ai
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simpleaccount.app.data.dao.AiMessageDao
+import com.simpleaccount.app.data.agent.AgentLoop
 import com.simpleaccount.app.data.entity.AiMessage
 import com.simpleaccount.app.data.entity.Merchant
 import com.simpleaccount.app.data.entity.Transaction
@@ -39,6 +40,7 @@ class AiViewModel @Inject constructor(
     private val merchantRepository: MerchantRepository,
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val agentLoop: AgentLoop,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AiUiState())
@@ -98,8 +100,6 @@ class AiViewModel @Inject constructor(
             aiMessageDao.insert(userMsg)
             val newList = _state.value.messages + userMsg
             aiMessageDao.trimBeyond(200)
-            // 保留最近 20 条作为上下文
-            val context = newList.takeLast(20)
             _state.value = _state.value.copy(messages = newList, input = "", typing = true, error = null)
             val apiKey = settingsRepository.apiKey()
             if (apiKey.isBlank()) {
@@ -113,22 +113,17 @@ class AiViewModel @Inject constructor(
                 )
                 return@launch
             }
-            val sysContext = buildSystemContext()
-            AppLog.d("AI: 发送请求 model=${settingsRepository.model()} 上下文=${sysContext.length}字符 对话=${context.size}条")
-            val result = aiService.chat(
-                baseUrl = settingsRepository.baseUrl(),
-                apiKey = apiKey,
-                model = settingsRepository.model(),
-                messages = buildList {
-                    // 账本上下文作为 system 提示，让 AI 能"看到"账本数据
-                    if (sysContext.isNotBlank()) add("system" to sysContext)
-                    addAll(context.map { it.role to it.content })
-                }
+            // 历史 = 当前这条 user 之前最近的多轮对话（作为上下文）
+            val history = newList.dropLast(1).takeLast(12).map { it.role to it.content }
+            AppLog.d("AI-Agent: 开始 agent 回合 user=${trimmed.take(50)} 历史=${history.size}条")
+            val result = agentLoop.run(
+                userMessage = trimmed,
+                history = history,
             )
-            AppLog.d("AI: 响应 ${if (result.error != null) "error=${result.error}" else "content长度=${result.content.length}"}")
+            AppLog.d("AI-Agent: 完成 toolRounds=${result.toolRounds} ${if (result.error != null) "error=${result.error}" else "reply=${result.reply.take(60)}"}")
             val replyMsg = AiMessage(
                 role = "assistant",
-                content = result.error ?: result.content,
+                content = result.error ?: result.reply,
                 timestamp = System.currentTimeMillis()
             )
             aiMessageDao.insert(replyMsg)
