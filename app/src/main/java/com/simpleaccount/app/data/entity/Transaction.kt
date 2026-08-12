@@ -20,6 +20,12 @@ data class Transaction(
     val note: String = "",
     val merchant: String = "",
     val product: String = "",
+    /** 收/付款方式（微信"支付方式"，仅导入时记录，不用于展示） */
+    val paymentMethod: String = "",
+    /** 交易单号（微信"交易单号"，存着不展示） */
+    val tradeOrderNo: String = "",
+    /** 商家/商户单号（微信"商户单号"，存着不展示） */
+    val merchantOrderNo: String = "",
     /** "manual" 手动 | "import" 导入 */
     val source: String,
     /** 导入批次 ID，手动记录为 null */

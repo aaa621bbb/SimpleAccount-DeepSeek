@@ -43,7 +43,6 @@ class ImportProcessor @Inject constructor(
         val batchId = UUID.randomUUID().toString()
         val existing = transactionDao.getAll()
         val validNames = categoryRepository.getAll().map { it.name }.toHashSet()
-        val fallback = CategoryPresets.DEFAULT_EXPENSE_CATEGORY
 
         // 已存在的「导入」记录 key 集合（用于判重跳过）。
         // 注意：手动记录不加入 —— 同 key 的手动记录应被本次导入覆盖（终稿要求）。
@@ -85,8 +84,9 @@ class ImportProcessor @Inject constructor(
                     .add(i to row.amount)
             }
 
-            val rawCat = classificationService.classify(row.merchant, row.product)
-            val cat = if (rawCat in validNames || rawCat in listOf(fallback)) rawCat else fallback
+            val cat = classificationService.classifyForImport(
+                row.merchant, row.product, row.sourceCategory, validNames
+            )
             insertRow(row, row.amount, row.type, cat, batchId, now)
             insertedKeys.add(key)
             inserted++
@@ -202,6 +202,9 @@ class ImportProcessor @Inject constructor(
                     date = row.date,
                     merchant = row.merchant,
                     product = row.product,
+                    paymentMethod = row.paymentMethod,
+                    tradeOrderNo = row.tradeOrderNo,
+                    merchantOrderNo = row.merchantOrderNo,
                     source = Transaction.SOURCE_IMPORT,
                     importBatchId = batchId,
                     updatedAt = now
@@ -216,6 +219,9 @@ class ImportProcessor @Inject constructor(
                     date = row.date,
                     merchant = row.merchant,
                     product = row.product,
+                    paymentMethod = row.paymentMethod,
+                    tradeOrderNo = row.tradeOrderNo,
+                    merchantOrderNo = row.merchantOrderNo,
                     source = Transaction.SOURCE_IMPORT,
                     importBatchId = batchId,
                     createdAt = now,

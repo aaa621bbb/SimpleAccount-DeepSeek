@@ -29,7 +29,7 @@ import com.simpleaccount.app.data.entity.Transaction
         AiMessage::class,
         Setting::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -47,6 +47,15 @@ abstract class AppDatabase : RoomDatabase() {
                         `createdAt` INTEGER NOT NULL
                     )"""
                 )
+            }
+        }
+
+        /** v2 → v3：transactions 表新增 paymentMethod/tradeOrderNo/merchantOrderNo 列（保留既有账本数据） */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `paymentMethod` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `tradeOrderNo` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `merchantOrderNo` TEXT NOT NULL DEFAULT ''")
             }
         }
     }

@@ -24,6 +24,12 @@ object BillParser {
     private val HEADER_PRODUCT_KW = listOf("商品名称", "商品", "名称")
     /** 交易分类列（支付宝特有，用于区分投资/退款/转账） */
     private val HEADER_CATEGORY_KW = listOf("交易分类", "交易类型", "类型")
+    /** 收/付款方式列（微信"支付方式"） */
+    private val HEADER_PAYMENT_KW = listOf("支付方式", "付款方式")
+    /** 交易单号列（存着不展示） */
+    private val HEADER_TRADE_NO_KW = listOf("交易单号", "交易号", "订单号")
+    /** 商户/商家单号列（存着不展示） */
+    private val HEADER_MERCHANT_NO_KW = listOf("商户单号", "商家单号", "商户订单号", "商家订单号")
 
     /** 支出关键词 */
     private val EXPENSE_KW = listOf("支出", "付款", "付费")
@@ -110,6 +116,9 @@ object BillParser {
         var colMerchant = -1
         var colProduct = -1
         var colCategory = -1
+        var colPayment = -1
+        var colTradeNo = -1
+        var colMerchantNo = -1
 
         for (r in matrix.indices) {
             val row = matrix[r]
@@ -127,11 +136,14 @@ object BillParser {
                 val c = cell.trim()
                 if (c.isEmpty()) return@forEachIndexed
                 if (HEADER_DATE_KW.any { c.contains(it) }) colDate = idx
-                if (HEADER_MONEY_FLOW_KW.any { c.contains(it) }) colFlow = idx
-                if (HEADER_AMOUNT_KW.any { c.contains(it) }) colAmount = idx
-                if (HEADER_MERCHANT_KW.any { c.contains(it) }) colMerchant = idx
-                if (HEADER_PRODUCT_KW.any { c.contains(it) }) colProduct = idx
-                if (HEADER_CATEGORY_KW.any { c.contains(it) }) colCategory = idx
+                else if (HEADER_MONEY_FLOW_KW.any { c.contains(it) }) colFlow = idx
+                else if (HEADER_AMOUNT_KW.any { c.contains(it) }) colAmount = idx
+                else if (HEADER_CATEGORY_KW.any { c.contains(it) }) colCategory = idx
+                else if (HEADER_PAYMENT_KW.any { c.contains(it) }) colPayment = idx
+                else if (HEADER_MERCHANT_NO_KW.any { c.contains(it) }) colMerchantNo = idx
+                else if (HEADER_TRADE_NO_KW.any { c.contains(it) }) colTradeNo = idx
+                else if (HEADER_MERCHANT_KW.any { c.contains(it) }) colMerchant = idx
+                else if (HEADER_PRODUCT_KW.any { c.contains(it) }) colProduct = idx
             }
             break
         }
@@ -153,6 +165,9 @@ object BillParser {
             val flowCell = if (colFlow >= 0) row.getOrNull(colFlow)?.trim() ?: "" else ""
             val merchantCell = if (colMerchant >= 0) row.getOrNull(colMerchant)?.trim() ?: "" else ""
             val productCell = if (colProduct >= 0) row.getOrNull(colProduct)?.trim() ?: "" else ""
+            val paymentCell = if (colPayment >= 0) row.getOrNull(colPayment)?.trim() ?: "" else ""
+            val tradeNoCell = if (colTradeNo >= 0) row.getOrNull(colTradeNo)?.trim() ?: "" else ""
+            val merchantNoCell = if (colMerchantNo >= 0) row.getOrNull(colMerchantNo)?.trim() ?: "" else ""
 
             // 空行跳过
             if (dateCell.isEmpty() && amountCell.isEmpty()) continue
@@ -209,6 +224,10 @@ object BillParser {
                     amount = amount,
                     merchant = merchantCell,
                     product = productCell,
+                    paymentMethod = paymentCell,
+                    tradeOrderNo = tradeNoCell,
+                    merchantOrderNo = merchantNoCell,
+                    sourceCategory = categoryCell,
                     special = special,
                 )
             )

@@ -17,6 +17,14 @@ data class ParsedRow(
     val amount: Long,        // 分
     val merchant: String,
     val product: String,
+    /** 收/付款方式（微信"支付方式"） */
+    val paymentMethod: String = "",
+    /** 交易单号 */
+    val tradeOrderNo: String = "",
+    /** 商家/商户单号 */
+    val merchantOrderNo: String = "",
+    /** 文件"交易分类/交易类型"列的原始值（用于兜底分类） */
+    val sourceCategory: String = "",
     /** 特殊类型标记（转账/退款），普通为 NORMAL */
     val special: RowSpecial = RowSpecial.NORMAL,
 )

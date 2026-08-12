@@ -26,20 +26,49 @@ class ClassificationService @Inject constructor(
      * @return 分类名（永不为空，落"其它"兜底），同时会更新 Merchant 记忆表
      */
     suspend fun classify(merchant: String, product: String): String {
-        // --- 层级1：Merchant 记忆表 ---
+        return classifyForImport(merchant, product, "", emptySet())
+    }
+
+    /**
+     * 导入账单时的自动分类（用户要求的分层优先级）：
+     * 1. 商家映射表（merchant 记忆，user_set 用户手动最高；classified 次之）——「我映射表」
+     * 2. 文件自带的"交易分类/交易类型"列值（仅在可归一化到已有分类名时采用）——「他表里的交易分类列」
+     * 3. 内置关键词规则表
+     * 4. "其它" 兜底 + 商家置 pending
+     *
+     * @param sourceCategory 文件"交易分类/交易类型"列的原始值（可能为空、也可能是"商户消费/转账"等，
+     *                       只有能归一化到已有分类名时才采用，否则忽略，避免拿"交易类型"当分类名）
+     */
+    suspend fun classifyForImport(
+        merchant: String,
+        product: String,
+        sourceCategory: String,
+        validCategoryNames: Set<String>,
+    ): String {
         val mName = merchant.trim()
+
+        // --- 层级1：商家映射表（用户映射表最高优先）---
         if (mName.isNotEmpty()) {
             val known = merchantDao.getByMerchant(mName)
             if (known != null) {
                 when (known.status) {
-                    Merchant.STATUS_USER_SET -> return known.category  // 用户手动最高优先
+                    Merchant.STATUS_USER_SET -> return known.category
                     Merchant.STATUS_CLASSIFIED -> if (known.category.isNotEmpty()) return known.category
-                    else -> { /* pending：跳过，继续走关键词 */ }
+                    else -> { /* pending：继续走下级 */ }
                 }
             }
         }
 
-        // --- 层级2：关键词规则表 ---
+        // --- 层级2：文件自带的"交易分类/交易类型"列；归一化后须为有效分类名才采用 ---
+        if (sourceCategory.isNotBlank()) {
+            val mapped = KeywordRules.mapSourceCategory(sourceCategory)
+            if (mapped in validCategoryNames) {
+                upsertMerchant(mName, mapped, Merchant.STATUS_CLASSIFIED)
+                return mapped
+            }
+        }
+
+        // --- 层级3：内置关键词规则表 ---
         val haystack = "$merchant $product"
         val kw = KeywordRules.classify(haystack)
         if (kw != null) {
@@ -47,7 +76,7 @@ class ClassificationService @Inject constructor(
             return kw
         }
 
-        // --- 层级3：其它 + pending ---
+        // --- 层级4：其它 + pending ---
         upsertMerchant(mName, defaultCategory, Merchant.STATUS_PENDING)
         return defaultCategory
     }

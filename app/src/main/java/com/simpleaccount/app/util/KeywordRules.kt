@@ -39,6 +39,39 @@ object KeywordRules {
     )
 
     /**
+     * 文件"交易分类/交易类型"列值 → app 预置分类名的别名映射。
+     * 仅当文件列值无法直接等于 app 分类名时做归一化；返回 null 表示无需归一化（直接用原值）。
+     * 顺序优先：含关键词即命中。
+     */
+    private val SOURCE_CATEGORY_ALIASES: List<Pair<String, String>> = listOf(
+        // 餐饮
+        "餐饮" to "餐饮", "美食" to "餐饮", "外卖" to "餐饮", "餐馆" to "餐饮", "吃喝" to "餐饮",
+        // 交通
+        "交通" to "交通", "出行" to "交通", "车费" to "交通", "加油" to "交通", "通勤" to "交通",
+        // 购物
+        "购物" to "购物", "日用百货" to "购物", "超市" to "购物", "服饰" to "购物", "百货" to "购物",
+        // 娱乐
+        "娱乐" to "娱乐", "休闲" to "娱乐", "文体" to "娱乐",
+        // 医疗
+        "医疗" to "医疗", "医药" to "医疗", "健康" to "医疗", "牙科" to "医疗",
+        // 教育
+        "教育" to "教育", "学习" to "教育", "培训" to "教育",
+        // 居住
+        "居住" to "居住", "住房" to "居住", "房租" to "居住", "物业" to "居住",
+        // 通讯
+        "通讯" to "通讯", "话费" to "通讯", "通信" to "通讯",
+    )
+
+    /** 将文件"交易分类/交易类型"列值归一化为 app 预置分类；无法识别时返回原值。 */
+    fun mapSourceCategory(raw: String): String {
+        val t = raw.lowercase()
+        for ((kw, cat) in SOURCE_CATEGORY_ALIASES) {
+            if (t.contains(kw)) return cat
+        }
+        return raw.trim()
+    }
+
+    /**
      * 对「商家名 + 商品名」拼接串做 contains 匹配。
      * @return 命中的分类名，未命中返回 null。
      */
