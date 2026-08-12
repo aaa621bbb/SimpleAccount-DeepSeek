@@ -139,7 +139,8 @@ class AiViewModel @Inject constructor(
 
     /**
      * 构建账本上下文（system 提示），让 AI 能"看到"当前账本数据。
-     * 提供整理后的数据：本月/全部收支汇总、本月分类统计、最近流水。
+     * 提供整理后的数据：本月汇总、全部汇总、全部月份分类汇总、最近流水明细。
+     * 明细量过大时降级为「按月汇总 + 最近 N 条明细」，保证 AI 能读到远期数据而不爆 token。
      */
     private suspend fun buildSystemContext(): String {
         val month = DateUtil.thisMonth()
@@ -148,27 +149,61 @@ class AiViewModel @Inject constructor(
 
         val monthSummary = accountRepository.monthSummary(month)
         val allSummary = accountRepository.allSummary()
-        val recent = all.sortedByDescending { it.date }.take(30)
-
-        val expenseCats = accountRepository.categoryTotals(month, Transaction.TYPE_EXPENSE)
-        val incomeCats = accountRepository.categoryTotals(month, Transaction.TYPE_INCOME)
 
         val sb = StringBuilder()
         sb.appendLine("你是一个记账助手。以下是用户当前的账本数据（金额单位为元）：")
         sb.appendLine("【本月(${month})汇总】支出=${MoneyUtil.fenToYuan(monthSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(monthSummary.income)} 元，结余=${MoneyUtil.fenToYuan(monthSummary.balance)} 元")
-        sb.appendLine("【全部汇总】支出=${MoneyUtil.fenToYuan(allSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(allSummary.income)} 元")
-        if (expenseCats.isNotEmpty()) {
-            sb.appendLine("【本月支出分类】" + expenseCats.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
+        sb.appendLine("【全部汇总】支出=${MoneyUtil.fenToYuan(allSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(allSummary.income)} 元，记账${all.size}笔")
+
+        // 每月收支汇总（让 AI 能读到各个月份，而不只是最近一个月）
+        val dates = all.map { it.date }.distinct().sorted()
+        if (dates.isNotEmpty()) {
+            val firstMonth = dates.first().substring(0, 7)
+            val lastMonth = dates.last().substring(0, 7)
+            val months = buildMonthlyRange(firstMonth, lastMonth)
+            val perMonth = StringBuilder("【各月收支汇总】")
+            months.forEach { m ->
+                val exp = all.filter { it.date.startsWith(m) && it.type == Transaction.TYPE_EXPENSE }.sumOf { it.amount }
+                val inc = all.filter { it.date.startsWith(m) && it.type == Transaction.TYPE_INCOME }.sumOf { it.amount }
+                if (exp != 0L || inc != 0L) {
+                    perMonth.append(" $m:支=${MoneyUtil.fenToYuan(exp)} 收=${MoneyUtil.fenToYuan(inc)};")
+                }
+            }
+            sb.appendLine(perMonth.toString())
         }
-        if (incomeCats.isNotEmpty()) {
-            sb.appendLine("【本月收入分类】" + incomeCats.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
+
+        // 全部月份的分类统计（支出），让 AI 能回答"哪类花得多"
+        val expenseCatsAll = accountRepository.categoryTotalsAll(Transaction.TYPE_EXPENSE)
+        if (expenseCatsAll.isNotEmpty()) {
+            sb.appendLine("【全部支出分类】" + expenseCatsAll.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
         }
-        sb.appendLine("【最近流水(最多30条)】")
-        recent.forEach { t ->
+
+        // 明细：优先全量（紧凑），>300 条则只给最近 300 条 + 提醒可按月问
+        val sorted = all.sortedByDescending { it.date }
+        val detailLimit = 300
+        val detail = sorted.take(detailLimit)
+        sb.appendLine("【流水明细(最近${detail.size}条${if (all.size > detailLimit) "，共${all.size}条，更早记录可按月份询问" else "，共${all.size}条"}")】")
+        detail.forEach { t ->
             val typeName = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
             sb.appendLine("- ${t.date} $typeName ${MoneyUtil.fenToYuan(t.amount)}元 分类:${t.category} 商家:${t.merchant} 商品:${t.product}")
         }
         return sb.toString()
+    }
+
+    /** 生成 [firstMonth, lastMonth]（yyyy-MM）的连续月份列表 */
+    private fun buildMonthlyRange(firstMonth: String, lastMonth: String): List<String> {
+        val y1 = firstMonth.substring(0, 4).toInt()
+        val m1 = firstMonth.substring(5, 7).toInt()
+        val y2 = lastMonth.substring(0, 4).toInt()
+        val m2 = lastMonth.substring(5, 7).toInt()
+        val out = mutableListOf<String>()
+        var y = y1; var m = m1
+        while (y < y2 || (y == y2 && m <= m2)) {
+            out.add("%04d-%02d".format(y, m))
+            m++
+            if (m > 12) { m = 1; y++ }
+        }
+        return out
     }
 
     /** 批量归类 pending 商家（每批 ≤20） */
