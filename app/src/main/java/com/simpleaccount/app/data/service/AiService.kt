@@ -150,7 +150,7 @@ class AiService @Inject constructor() {
 
     private data class HttpResp(val content: String, val error: String?, val rawJson: JSONObject?)
 
-    private suspend fun execute(baseUrl: String, apiKey: String, body: JSONObject): HttpResp {
+    private fun execute(baseUrl: String, apiKey: String, body: JSONObject): HttpResp {
         return try {
             val url = buildChatUrl(baseUrl)
             val request = Request.Builder()

@@ -2,6 +2,7 @@ package com.simpleaccount.app.util
 
 import android.content.Context
 import android.util.Log
+import android.os.Process
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
