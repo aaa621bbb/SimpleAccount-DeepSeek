@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.simpleaccount.app.ui.logs.LogScreen
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination
@@ -105,6 +106,9 @@ fun SimpleAccountNavHost() {
                 }
                 composable(Routes.DATA_MANAGE) {
                     DataManageScreen(navController)
+                }
+                composable(Routes.LOGS) {
+                    LogScreen(navController)
                 }
                 composable(Routes.ABOUT) {
                     AboutScreen(navController)

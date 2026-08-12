@@ -8,6 +8,7 @@ import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.importdata.BillParser
 import com.simpleaccount.app.data.importdata.ImportProcessor
 import com.simpleaccount.app.data.entity.ImportFailure
+import com.simpleaccount.app.util.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +61,7 @@ class ImportViewModel @Inject constructor(
         val name = queryName(uri) ?: "bill"
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw Exception("无法读取文件")
+        AppLog.d("导入: 文件=${name} 大小=${bytes.size}B")
 
         var actualData = bytes
         var actualName = name
@@ -76,6 +78,7 @@ class ImportViewModel @Inject constructor(
         _state.value = _state.value.copy(phase = ImportPhase.PARSING, fileName = actualName, sourceType = contentType)
 
         val parsed = BillParser.parse(actualData, actualName)
+        AppLog.d("导入: 解析完成 rows=${parsed.rows.size} skip=${parsed.skipCount} fail=${parsed.failures.size}")
         val result = processor.process(
             rows = parsed.rows,
             sourceType = contentType,
@@ -83,6 +86,7 @@ class ImportViewModel @Inject constructor(
             parseSkip = parsed.skipCount,
             failures = parsed.failures
         )
+        AppLog.d("导入: 入库完成 inserted=${result.inserted} skipped=${result.skipped} failed=${result.failed}")
 
         // R1：导入完成后，从库里取本次批次失败明细，供界面展示"查看失败"
         val batchFailures = importFailureDao.getByBatch(result.batchId)

@@ -33,7 +33,6 @@ object AppModule {
             .fallbackToDestructiveMigration()
             .build()
     }
-
     @Provides
     fun provideTransactionDao(db: AppDatabase): TransactionDao = db.transactionDao()
 

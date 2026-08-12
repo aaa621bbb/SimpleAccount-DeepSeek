@@ -11,6 +11,7 @@ import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.repository.MerchantRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.data.service.AiService
+import com.simpleaccount.app.util.AppLog
 import com.simpleaccount.app.util.DateUtil
 import com.simpleaccount.app.util.MoneyUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -113,6 +114,7 @@ class AiViewModel @Inject constructor(
                 return@launch
             }
             val sysContext = buildSystemContext()
+            AppLog.d("AI: 发送请求 model=${settingsRepository.model()} 上下文=${sysContext.length}字符 对话=${context.size}条")
             val result = aiService.chat(
                 baseUrl = settingsRepository.baseUrl(),
                 apiKey = apiKey,
@@ -123,6 +125,7 @@ class AiViewModel @Inject constructor(
                     addAll(context.map { it.role to it.content })
                 }
             )
+            AppLog.d("AI: 响应 ${if (result.error != null) "error=${result.error}" else "content长度=${result.content.length}"}")
             val replyMsg = AiMessage(
                 role = "assistant",
                 content = result.error ?: result.content,
@@ -225,6 +228,7 @@ class AiViewModel @Inject constructor(
                 _state.value = _state.value.copy(typing = false, error = "当前没有待归类的商家")
                 return@launch
             }
+            AppLog.d("AI归类: 开始批量归类 pending=${pendings.size}")
             val validCategories = categoryRepository.getAll()
                 .map { it.name }
                 .filter { it != "其它" }
@@ -242,12 +246,11 @@ class AiViewModel @Inject constructor(
                     return@launch
                 }
                 val parsed = parseClassifyResult(result.content, validCategories)
-                applyClassification(parsed)
-                done += batch.size
+                done += applyClassification(parsed, batch)
             }
             // 更新 pending 数
             val pendingLeft = merchantRepository.getByStatus(Merchant.STATUS_PENDING).size
-            _state.value = _state.value.copy(typing = false, pendingCount = pendingLeft, error = "已完成 $done 个商家归类")
+            _state.value = _state.value.copy(typing = false, pendingCount = pendingLeft, error = "已归类 $done 个商家（剩余 $pendingLeft 待归类）")
         }
     }
 
@@ -277,22 +280,41 @@ class AiViewModel @Inject constructor(
         return map
     }
 
-    private suspend fun applyClassification(map: Map<String, String>) {
-        for ((merchant, category) in map) {
-            val existing = merchantRepository.getByMerchant(merchant) ?: continue
+    private suspend fun applyClassification(map: Map<String, String>, batch: List<Merchant>): Int {
+        // 建立 规范化名 -> 真实商家 的索引（来自本批真实 pending 商家，保证只改本批）
+        val normalizedToMerchant = batch.associateBy { normalizeMerchant(it.merchant) }
+
+        var count = 0
+        for ((aiName, category) in map) {
+            val existing = normalizedToMerchant[normalizeMerchant(aiName)]
+                ?: merchantRepository.getByMerchant(aiName.trim())
+                ?: continue
             if (existing.status == Merchant.STATUS_USER_SET) continue
             merchantRepository.update(
                 existing.copy(category = category, status = Merchant.STATUS_CLASSIFIED, updatedAt = System.currentTimeMillis())
             )
             // 历史追改：只改 source='import'
+            val normalizedExisting = normalizeMerchant(existing.merchant)
             accountRepository.getAllImport()
-                .filter { it.merchant.trim() == merchant }
+                .filter { normalizeMerchant(it.merchant) == normalizedExisting }
                 .forEach { t ->
                     accountRepository.update(
                         t.copy(category = category, updatedAt = System.currentTimeMillis())
                     )
                 }
+            count++
         }
+        return count
+    }
+
+    /** 规范化商家名：去首尾空白 + 去除括号及内容、空白，用于 AI 返回名与真实名的健壮匹配 */
+    private fun normalizeMerchant(name: String?): String {
+        if (name.isNullOrBlank()) return ""
+        return name.trim()
+            .replace(Regex("\\([^)]*\\)"), "")
+            .replace(Regex("（[^）]*）"), "")
+            .replace(Regex("\\s+"), "")
+            .lowercase()
     }
 
     private fun buildClassifyPrompt(batch: List<Merchant>, validCategories: List<String>): String {

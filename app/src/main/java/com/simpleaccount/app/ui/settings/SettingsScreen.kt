@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Store
@@ -42,6 +43,7 @@ private val entries = listOf(
     SettingsEntry("分类管理", Icons.Filled.Category, Routes.CATEGORY_MANAGE),
     SettingsEntry("商家归类管理", Icons.Filled.Store, Routes.MERCHANT_MANAGE),
     SettingsEntry("数据管理（导出/清空）", Icons.Filled.Storage, Routes.DATA_MANAGE),
+    SettingsEntry("日志与排障", Icons.Filled.BugReport, Routes.LOGS),
     SettingsEntry("关于", Icons.Filled.Info, Routes.ABOUT),
 )
 

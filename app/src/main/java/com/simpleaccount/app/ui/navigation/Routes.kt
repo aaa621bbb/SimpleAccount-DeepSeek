@@ -14,6 +14,7 @@ object Routes {
     const val CATEGORY_MANAGE = "category_manage"
     const val MERCHANT_MANAGE = "merchant_manage"
     const val DATA_MANAGE = "data_manage"
+    const val LOGS = "logs"
     const val ABOUT = "about"
     const val AI_SETTINGS = "ai_settings"
 
