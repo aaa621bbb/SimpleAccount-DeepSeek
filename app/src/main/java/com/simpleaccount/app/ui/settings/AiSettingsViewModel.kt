@@ -14,15 +14,24 @@ data class AiProvider(
     val name: String,
     val baseUrl: String,
     val models: List<String>,
+    /** material-icons 图标名（Icons.Filled.* 的字段名，如 "SmartToy"） */
+    val iconName: String = "SmartToy",
+    /** 品牌主色（ARGB） */
+    val color: Long = 0xFF4CAF50,
 )
 
 /** AI 提供商预设：选厂商自动填 baseUrl，模型从列表选择（也允许自定义）。 */
 val AI_PROVIDERS = listOf(
-    AiProvider("DeepSeek", "https://api.deepseek.com/v1", listOf("deepseek-chat", "deepseek-reasoner")),
-    AiProvider("OpenAI", "https://api.openai.com/v1", listOf("gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo")),
-    AiProvider("阿里通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", listOf("qwen-plus", "qwen-turbo", "qwen-max")),
-    AiProvider("智谱GLM", "https://open.bigmodel.cn/api/paas/v4", listOf("glm-4-flash", "glm-4")),
-    AiProvider("Kimi(Moonshot)", "https://api.moonshot.cn/v1", listOf("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k")),
+    AiProvider("DeepSeek", "https://api.deepseek.com/v1", listOf("deepseek-chat", "deepseek-reasoner"),
+        iconName = "Psychology", color = 0xFF4A6CF7),
+    AiProvider("OpenAI", "https://api.openai.com/v1", listOf("gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"),
+        iconName = "Hub", color = 0xFF4CAF50),
+    AiProvider("阿里通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", listOf("qwen-plus", "qwen-turbo", "qwen-max"),
+        iconName = "Cloud", color = 0xFFFF7043),
+    AiProvider("智谱GLM", "https://open.bigmodel.cn/api/paas/v4", listOf("glm-4-flash", "glm-4"),
+        iconName = "AutoAwesome", color = 0xFFAB47BC),
+    AiProvider("Kimi(Moonshot)", "https://api.moonshot.cn/v1", listOf("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"),
+        iconName = "FlashOn", color = 0xFF00BCD4),
 )
 
 data class AiSettingsUiState(
