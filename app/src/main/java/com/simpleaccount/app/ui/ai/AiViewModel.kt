@@ -185,7 +185,11 @@ class AiViewModel @Inject constructor(
         val sorted = all.sortedByDescending { it.date }
         val detailLimit = 300
         val detail = sorted.take(detailLimit)
-        sb.appendLine("【流水明细(最近${detail.size}条${if (all.size > detailLimit) "，共${all.size}条，更早记录可按月份询问" else "，共${all.size}条"}")】")
+        sb.appendLine(
+            "【流水明细(最近${detail.size}条，共${all.size}条" +
+                (if (all.size > detailLimit) "，更早记录可按月份询问" else "") +
+                "）】"
+        )
         detail.forEach { t ->
             val typeName = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
             sb.appendLine("- ${t.date} $typeName ${MoneyUtil.fenToYuan(t.amount)}元 分类:${t.category} 商家:${t.merchant} 商品:${t.product}")
@@ -271,8 +275,9 @@ class AiViewModel @Inject constructor(
             text.lines().forEach { line ->
                 val parts = line.trim().split(Regex("[=:：]"), limit = 2)
                 if (parts.size == 2) {
-                    val merchant = parts[0].trim()
+                    val merchant = parts[0].trim().removeSurrounding("\"", "\"").removeSurrounding("“", "”").trim()
                     val cat = Regex("\\s+").replace(parts[1].trim(), "")
+                        .removeSurrounding("\"", "\"").removeSurrounding("“", "”").trim()
                     if (merchant.isNotEmpty() && cat in validCategories) map[merchant] = cat
                 }
             }
