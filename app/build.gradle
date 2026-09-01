@@ -10,7 +10,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.simpleaccount.app"
+        applicationId "com.simpleaccount.app.test"
         minSdk 26
         targetSdk 34
         versionCode 31
@@ -19,13 +19,16 @@ android {
     }
 
     signingConfigs {
-        // 固定 debug 签名：不再用每台机器随机的 ~/.android/debug.keystore，
-        // 保证每次构建的 APK 签名一致，可直接覆盖安装（不用卸载重装丢数据）
+        // 固定 debug 签名：优先用项目内 debug.keystore（保证每次构建签名一致，可直接覆盖安装）。
+        // CI 或首次 checkout 无该文件时自动回退到系统默认 debug 签名，避免构建失败。
         debug {
-            storeFile file('debug.keystore')
-            storePassword "simpleaccount"
-            keyAlias "simpleaccount"
-            keyPassword "simpleaccount"
+            def keystoreFile = file('debug.keystore')
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword "simpleaccount"
+                keyAlias "simpleaccount"
+                keyPassword "simpleaccount"
+            }
         }
     }
 
