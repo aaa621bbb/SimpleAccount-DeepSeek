@@ -17,6 +17,7 @@ object Routes {
     const val LOGS = "logs"
     const val ABOUT = "about"
     const val AI_SETTINGS = "ai_settings"
+    const val AUTO_RECORD = "auto_record"
 
     fun edit(id: Long) = "edit/$id"
 }

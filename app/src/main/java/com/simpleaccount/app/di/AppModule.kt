@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.simpleaccount.app.data.dao.AiMessageDao
 import com.simpleaccount.app.data.dao.CategoryDao
+import com.simpleaccount.app.data.dao.ConversationDao
 import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.MerchantDao
@@ -29,8 +30,15 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
         return Room.databaseBuilder(context, AppDatabase::class.java, "simple_account.db")
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
-            .fallbackToDestructiveMigration()
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6
+            )
+            // 硬约束：禁止 fallback 清数据。迁移链 1→5 完整，任何真实升级路径都有迁移；
+            // 移除 fallback 后若出现未知路径会直接报错（可排查），而不是悄悄清空用户数据
             .build()
     }
     @Provides
@@ -50,6 +58,9 @@ object AppModule {
 
     @Provides
     fun provideAiMessageDao(db: AppDatabase): AiMessageDao = db.aiMessageDao()
+
+    @Provides
+    fun provideConversationDao(db: AppDatabase): ConversationDao = db.conversationDao()
 
     @Provides
     fun provideSettingDao(db: AppDatabase): SettingDao = db.settingDao()

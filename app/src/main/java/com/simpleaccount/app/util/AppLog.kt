@@ -20,7 +20,7 @@ object AppLog {
 
     private const val TAG = "SimpleAccount"
     private const val DROPBOX_DIR = "logs"
-    private const val KEEP_DAYS = 5
+    private const val KEEP_DAYS = 7
     private const val MAX_BUFFER_LINES = 500
     private const val MAX_FILE_KB = 512
 
@@ -97,6 +97,7 @@ object AppLog {
         return null
     }
 
+    @Synchronized
     private fun writeLine(line: String) {
         try {
             val f = logFile() ?: return
@@ -130,6 +131,12 @@ object AppLog {
     /** 最近日志（内存缓冲，最多 MAX_BUFFER_LINES 行） */
     fun recentLogs(): List<String> = ring.toList().takeLast(MAX_BUFFER_LINES)
 
+    /** 低内存时清空环形缓冲（onTrimMemory 钩子调用） */
+    @Synchronized
+    fun clearRing() {
+        ring.clear()
+    }
+
     /** 获取日志目录下的全部日志文件，按修改时间倒序 */
     fun logFiles(): List<File> {
         val ctx = appContext ?: return emptyList()
@@ -144,6 +151,22 @@ object AppLog {
             file.readLines().takeLast(maxLines).joinToString("\n")
         } catch (_: Throwable) {
             ""
+        }
+    }
+
+    /**
+     * 字节数 → 人类可读大小。修复"日志老是 0KB"的显示问题：
+     * 之前用整数除法 length/1024，小于 1KB 的文件（新一天的日志通常只有几百字节）全部显示成 0KB。
+     */
+    fun formatSize(bytes: Long): String {
+        return when {
+            bytes < 0 -> "0B"
+            bytes < 1024 -> "${bytes}B"
+            bytes < 1024 * 1024 -> {
+                val kb = bytes / 1024.0
+                if (kb >= 100) "${kb.toInt()}KB" else "%.1fKB".format(kb)
+            }
+            else -> "%.1fMB".format(bytes / 1024.0 / 1024.0)
         }
     }
 }

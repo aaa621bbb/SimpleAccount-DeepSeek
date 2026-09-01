@@ -27,6 +27,8 @@ data class ParsedRow(
     val sourceCategory: String = "",
     /** 特殊类型标记（转账/退款），普通为 NORMAL */
     val special: RowSpecial = RowSpecial.NORMAL,
+    /** 时间 HH:mm（账单交易时间里带的时分；空=未知） */
+    val time: String = "",
 )
 
 /** 一条被跳过/失败的原始行及其原因 */
@@ -43,4 +45,6 @@ data class ParseResult(
     val skipCount: Int,
     /** 失败明细（R1：逐条失败 + 原因） */
     val failures: List<ParseFailure> = emptyList(),
+    /** 跳过原因统计（原因 → 条数），供导入结果页解释"跳过 N 条"的构成 */
+    val skipReasons: Map<String, Int> = emptyMap(),
 )

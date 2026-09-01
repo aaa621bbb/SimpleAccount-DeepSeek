@@ -1,5 +1,6 @@
 package com.simpleaccount.app.ui.ledger
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,16 +11,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,9 +38,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.simpleaccount.app.ui.components.TransactionRow
 import com.simpleaccount.app.ui.navigation.Routes
@@ -52,26 +55,15 @@ fun LedgerScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val filter = state.filter
-    var showMonthMenu by remember { mutableStateOf(false) }
-    var showCategoryMenu by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
 
-    // 按月份分组（yyyy-MM），保持顺序
-    val grouped = remember(state.rows) {
-        state.rows.groupBy { it.transaction.date.take(7) }
-            .toSortedMap(compareByDescending { it })
-            .toList()
-    }
+    // 分组由 ViewModel 在后台线程算好，UI 直接用（不再 remember 里现算导致切页卡顿）
+    val grouped = state.groups.map { it.month to it.rows }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("账本") },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
@@ -96,41 +88,64 @@ fun LedgerScreen(
                     }
                 },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
+            // 月份筛选芯片：选某月 = 只看该月记录（筛选语义），数据月份倒序
+            LazyRow(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                items(listOf<String?>(null) + state.months) { m ->
+                    FilterChip(
+                        selected = filter.month == m,
+                        onClick = { viewModel.setMonth(m) },
+                        label = { Text(m ?: "全部月份") },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+            // 分类筛选芯片
+            LazyRow(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                items(listOf<String?>(null) + state.categories.map { it.name }) { c ->
+                    FilterChip(
+                        selected = filter.category == c,
+                        onClick = { viewModel.setCategory(c) },
+                        label = { Text(c ?: "全部分类") },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+
+            // 记录数 + 排序切换 + 清除筛选
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box {
-                    TextButton(onClick = { showMonthMenu = true }) {
-                        Text(if (filter.month != null) "月份：${filter.month}" else "月份：全部")
-                    }
-                    DropdownMenu(expanded = showMonthMenu, onDismissRequest = { showMonthMenu = false }) {
-                        DropdownMenuItem(text = { Text("全部") }, onClick = { viewModel.setMonth(null); showMonthMenu = false })
-                        state.months.forEach { m ->
-                            DropdownMenuItem(text = { Text(m) }, onClick = { viewModel.setMonth(m); showMonthMenu = false })
-                        }
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                Box {
-                    TextButton(onClick = { showCategoryMenu = true }) {
-                        Text(if (filter.category != null) "分类：${filter.category}" else "分类：全部")
-                    }
-                    DropdownMenu(expanded = showCategoryMenu, onDismissRequest = { showCategoryMenu = false }) {
-                        DropdownMenuItem(text = { Text("全部") }, onClick = { viewModel.setCategory(null); showCategoryMenu = false })
-                        state.categories.forEach { c ->
-                            DropdownMenuItem(text = { Text(c.name) }, onClick = { viewModel.setCategory(c.name); showCategoryMenu = false })
-                        }
-                    }
-                }
+                Text(
+                    "共 ${state.rows.size} 条记录",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.weight(1f))
+                TextButton(onClick = { viewModel.toggleSort() }) {
+                    Text(
+                        if (state.sortByAmount) "按金额" else "按时间",
+                        fontSize = 13.sp
+                    )
+                }
                 if (filter.month != null || filter.category != null || filter.query.isNotBlank()) {
                     TextButton(onClick = viewModel::clearFilters) { Text("清除筛选") }
                 }
@@ -145,36 +160,45 @@ fun LedgerScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                LazyColumn(Modifier.fillMaxSize()) {
+                // 性能关键：行必须逐条懒加载（keyed item），
+                // 上一版"每月一张卡整月全渲染"在 1800+ 条时一次性组合导致严重卡顿
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)
+                ) {
                     grouped.forEach { (month, rows) ->
                         item(key = "h_$month") {
-                            Text(
-                                month,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            // 月份横幅
+                            Row(
+                                Modifier
+                                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    "$month · ${rows.size} 笔",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
-                        rows.forEach { row ->
-                            item(key = row.transaction.id) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.weight(1f)) {
-                                        TransactionRow(
-                                            transaction = row.transaction,
-                                            category = row.category,
-                                            onClick = { navController.navigate(Routes.edit(row.transaction.id)) }
-                                        )
-                                    }
-                                    IconButton(onClick = { pendingDelete = row.transaction.id }) {
-                                        Icon(
-                                            Icons.Filled.Delete,
-                                            contentDescription = "删除",
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    }
+                        items(rows, key = { it.transaction.id }) { row ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.weight(1f)) {
+                                    TransactionRow(
+                                        transaction = row.transaction,
+                                        category = row.category,
+                                        onClick = { navController.navigate(Routes.edit(row.transaction.id)) }
+                                    )
+                                }
+                                IconButton(onClick = { pendingDelete = row.transaction.id }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "删除",
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                    )
                                 }
                             }
                         }

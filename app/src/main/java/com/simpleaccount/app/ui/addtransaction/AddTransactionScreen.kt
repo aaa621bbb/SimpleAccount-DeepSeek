@@ -16,22 +16,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -44,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,7 +60,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -104,6 +106,9 @@ fun AddTransactionScreen(
             Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .imePadding()
+                // 键盘弹出时页面可上下滚动，保存键不会被顶出屏幕
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
                 .pointerInput(showKeypad) {
                     detectTapGestures { showKeypad = false }
@@ -359,7 +364,7 @@ private fun NumberKeypad(value: String, onKey: (String) -> Unit, style: NumberKe
     }
 }
 
-/** 日期选择：年/月/日 三段式 */
+/** 日期选择：Material3 日历对话框（替换旧版三段滚轮，操作更直观） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DatePickerSheet(
@@ -367,182 +372,36 @@ private fun DatePickerSheet(
     onDismiss: () -> Unit,
     onConfirm: (Int, Int, Int) -> Unit,
 ) {
-    val parts = initialDate.split("-").mapNotNull { it.toIntOrNull() }
-    var year by remember { mutableStateOf(parts.getOrNull(0) ?: 2026) }
-    var month by remember { mutableStateOf(parts.getOrNull(1) ?: 1) }
-    var day by remember { mutableStateOf(parts.getOrNull(2) ?: 1) }
-
-    fun daysInMonth(y: Int, m: Int): Int {
-        val dim = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-        return if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) 29 else dim[m - 1]
+    val initialMillis = remember(initialDate) {
+        val parts = initialDate.split("-").mapNotNull { it.toIntOrNull() }
+        java.time.LocalDate.of(
+            parts.getOrElse(0) { 2026 },
+            parts.getOrElse(1) { 1 },
+            parts.getOrElse(2) { 1 }
+        ).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
     }
-    if (day > daysInMonth(year, month)) day = daysInMonth(year, month)
+    val pickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
 
-    val nowY = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
-    val nowM = remember { java.util.Calendar.getInstance().get(java.util.Calendar.MONTH) + 1 }
-    val nowD = remember { java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH) }
-
-    val years = (2000..nowY + 5).toList()
-    val months = (1..12).toList()
-
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text("选择日期", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "${year}年${month}月${day}日",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(12.dp))
-
-            Row(Modifier.fillMaxWidth().height(200.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                WheelColumn(
-                    label = "年",
-                    values = years.map { it.toString() },
-                    selected = year.toString(),
-                    height = 200,
-                    modifier = Modifier.weight(1.2f),
-                    onSelect = { year = it.toInt(); if (day > daysInMonth(year, month)) day = daysInMonth(year, month) }
-                )
-                WheelColumn(
-                    label = "月",
-                    values = months.map { it.toString() },
-                    selected = month.toString(),
-                    height = 200,
-                    modifier = Modifier.weight(1f),
-                    onSelect = { month = it.toInt(); if (day > daysInMonth(year, month)) day = daysInMonth(year, month) }
-                )
-                WheelColumn(
-                    label = "日",
-                    values = (1..daysInMonth(year, month)).map { it.toString() },
-                    selected = day.toString(),
-                    height = 200,
-                    modifier = Modifier.weight(1f),
-                    onSelect = { day = it.toInt() }
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { onConfirm(year, month, day) },
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                Text("确定")
-            }
-            Spacer(Modifier.height(12.dp))
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                val ms = pickerState.selectedDateMillis ?: initialMillis
+                val d = java.time.Instant.ofEpochMilli(ms)
+                    .atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                onConfirm(d.year, d.monthValue, d.dayOfMonth)
+            }) { Text("确定") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
         }
-    }
-}
-
-/**
- * 简单滚轮列：LazyColumn，中间高亮选中。纯 foundation，无 Material3 新 API，
- * 兼容 Compose BOM 2024.02。滚动时实时高亮中线项，松手不回弹（无磁性吸附动画，避免卡顿）。
- */
-@Composable
-private fun WheelColumn(
-    label: String,
-    values: List<String>,
-    selected: String,
-    height: Int = 200,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val itemHeightDp = 44.dp
-    val itemHeightPx = with(LocalDensity.current) { itemHeightDp.toPx() }
-    val scope = rememberCoroutineScope()
-
-    val startIndex = values.indexOf(selected).coerceAtLeast(0)
-    // 可见 5 行，上下各留 2 行空白让首末项都能滚到中线；
-    // 额外在底部再补足空白，确保最末项也能滚动到中线位置（修复"无法选中最后一个"）
-    val padTop = 2
-    val padBottom = 2
-
-    val listState = rememberLazyListState(
-        // 让选中项初始位于中线：item 顶部偏移 = 2 格处（中心在 2.5 格=中线）
-        initialFirstVisibleItemIndex = (padTop + startIndex).coerceAtLeast(0),
-        initialFirstVisibleItemScrollOffset = (itemHeightPx * 2).toInt()
-    )
-
-    // 找出"真正穿过中线"的 item：中线在 Box 高度 50% 处 = 2.5 个 item 高度。
-    var centeredIndex = -1
-    var centeredValue: String? = null
-    val info = listState.layoutInfo
-    if (info.viewportEndOffset - info.viewportStartOffset > 0) {
-        val midPx = itemHeightPx * 2.5f
-        var bestDist = Float.MAX_VALUE
-        var bestIndex = -1
-        for (item in info.visibleItemsInfo) {
-            val itemMid = item.offset + item.size / 2f
-            val dist = kotlin.math.abs(itemMid - midPx)
-            if (dist < bestDist) { bestDist = dist; bestIndex = item.index }
-        }
-        if (bestIndex >= 0) {
-            centeredIndex = bestIndex
-            // item0..padTop-1 是顶部占位，真数据从 index = padTop 开始
-            val dataIdx = bestIndex - padTop
-            centeredValue = values.getOrNull(dataIdx)
-        }
-    }
-
-    // 只在"所见中线值"变化时通知父级，避免循环
-    LaunchedEffect(centeredValue) {
-        val cur = centeredValue
-        if (cur != null && cur != selected) onSelect(cur)
-    }
-
-    // 判断某数据 index 是否当前中线项（用于视觉高亮）
-    fun isCentered(dataIndex: Int): Boolean = (dataIndex + padTop) == centeredIndex
-
-    Box(modifier.fillMaxSize().height(itemHeightDp * 5)) {
-        // 中间高亮线
-        Box(
-            Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth()
-                .height(itemHeightDp)
-                .background(
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                    RoundedCornerShape(10.dp)
-                )
+    ) {
+        DatePicker(
+            state = pickerState,
+            title = null,
+            headline = null,
+            showModeToggle = false
         )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            item { Spacer(Modifier.height(itemHeightDp * padTop)) }
-            itemsIndexed(values) { index, value ->
-                val center = isCentered(index)
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(itemHeightDp)
-                        .clickable {
-                            // 点击该项使其精确滚动到中线位置
-                            scope.launch {
-                                // 让数据项纵向中心对准中线（中线在 viewport 2.5 格处）：
-                                // item 顶部偏移 = 2.5格 - 0.5格 = 2格
-                                val li = (padTop + index).coerceAtLeast(0)
-                                listState.scrollToItem(li, scrollOffset = (itemHeightPx * 2).toInt())
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        value,
-                        fontSize = if (center) 24.sp else 15.sp,
-                        fontWeight = if (center) FontWeight.Bold else FontWeight.Normal,
-                        color = if (center) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        maxLines = 1
-                    )
-                }
-            }
-            // 底部占位：确保末尾项也能滚到中线（关键修复）
-            item { Spacer(Modifier.height(itemHeightDp * padBottom)) }
-            // 额外大余量，保证最后一项能滚过中线
-            item { Spacer(Modifier.height(itemHeightDp * 3)) }
-        }
     }
 }
 

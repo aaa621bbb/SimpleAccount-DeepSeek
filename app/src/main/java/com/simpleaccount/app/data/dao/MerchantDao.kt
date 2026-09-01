@@ -43,4 +43,21 @@ interface MerchantDao {
 
     @Query("SELECT * FROM merchants WHERE status = :status")
     suspend fun getByStatus(status: String): List<Merchant>
+
+    /**
+     * 清理孤立商家：指定状态（pending）且超期未处理、且没有任何交易引用的行。
+     * 用于防商家表随导入无限膨胀；用户手动设置（user_set）永不删。
+     */
+    @Query(
+        "DELETE FROM merchants WHERE status = :status AND updatedAt < :cutoff " +
+            "AND merchant NOT IN (SELECT DISTINCT merchant FROM transactions WHERE merchant != '')"
+    )
+    suspend fun deleteStaleWithoutTransactions(status: String, cutoff: Long)
+
+    /** 待清理孤立商家的数量（供清理前统计） */
+    @Query(
+        "SELECT COUNT(*) FROM merchants WHERE status = :status AND updatedAt < :cutoff " +
+            "AND merchant NOT IN (SELECT DISTINCT merchant FROM transactions WHERE merchant != '')"
+    )
+    suspend fun countStaleWithoutTransactions(status: String, cutoff: Long): Int
 }

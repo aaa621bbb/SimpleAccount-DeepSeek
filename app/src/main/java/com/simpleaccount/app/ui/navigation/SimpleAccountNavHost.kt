@@ -1,17 +1,21 @@
 package com.simpleaccount.app.ui.navigation
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.simpleaccount.app.ui.logs.LogScreen
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,11 +50,34 @@ fun SimpleAccountNavHost() {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
 
-    val isBottomBarVisible = currentDestination?.route in BottomNavItems.items.map { it.route }
+    // AI 操控中枢：注册导航执行器（AI 的 navigate 工具可跳转任意页面），并上报当前路由
+    val appControl: com.simpleaccount.app.data.agent.AppControlCenter =
+        androidx.hilt.navigation.compose.hiltViewModel<com.simpleaccount.app.navigation.AppControlViewModel>()
+            .appControl
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        appControl.registerNavigator { route ->
+            runCatching {
+                navController.navigate(route) {
+                    launchSingleTop = true
+                }
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(currentDestination?.route) {
+        currentDestination?.route?.let { appControl.reportRoute(it) }
+    }
 
     Scaffold(
+        // 关键：外层不再补系统栏 inset（各页面自己的 Scaffold/TopAppBar 会补一次）。
+        // 之前外层+内层各补一次状态栏高度，顶部标题区域被撑到两倍高（edge-to-edge 后出现的"顶头大标题"根因）
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            if (isBottomBarVisible) {
+            // 键盘弹出时瞬时隐藏导航栏（不加动画）：
+            // 若用滑出动画，动画期间"导航栏高度(渐减) + 键盘高度(渐增)"相加会出现一个超过最终位置的尖峰，
+            // 表现为输入栏先蹿很高再落下来。瞬时移除后输入栏只跟随键盘单一运动。
+            // inset 读取放在本 lambda 内，逐帧变化只重组底部栏，不牵动整棵导航树。
+            val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+            if (currentDestination?.route in BottomNavItems.items.map { it.route } && !imeVisible) {
                 SimpleBottomBar(
                     currentDestination = currentDestination,
                     navController = navController
@@ -77,7 +104,7 @@ fun SimpleAccountNavHost() {
                     StatsScreen(vm)
                 }
                 composable(Routes.AI) {
-                    AiScreen()
+                    AiScreen(navController = navController)
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(navController)
@@ -97,6 +124,9 @@ fun SimpleAccountNavHost() {
                 }
                 composable(Routes.AI_SETTINGS) {
                     AiSettingsScreen(navController)
+                }
+                composable(Routes.AUTO_RECORD) {
+                    com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
                 }
                 composable(Routes.CATEGORY_MANAGE) {
                     CategoryManageScreen(navController)
@@ -123,23 +153,28 @@ private fun SimpleBottomBar(
     currentDestination: NavDestination?,
     navController: NavHostController,
 ) {
-    NavigationBar {
-        BottomNavItems.items.forEach { item ->
-            val selected = currentDestination?.route == item.route
-            NavigationBarItem(
-                selected = selected,
-                onClick = {
-                    navController.navigate(item.route) {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
+    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+        NavigationBar(
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            tonalElevation = 0.dp,
+        ) {
+            BottomNavItems.items.forEach { item ->
+                val selected = currentDestination?.route == item.route
+                NavigationBarItem(
+                    selected = selected,
+                    onClick = {
+                        navController.navigate(item.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
                         }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                },
-                icon = { Icon(item.icon, contentDescription = item.label) },
-                label = { Text(item.label) }
-            )
+                    },
+                    icon = { Icon(item.icon, contentDescription = item.label) },
+                    label = { Text(item.label) }
+                )
+            }
         }
     }
 }

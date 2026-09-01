@@ -21,4 +21,14 @@ interface ImportFailureDao {
     /** 全部失败明细（倒序） */
     @Query("SELECT * FROM import_failures ORDER BY id DESC")
     suspend fun getAll(): List<ImportFailure>
+
+    @Query("SELECT COUNT(*) FROM import_failures")
+    suspend fun count(): Int
+
+    /** 存量上限：只保留最近 keep 条，防止无限膨胀 */
+    @Query(
+        "DELETE FROM import_failures WHERE id NOT IN " +
+            "(SELECT id FROM import_failures ORDER BY id DESC LIMIT :keep)"
+    )
+    suspend fun trimTo(keep: Int)
 }

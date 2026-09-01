@@ -20,17 +20,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ElectricBolt
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.LooksOne
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Waves
+import androidx.compose.material.icons.filled.Workspaces
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 
@@ -58,6 +70,17 @@ private fun providerIcon(name: String): ImageVector = when (name) {
     "Cloud" -> Icons.Filled.Cloud
     "AutoAwesome" -> Icons.Filled.AutoAwesome
     "FlashOn" -> Icons.Filled.FlashOn
+    "RocketLaunch" -> Icons.Filled.RocketLaunch
+    "ElectricBolt" -> Icons.Filled.ElectricBolt
+    "Star" -> Icons.Filled.Star
+    "OneK" -> Icons.Filled.LooksOne
+    "LooksOne" -> Icons.Filled.LooksOne
+    "Waves" -> Icons.Filled.Waves
+    "Explore" -> Icons.Filled.Explore
+    "LocalFireDepartment" -> Icons.Filled.LocalFireDepartment
+    "AccountTree" -> Icons.Filled.AccountTree
+    "Science" -> Icons.Filled.Science
+    "Workspaces" -> Icons.Filled.Workspaces
     else -> Icons.Filled.SmartToy
 }
 
@@ -169,10 +192,33 @@ fun AiSettingsScreen(
             Spacer(Modifier.height(16.dp))
 
             // --------- 选择模型 ---------
-            Text("选择模型", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("选择模型", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                if (state.loadingModels) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp), strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("正在获取可用模型…", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    TextButton(onClick = { viewModel.refreshModels() }) {
+                        Text(
+                            if (state.models.isEmpty()) "拉取可用模型" else "刷新模型列表",
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(4.dp))
             Text(
-                "从下方推荐点选，或直接输入自定义模型名。",
+                if (state.models.isEmpty()) "填好接口和 Key 后点「拉取可用模型」，自动获取该接口真实可用的模型。"
+                else "已获取 ${state.models.size} 个该接口可用的模型，点选即可。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -182,13 +228,14 @@ fun AiSettingsScreen(
                 state.baseUrl.contains(it.baseUrl.replace("https://", "").replace("/v1", ""))
             } ?: AI_PROVIDERS[0]
 
-            // 模型 Chips
+            // 模型 Chips：优先展示接口真实可用的模型；拉取失败回退厂商预设
+            val modelChoices = state.models.ifEmpty { provider.models }
             Row(
                 Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
             ) {
-                provider.models.forEach { m ->
+                modelChoices.forEach { m ->
                     FilterChip(
                         selected = state.model == m,
                         onClick = { viewModel.onModelChange(m) },
@@ -203,6 +250,61 @@ fun AiSettingsScreen(
                 value = state.model,
                 onValueChange = viewModel::onModelChange,
                 label = { Text("模型名（可自定义）") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(12.dp))
+            // --------- 截图记账（识图）：主模型优先 + 独立配置兜底 ---------
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "优先用主模型识图",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "主模型是多模态（如 glm-4v/qwen-vl/gemini）时直接用它；识别失败自动改用下方独立识图配置",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(checked = state.useMainForVision, onCheckedChange = { viewModel.setUseMainForVision(it) })
+            }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            Text(
+                "独立识图配置（主模型是纯文本如 DeepSeek 时用）：推荐智谱，接口 open.bigmodel.cn/api/paas/v4，模型 glm-4v-flash（免费），bigmodel.cn 注册即得 Key",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.visionBaseUrl,
+                onValueChange = viewModel::onVisionBaseUrlChange,
+                label = { Text("识图接口地址") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.visionApiKey,
+                onValueChange = viewModel::onVisionKeyChange,
+                label = { Text("识图 API Key") },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.visionModel,
+                onValueChange = viewModel::onVisionModelChange,
+                label = { Text("识图模型名（如 glm-4v-flash）") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )

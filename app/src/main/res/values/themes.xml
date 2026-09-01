@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 状态栏/导航栏透明（全面屏），图标深浅由 MainActivity 的 enableEdgeToEdge() 按系统深色模式自动切换 -->
     <style name="Theme.SimpleAccount" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 </resources>

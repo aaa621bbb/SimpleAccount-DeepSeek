@@ -17,6 +17,8 @@ data class Transaction(
     val category: String,
     /** 日期，格式 yyyy-MM-dd */
     val date: String,
+    /** 时间 HH:mm（账单/截图里有精确时间时记录；空=未知） */
+    val time: String = "",
     val note: String = "",
     val merchant: String = "",
     val product: String = "",
@@ -26,7 +28,7 @@ data class Transaction(
     val tradeOrderNo: String = "",
     /** 商家/商户单号（微信"商户单号"，存着不展示） */
     val merchantOrderNo: String = "",
-    /** "manual" 手动 | "import" 导入 */
+    /** "manual" 手动 | "import" 导入 | "auto" 无感记账自动抓取 */
     val source: String,
     /** 导入批次 ID，手动记录为 null */
     val importBatchId: String? = null,
@@ -38,5 +40,8 @@ data class Transaction(
         const val TYPE_INCOME = "income"
         const val SOURCE_MANUAL = "manual"
         const val SOURCE_IMPORT = "import"
+
+        /** 无感记账自动抓取（通知监听） */
+        const val SOURCE_AUTO = "auto"
     }
 }

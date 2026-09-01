@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.simpleaccount.app.data.dao.AiMessageDao
 import com.simpleaccount.app.data.dao.CategoryDao
+import com.simpleaccount.app.data.dao.ConversationDao
 import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.MerchantDao
@@ -13,6 +14,7 @@ import com.simpleaccount.app.data.dao.SettingDao
 import com.simpleaccount.app.data.dao.TransactionDao
 import com.simpleaccount.app.data.entity.AiMessage
 import com.simpleaccount.app.data.entity.Category
+import com.simpleaccount.app.data.entity.Conversation
 import com.simpleaccount.app.data.entity.ImportFailure
 import com.simpleaccount.app.data.entity.ImportLog
 import com.simpleaccount.app.data.entity.Merchant
@@ -26,10 +28,11 @@ import com.simpleaccount.app.data.entity.Transaction
         Merchant::class,
         ImportLog::class,
         ImportFailure::class,
+        Conversation::class,
         AiMessage::class,
         Setting::class,
     ],
-    version = 3,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -58,6 +61,108 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE transactions ADD COLUMN `merchantOrderNo` TEXT NOT NULL DEFAULT ''")
             }
         }
+
+        /**
+         * v3 → v4：一次性清洗历史重复导入（表结构不变，只清数据）。
+         * 历史版本判重键未做归一化（商家/商品写法、空格差异），同一笔交易反复导入会积累脏变体。
+         * 判定：导入记录中 date+amount+归一化(商家)+归一化(商品) 相同，且单号相同或任一方无单号 → 视为同一笔。
+         * 保留策略：优先保留有交易单号的行；同级保留最早 id。
+         * 注意两个 2 元奶茶那种同日同商家同额的真实多笔消费，各自单号不同 → 不会被误并。
+         * 列名注意：Room 默认列名 = 字段名（驼峰），交易单号列是 `tradeOrderNo`，不是 trade_order_no。
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """DELETE FROM transactions WHERE source = 'import' AND id IN (
+                        SELECT t.id FROM transactions t WHERE EXISTS (
+                            SELECT 1 FROM transactions t2
+                            WHERE t2.source = 'import'
+                              AND t2.date = t.date
+                              AND t2.amount = t.amount
+                              AND lower(replace(replace(trim(ifnull(t2.merchant, '')), char(12288), ''), ' ', ''))
+                                  = lower(replace(replace(trim(ifnull(t.merchant, '')), char(12288), ''), ' ', ''))
+                              AND lower(replace(replace(trim(ifnull(t2.product, '')), char(12288), ''), ' ', ''))
+                                  = lower(replace(replace(trim(ifnull(t.product, '')), char(12288), ''), ' ', ''))
+                              AND (
+                                    ifnull(t2.tradeOrderNo, '') = ifnull(t.tradeOrderNo, '')
+                                    OR ifnull(t2.tradeOrderNo, '') = ''
+                                    OR ifnull(t.tradeOrderNo, '') = ''
+                                  )
+                              AND (
+                                    (length(ifnull(t2.tradeOrderNo, '')) > 0) > (length(ifnull(t.tradeOrderNo, '')) > 0)
+                                    OR (
+                                        (length(ifnull(t2.tradeOrderNo, '')) > 0) = (length(ifnull(t.tradeOrderNo, '')) > 0)
+                                        AND t2.id < t.id
+                                    )
+                                  )
+                        )
+                    )"""
+                )
+            }
+        }
+        /**
+         * v4 → v5：AI 对话多会话化。
+         * - 新增 conversations 表；
+         * - ai_messages 重构：TEXT 主键（可溯源撤回）+ conversationId 归属 + 工具调用字段 + 状态位；
+         * - 旧消息全部迁移进一个 "legacy" 会话，id 用 legacy-序号 生成，不丢数据。
+         * 列名注意：Room 默认列名 = 字段名（驼峰）。
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val now = System.currentTimeMillis()
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `conversations` (
+                        `id` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )"""
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `ai_messages_new` (
+                        `id` TEXT NOT NULL,
+                        `conversationId` TEXT NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `toolCallId` TEXT,
+                        `toolName` TEXT,
+                        `status` TEXT NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )"""
+                )
+                db.execSQL(
+                    "INSERT OR IGNORE INTO conversations (id, title, createdAt, updatedAt) " +
+                        "VALUES ('legacy', '历史对话', $now, $now)"
+                )
+                db.execSQL(
+                    """INSERT INTO ai_messages_new
+                        (id, conversationId, role, content, timestamp, toolCallId, toolName, status)
+                        SELECT printf('legacy-%05d', rowid), 'legacy', role, content, timestamp,
+                               NULL, NULL, 'done'
+                        FROM ai_messages ORDER BY timestamp ASC, rowid ASC"""
+                )
+                // 旧版多行欢迎语（用户反馈占屏）迁移时替换为短版
+                db.execSQL(
+                    "UPDATE ai_messages_new SET content = '你好，我是 AI 记账管家 🧾 会先查你的真实账本再回答～' " +
+                        "WHERE content LIKE '你好！我是你的 AI 记账管家%'"
+                )
+                db.execSQL("DROP TABLE ai_messages")
+                db.execSQL("ALTER TABLE ai_messages_new RENAME TO ai_messages")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_messages_conversationId` " +
+                        "ON `ai_messages` (`conversationId`)"
+                )
+            }
+        }
+
+        /** v5 → v6：transactions 新增 time 列（HH:mm），账单/截图里的精确时间可入库 */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `time` TEXT NOT NULL DEFAULT ''")
+            }
+        }
     }
 
     abstract fun transactionDao(): TransactionDao
@@ -65,6 +170,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun merchantDao(): MerchantDao
     abstract fun importLogDao(): ImportLogDao
     abstract fun importFailureDao(): ImportFailureDao
+    abstract fun conversationDao(): ConversationDao
     abstract fun aiMessageDao(): AiMessageDao
     abstract fun settingDao(): SettingDao
 }

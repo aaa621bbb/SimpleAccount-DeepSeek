@@ -1,9 +1,11 @@
 package com.simpleaccount.app.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,25 +35,42 @@ import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
-/** 分类彩色小圆底 + 图标 */
+/** 统一的卡片样式：白底 + 发丝边框 + 20dp 圆角 + 轻投影（扁平而有层次） */
+@Composable
+fun SoftCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    ) {
+        Column(content = content)
+    }
+}
+
+/** 分类彩色圆底 + 图标（柔和色调：浅色底 + 彩色图标，比纯色底更精致） */
 @Composable
 fun CategoryIconCircle(
     category: Category?,
     modifier: Modifier = Modifier,
     size: Int = 40,
 ) {
-    val bg = parseColor(category?.colorHex ?: "#BDC3C7")
+    val color = parseColor(category?.colorHex ?: "#BDC3C7")
     Box(
         modifier = modifier
             .size(size.dp)
             .clip(CircleShape)
-            .background(bg),
+            .background(color.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = IconMapper.map(category?.iconName ?: "more_horiz"),
             contentDescription = category?.name,
-            tint = Color.White,
+            tint = color,
             modifier = Modifier.size((size * 0.55).dp)
         )
     }
@@ -79,9 +100,11 @@ fun TransactionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (transaction.merchant.isNotBlank()) {
+            val detail = listOf(transaction.merchant, transaction.product)
+                .filter { it.isNotBlank() }.joinToString(" · ")
+            if (detail.isNotBlank()) {
                 Text(
-                    text = transaction.merchant,
+                    text = detail,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -100,7 +123,7 @@ fun TransactionRow(
                     Color(0xFF2ECC71) else MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = transaction.date,
+                text = transaction.date + (if (transaction.time.isNotBlank()) " " + transaction.time else ""),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

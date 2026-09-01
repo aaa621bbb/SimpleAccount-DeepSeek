@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simpleaccount.app.data.cleanup.DataRetentionManager
 import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.importdata.BillParser
 import com.simpleaccount.app.data.importdata.ImportProcessor
@@ -30,6 +31,8 @@ data class ImportUiState(
     val sourceType: String = "wechat",
     /** 最近一次导入的失败明细（供"查看失败"入口） */
     val failures: List<ImportFailure> = emptyList(),
+    /** 最近一次导入的跳过原因统计（原因 → 条数） */
+    val skipReasons: Map<String, Int> = emptyMap(),
 )
 
 @HiltViewModel
@@ -37,6 +40,7 @@ class ImportViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val processor: ImportProcessor,
     private val importFailureDao: ImportFailureDao,
+    private val retentionManager: DataRetentionManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ImportUiState())
@@ -84,7 +88,8 @@ class ImportViewModel @Inject constructor(
             sourceType = contentType,
             fileName = actualName,
             parseSkip = parsed.skipCount,
-            failures = parsed.failures
+            failures = parsed.failures,
+            parsedSkipReasons = parsed.skipReasons,
         )
         AppLog.d("导入: 入库完成 inserted=${result.inserted} skipped=${result.skipped} failed=${result.failed}")
 
@@ -98,8 +103,12 @@ class ImportViewModel @Inject constructor(
             skipped = result.skipped,
             failed = result.failed,
             sourceType = contentType,
-            failures = batchFailures
+            failures = batchFailures,
+            skipReasons = result.skipReasons
         )
+
+        // 存储防膨胀：导入完成后修剪导入日志/失败记录上限
+        runCatching { retentionManager.cleanupAfterImport() }
     }
 
     private fun detectSourceType(ext: String, name: String): String {

@@ -2,7 +2,6 @@ package com.simpleaccount.app.ui.stats
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,14 +13,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -36,6 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.ui.components.LineTrendView
 import com.simpleaccount.app.ui.components.PieChartView
+import com.simpleaccount.app.ui.components.SoftCard
 import com.simpleaccount.app.ui.components.parseColor
 import com.simpleaccount.app.util.MoneyUtil
 
@@ -50,7 +53,9 @@ import com.simpleaccount.app.util.MoneyUtil
 @Composable
 fun StatsScreen(viewModel: StatsViewModel) {
     val state by viewModel.uiState.collectAsState()
-    var showMonthMenu by remember { mutableStateOf(false) }
+    // 点击某分类 → 弹出该分类的账单明细
+    var categorySheet by remember { mutableStateOf<String?>(null) }
+    val categorySheetState = androidx.compose.material3.rememberModalBottomSheetState()
 
     Scaffold(
         topBar = {
@@ -66,112 +71,318 @@ fun StatsScreen(viewModel: StatsViewModel) {
             Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 16.dp)
         ) {
-            // 月份选择 + 收支切换（紧凑）
+            // 紧凑工具行：月份说明 + 支出/收入切换（不再放大数字卡，饼图中心已有总额）
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box {
-                    TextButton(onClick = { showMonthMenu = true }) {
-                        Text(if (state.month == "all") "全部月份" else state.month)
-                    }
-                    DropdownMenu(expanded = showMonthMenu, onDismissRequest = { showMonthMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("全部") },
-                            onClick = { viewModel.setMonth("all"); showMonthMenu = false }
-                        )
-                        state.months.forEach { m ->
-                            DropdownMenuItem(
-                                text = { Text(m) },
-                                onClick = { viewModel.setMonth(m); showMonthMenu = false }
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                FilterChip(
-                    selected = state.type == Transaction.TYPE_EXPENSE,
-                    onClick = { viewModel.setType(Transaction.TYPE_EXPENSE) },
-                    label = { Text("支出") }
-                )
-                Spacer(Modifier.width(8.dp))
-                FilterChip(
-                    selected = state.type == Transaction.TYPE_INCOME,
-                    onClick = { viewModel.setType(Transaction.TYPE_INCOME) },
-                    label = { Text("收入") }
-                )
-            }
-
-            // 上半：饼图（固定矮高度，不滚动）
-            PieChartView(
-                slices = state.slices,
-                centerLabel = if (state.type == Transaction.TYPE_EXPENSE) "总支出" else "总收入",
-                centerValue = "¥" + MoneyUtil.fenToYuan(state.total)
-            )
-
-            // 图例（压缩行距）
-            if (state.slices.isEmpty()) {
                 Text(
-                    "本月暂无数据",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp
+                    if (state.month == "all") "全部月份" else state.month,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
-            } else {
-                Column(
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "¥" + MoneyUtil.fenToYuan(state.total),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (state.type == Transaction.TYPE_EXPENSE) MaterialTheme.colorScheme.error
+                    else Color(0xFF2ECC71)
+                )
+                Spacer(Modifier.weight(1f))
+                Row(
                     Modifier
-                        .height(150.dp)
-                        .padding(horizontal = 16.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        .padding(3.dp)
                 ) {
-                    state.slices.forEach { s ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(Modifier.size(10.dp).background(parseColor(s.colorHex)))
-                            Spacer(Modifier.width(8.dp))
-                            Text(s.categoryName, style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                "¥" + MoneyUtil.fenToYuan(s.value),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                    SegButton("支出", state.type == Transaction.TYPE_EXPENSE) {
+                        viewModel.setType(Transaction.TYPE_EXPENSE)
+                    }
+                    Spacer(Modifier.width(3.dp))
+                    SegButton("收入", state.type == Transaction.TYPE_INCOME) {
+                        viewModel.setType(Transaction.TYPE_INCOME)
+                    }
+                }
+            }
+
+            // 月份芯片（横向滚动，来自真实数据月份）
+            LazyRow(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                items(listOf("all") + state.months) { m ->
+                    FilterChip(
+                        selected = state.month == m,
+                        onClick = { viewModel.setMonth(m) },
+                        label = { Text(if (m == "all") "全部" else m) },
+                        shape = RoundedCornerShape(50),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+
+            // ── 分类构成：环形图 + 占比条形（第一个卡片）──
+            SoftCard(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                PieChartView(
+                    slices = state.slices,
+                    centerLabel = if (state.type == Transaction.TYPE_EXPENSE) "总支出" else "总收入",
+                    centerValue = "¥" + MoneyUtil.fenToYuan(state.total)
+                )
+                if (state.slices.isEmpty()) {
+                    Text(
+                        "本月暂无数据",
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp
+                    )
+                } else {
+                    // 默认只展示前 6 项，点击展开全部；不足 6 项按实际数量显示
+                    var legendExpanded by remember { mutableStateOf(false) }
+                    val shownSlices = if (legendExpanded) state.slices else state.slices.take(6)
+                    Column(
+                        Modifier
+                            .padding(horizontal = 18.dp)
+                            .padding(bottom = 14.dp)
+                    ) {
+                        shownSlices.forEach { s ->
+                            val percent = if (state.total > 0) s.value.toFloat() / state.total else 0f
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { categorySheet = s.categoryName }
+                                    .padding(vertical = 5.dp, horizontal = 2.dp)
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(parseColor(s.colorHex))
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        "%.0f%%".format(percent * 100),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(
+                                        "¥" + MoneyUtil.fenToYuan(s.value),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth(percent.coerceIn(0.02f, 1f))
+                                            .height(5.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(parseColor(s.colorHex))
+                                    )
+                                }
+                            }
+                        }
+                        // 展开/收起其余分类
+                        if (state.slices.size > 6) {
+                            TextButton(
+                                onClick = { legendExpanded = !legendExpanded },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (legendExpanded) "收起" else "展开其余 ${state.slices.size - 6} 项",
+                                    fontSize = 13.sp
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            HorizontalDivider()
+            // ── 每日花销日历（第二个卡片）──
+            CalendarCard(viewModel, state)
 
-            // 趋势折线（压缩高度）
-            Text(
-                "近 12 个月趋势",
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            LineTrendView(state.trend)
-            Row(Modifier.padding(start = 24.dp, top = 0.dp)) {
-                LegendDot(Color(0xFFFF6B6B), "支出")
-                Spacer(Modifier.width(20.dp))
-                LegendDot(Color(0xFF2ECC71), "收入")
+            // ── 趋势卡片（点击数据点 → 切到该月） ──
+            SoftCard(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 18.dp, end = 18.dp, top = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "近 12 个月趋势",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.weight(1f))
+                    LegendDot(Color(0xFFFF6B6B), "支出")
+                    Spacer(Modifier.width(12.dp))
+                    LegendDot(Color(0xFF2ECC71), "收入")
+                }
+                Text(
+                    "点击曲线上的点可查看对应月份",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 18.dp)
+                )
+                LineTrendView(state.trend, onPointClick = { viewModel.setMonth(it) })
             }
         }
+    }
+
+    // 点击分类 → 该分类账单明细
+    categorySheet?.let { cat ->
+        CategoryTxSheet(
+            categoryName = cat,
+            state = state,
+            sheetState = categorySheetState,
+            onDismiss = { categorySheet = null }
+        )
+    }
+}
+
+/** 分段按钮（选中主色底白字，未选中透明） */
+@Composable
+private fun SegButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
 private fun LegendDot(color: Color, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(10.dp).background(color))
-        Spacer(Modifier.width(6.dp))
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(5.dp))
         Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** 点击分类 → 弹出该分类在当前月份/口径下的全部账单 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryTxSheet(
+    categoryName: String,
+    state: StatsUiState,
+    sheetState: androidx.compose.material3.SheetState,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            val txList0 = state.catTx[categoryName].orEmpty()
+            // 排序：默认按时间（数据源已按时间倒序），可切按金额
+            var byAmount by remember { mutableStateOf(false) }
+            val txList = if (byAmount) txList0.sortedByDescending { it.amount } else txList0
+            val sum = txList0.sumOf { it.amount }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    categoryName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { byAmount = !byAmount }) {
+                    Text(if (byAmount) "按金额" else "按时间", fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (state.month == "all") "全部月份 · 共 ${txList.size} 笔 · ¥${MoneyUtil.fenToYuan(sum)}"
+                else "${state.month} · 共 ${txList.size} 笔 · ¥${MoneyUtil.fenToYuan(sum)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            if (txList.isEmpty()) {
+                Text("没有记录", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            } else {
+                LazyColumn {
+                    items(txList.size) { i ->
+                        val t = txList[i]
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    listOf(t.merchant, t.product).filter { it.isNotBlank() }
+                                        .joinToString(" · ").ifBlank { t.category },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    t.date,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                (if (t.type == Transaction.TYPE_INCOME) "+" else "-") +
+                                    "¥" + MoneyUtil.fenToYuan(t.amount),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = if (t.type == Transaction.TYPE_INCOME) Color(0xFF2ECC71)
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -93,4 +93,8 @@ interface TransactionDao {
 
     @Query("SELECT * FROM transactions WHERE source = 'import' ORDER BY id DESC")
     suspend fun getAllImport(): List<Transaction>
+
+    /** 按来源取全部（供导入时覆盖自动记账记录等） */
+    @Query("SELECT * FROM transactions WHERE source = :source ORDER BY id DESC")
+    suspend fun getAllBySource(source: String): List<Transaction>
 }

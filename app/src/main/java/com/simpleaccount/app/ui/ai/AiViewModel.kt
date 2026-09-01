@@ -2,20 +2,21 @@ package com.simpleaccount.app.ui.ai
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simpleaccount.app.data.dao.AiMessageDao
 import com.simpleaccount.app.data.agent.AgentLoop
+import com.simpleaccount.app.data.agent.ConversationManager
 import com.simpleaccount.app.data.entity.AiMessage
+import com.simpleaccount.app.data.entity.Conversation
 import com.simpleaccount.app.data.entity.Merchant
-import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.data.repository.AccountRepository
-import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.repository.MerchantRepository
+import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.data.service.AiService
 import com.simpleaccount.app.util.AppLog
-import com.simpleaccount.app.util.DateUtil
-import com.simpleaccount.app.util.MoneyUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -23,62 +24,136 @@ import org.json.JSONObject
 import javax.inject.Inject
 
 data class AiUiState(
+    /** 会话列表（按最近活跃倒序） */
+    val conversations: List<Conversation> = emptyList(),
+    val currentConversationId: String = "",
+    val currentTitle: String = "",
+    /** 当前会话的消息（来自 DB Flow，有上限，不常驻全量） */
     val messages: List<AiMessage> = emptyList(),
-    val loading: Boolean = false,
     val typing: Boolean = false,
+    /** Agent 过程状态（"正在思考…"/"正在查询账本…"） */
+    val phase: String? = null,
     val input: String = "",
     val error: String? = null,
     val pendingCount: Int = 0,
     val enabled: Boolean = false,
+    /** 截图记账：识别结果待确认（用户勾选后才入账） */
+    val screenshotPending: ScreenshotPendingUi? = null,
 )
+
+/** 截图识别出的单笔（预览/勾选用） */
+data class ScreenshotItemUi(
+    val date: String?,
+    val merchant: String,
+    val product: String?,
+    val amount: Double,
+    val type: String,
+    val time: String? = null,
+    /** 与账本已有记录重复（默认不勾选、不可选） */
+    val duplicate: Boolean,
+    val selected: Boolean,
+)
+
+data class ScreenshotPendingUi(
+    val conversationId: String,
+    val items: List<ScreenshotItemUi>,
+) {
+    val selectableCount: Int get() = items.count { it.selected }
+}
 
 @HiltViewModel
 class AiViewModel @Inject constructor(
-    private val aiMessageDao: AiMessageDao,
-    private val settingsRepository: SettingsRepository,
-    private val aiService: AiService,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
+    private val conversationManager: ConversationManager,
     private val merchantRepository: MerchantRepository,
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: SettingsRepository,
+    private val aiService: AiService,
     private val agentLoop: AgentLoop,
+    private val classificationService: com.simpleaccount.app.data.service.ClassificationService,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AiUiState())
     val state = _state.asStateFlow()
 
+    /** 当前会话消息流订阅（切换会话时取消旧的） */
+    private var messagesJob: Job? = null
+
+    /** 当前 Agent 回合任务（支持停止/新消息打断） */
+    private var agentJob: Job? = null
+
+    private val welcomeText =
+        "你好，我是 AI 记账管家 🧾 会先查你的真实账本再回答，可以直接问：这个月花了多少？哪类支出最多？"
+
     init {
-        viewModelScope.launch { loadInitial() }
+        viewModelScope.launch {
+            val enabled = settingsRepository.isAiEnabled()
+            _state.value = _state.value.copy(enabled = enabled)
+            refreshPendingCount()
+            if (_state.value.currentConversationId.isEmpty()) {
+                val conv = conversationManager.ensureCurrentConversation()
+                ensureWelcome(conv.id)
+                _state.value = _state.value.copy(
+                    currentConversationId = conv.id,
+                    currentTitle = conv.title
+                )
+                observeMessages(conv.id)
+            }
+        }
+        // 会话列表：删除当前会话后自动切到最新会话
+        viewModelScope.launch {
+            conversationManager.observeConversations().collect { convs ->
+                _state.value = _state.value.copy(conversations = convs)
+                val cur = _state.value.currentConversationId
+                if (cur.isNotEmpty() && convs.none { it.id == cur }) {
+                    if (convs.isNotEmpty()) switchTo(convs.first().id)
+                    else createConversationInternal()
+                } else {
+                    convs.firstOrNull { it.id == cur }?.let {
+                        if (it.title != _state.value.currentTitle) {
+                            _state.value = _state.value.copy(currentTitle = it.title)
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    private suspend fun loadInitial() {
-        val enabled = settingsRepository.isAiEnabled()
-        val msgs = aiMessageDao.getAll()
-        val pending = merchantRepository.getByStatus(Merchant.STATUS_PENDING).size
-        val welcome = if (msgs.isEmpty()) {
-            listOf(
-                AiMessage(
-                    role = "assistant",
-                    content = "你好，我是记账助手，可以帮你归类商家或回答记账问题。",
-                    timestamp = System.currentTimeMillis()
-                )
-            )
-        } else msgs
-        if (msgs.isEmpty()) {
-            aiMessageDao.insert(welcome[0])
+    private fun observeMessages(conversationId: String) {
+        messagesJob?.cancel()
+        messagesJob = viewModelScope.launch {
+            conversationManager.observeMessages(conversationId).collect { msgs ->
+                _state.value = _state.value.copy(messages = msgs)
+            }
         }
-        _state.value = _state.value.copy(
-            messages = if (msgs.isEmpty()) welcome else msgs,
-            enabled = enabled,
-            pendingCount = pending,
-            loading = false
-        )
     }
+
+    /** 新会话若为空则插入欢迎语 */
+    private suspend fun ensureWelcome(conversationId: String) {
+        if (conversationManager.getMessages(conversationId).isEmpty()) {
+            conversationManager.addMessage(conversationId, AiMessage.ROLE_ASSISTANT, welcomeText)
+        }
+    }
+
+    private suspend fun createConversationInternal() {
+        val conv = conversationManager.newConversation()
+        ensureWelcome(conv.id)
+        _state.value = _state.value.copy(
+            currentConversationId = conv.id,
+            currentTitle = conv.title,
+            error = null
+        )
+        observeMessages(conv.id)
+    }
+
+    // ---------------- 对外操作 ----------------
 
     fun onInputChange(v: String) {
         _state.value = _state.value.copy(input = v)
     }
 
-    /** 刷新 enabled 状态（页面进入/返回时调用，避免缓存陈旧） */
+    /** 进入 AI 页时刷新启用状态，避免设置页开关后返回时缓存陈旧 */
     fun refreshEnabled() {
         val cur = settingsRepository.isAiEnabled()
         if (cur != _state.value.enabled) {
@@ -86,153 +161,613 @@ class AiViewModel @Inject constructor(
         }
     }
 
+    fun switchTo(conversationId: String) {
+        if (conversationId == _state.value.currentConversationId) return
+        viewModelScope.launch {
+            val conv = conversationManager.getConversation(conversationId) ?: return@launch
+            _state.value = _state.value.copy(
+                currentConversationId = conv.id,
+                currentTitle = conv.title,
+                error = null,
+                typing = false,
+                phase = null
+            )
+            observeMessages(conv.id)
+        }
+    }
+
+    fun newConversation() {
+        if (_state.value.typing) return
+        viewModelScope.launch { createConversationInternal() }
+    }
+
+    fun deleteConversation(conversationId: String) {
+        if (_state.value.typing && conversationId == _state.value.currentConversationId) return
+        viewModelScope.launch { conversationManager.deleteConversation(conversationId) }
+    }
+
+    fun clearCurrentConversation() {
+        if (_state.value.typing) return
+        viewModelScope.launch {
+            conversationManager.clearMessages(_state.value.currentConversationId)
+            ensureWelcome(_state.value.currentConversationId)
+        }
+    }
+
+    /** 消息长按操作：复制由 UI 完成；删除为硬删；撤回置 withdrawn（显示"已撤回"） */
+    fun deleteMessage(id: String) {
+        viewModelScope.launch { conversationManager.deleteMessage(id) }
+    }
+
+    fun withdrawMessage(id: String) {
+        viewModelScope.launch { conversationManager.withdrawMessage(id) }
+    }
+
+    /** 重新生成最后一条回复：删掉最后的 assistant 消息后按最后一条用户消息重跑 */
+    /** 停止当前回合：掐断进行中的网络请求 + 取消任务，输入栏立即可用 */
+    fun stopAgent() {
+        aiService.cancelAllActive()
+        agentJob?.cancel()
+        agentJob = null
+        _state.value = _state.value.copy(typing = false, phase = null)
+    }
+
+    fun regenerate() {
+        if (_state.value.typing) return
+        viewModelScope.launch {
+            val convId = _state.value.currentConversationId
+            val lastUser = conversationManager.lastUserMessage(convId)
+            if (lastUser == null) {
+                _state.value = _state.value.copy(error = "没有可重新生成的提问")
+                return@launch
+            }
+            conversationManager.messagesAfter(convId, lastUser.timestamp)
+                .forEach { conversationManager.deleteMessage(it.id) }
+            _state.value = _state.value.copy(typing = true, phase = "正在思考…", error = null)
+            runAgentTurn(convId, lastUser.content)
+        }
+    }
+
     fun sendMessage(content: String) {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return
-        // 实时读取启用状态，避免 ViewModel 缓存的 enabled 陈旧导致误报"未开启"
         val enabled = settingsRepository.isAiEnabled()
         if (!enabled) {
-            _state.value = _state.value.copy(error = "AI 功能未开启，请到「我的→AI辅助设置」开启并配置")
+            _state.value = _state.value.copy(error = "AI 功能未开启，请到设置中开启并配置")
             return
         }
-        viewModelScope.launch {
-            val userMsg = AiMessage(role = "user", content = trimmed, timestamp = System.currentTimeMillis())
-            aiMessageDao.insert(userMsg)
-            val newList = _state.value.messages + userMsg
-            aiMessageDao.trimBeyond(200)
-            _state.value = _state.value.copy(messages = newList, input = "", typing = true, error = null)
+        // 正在回复时发新消息 = 打断当前回合（OpenMinis 风格），立刻开始新回合
+        if (_state.value.typing) {
+            stopAgent()
+        }
+        agentJob = viewModelScope.launch {
+            val convId = _state.value.currentConversationId.ifEmpty {
+                conversationManager.ensureCurrentConversation().id
+            }
+            // 首条用户消息自动命名会话
+            if (_state.value.currentTitle == "新对话") {
+                conversationManager.renameConversation(convId, trimmed.take(16))
+            }
+            conversationManager.addMessage(convId, AiMessage.ROLE_USER, trimmed)
+            _state.value = _state.value.copy(
+                input = "", typing = true, phase = "正在思考…", error = null
+            )
             val apiKey = settingsRepository.apiKey()
             if (apiKey.isBlank()) {
-                _state.value = _state.value.copy(
-                    messages = newList + AiMessage(
-                        role = "assistant",
-                        content = "未配置 API Key，请先在设置中填写。",
-                        timestamp = System.currentTimeMillis()
-                    ),
-                    typing = false
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT, "未配置 API Key，请先到「AI 辅助设置」填写。",
+                    status = AiMessage.STATUS_ERROR
                 )
+                _state.value = _state.value.copy(typing = false, phase = null)
                 return@launch
             }
-            // 历史 = 当前这条 user 之前最近的多轮对话（作为上下文）
-            val history = newList.dropLast(1).takeLast(12).map { it.role to it.content }
-            AppLog.d("AI-Agent: 开始 agent 回合 user=${trimmed.take(50)} 历史=${history.size}条")
-            val result = agentLoop.run(
-                userMessage = trimmed,
-                history = history,
-            )
-            AppLog.d("AI-Agent: 完成 toolRounds=${result.toolRounds} ${if (result.error != null) "error=${result.error}" else "reply=${result.reply.take(60)}"}")
-            val replyMsg = AiMessage(
-                role = "assistant",
-                content = result.error ?: result.reply,
-                timestamp = System.currentTimeMillis()
-            )
-            aiMessageDao.insert(replyMsg)
-            aiMessageDao.trimBeyond(200)
-            _state.value = _state.value.copy(
-                messages = _state.value.messages + replyMsg,
-                typing = false
-            )
+            runAgentTurn(convId, trimmed)
         }
     }
 
-    /**
-     * 构建账本上下文（system 提示），让 AI 能"看到"当前账本数据。
-     * 提供整理后的数据：本月汇总、全部汇总、全部月份分类汇总、最近流水明细。
-     * 明细量过大时降级为「按月汇总 + 最近 N 条明细」，保证 AI 能读到远期数据而不爆 token。
-     */
-    private suspend fun buildSystemContext(): String {
-        val month = DateUtil.thisMonth()
-        val all = accountRepository.getAll()
-        if (all.isEmpty()) return ""  // 没有账本数据就不注入
+    // ---------------- Agent 回合 ----------------
 
-        val monthSummary = accountRepository.monthSummary(month)
-        val allSummary = accountRepository.allSummary()
+    private suspend fun runAgentTurn(conversationId: String, userText: String) {
+        // 上下文按 30 分钟窗口/20 条兜底规则从 DB 现取现裁；
+        // 若最后一条正是本次用户消息则去掉（AgentLoop 会重新追加，避免重复）
+        var history = conversationManager.buildContext(conversationId)
+        if (history.lastOrNull()?.second == userText) history = history.dropLast(1)
 
-        val sb = StringBuilder()
-        sb.appendLine("你是一个记账助手。以下是用户当前的账本数据（金额单位为元）：")
-        sb.appendLine("【本月(${month})汇总】支出=${MoneyUtil.fenToYuan(monthSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(monthSummary.income)} 元，结余=${MoneyUtil.fenToYuan(monthSummary.balance)} 元")
-        sb.appendLine("【全部汇总】支出=${MoneyUtil.fenToYuan(allSummary.expense)} 元，收入=${MoneyUtil.fenToYuan(allSummary.income)} 元，记账${all.size}笔")
-
-        // 每月收支汇总（让 AI 能读到各个月份，而不只是最近一个月）
-        val dates = all.map { it.date }.distinct().sorted()
-        if (dates.isNotEmpty()) {
-            val firstMonth = dates.first().substring(0, 7)
-            val lastMonth = dates.last().substring(0, 7)
-            val months = buildMonthlyRange(firstMonth, lastMonth)
-            val perMonth = StringBuilder("【各月收支汇总】")
-            months.forEach { m ->
-                val exp = all.filter { it.date.startsWith(m) && it.type == Transaction.TYPE_EXPENSE }.sumOf { it.amount }
-                val inc = all.filter { it.date.startsWith(m) && it.type == Transaction.TYPE_INCOME }.sumOf { it.amount }
-                if (exp != 0L || inc != 0L) {
-                    perMonth.append(" $m:支=${MoneyUtil.fenToYuan(exp)} 收=${MoneyUtil.fenToYuan(inc)};")
+        AppLog.d("AI-Agent: 开始回合 conv=" + conversationId + " user=" + userText.take(50) + " 历史=" + history.size + "条")
+        // 思考计时器：过程提示实时显示已等待秒数（结构化并发：停止/打断时一并取消）
+        val startedAt = System.currentTimeMillis()
+        var phaseBase = "正在思考…"
+        val result: AgentLoop.AgentResult = kotlinx.coroutines.coroutineScope {
+            val ticker = launch {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    val sec = (System.currentTimeMillis() - startedAt) / 1000
+                    if (sec >= 2) {
+                        _state.value = _state.value.copy(phase = phaseBase + "（" + sec + "s）")
+                    }
                 }
             }
-            sb.appendLine(perMonth.toString())
+            val r = agentLoop.run(
+                userMessage = userText,
+                history = history,
+                onStatus = { p ->
+                    phaseBase = p
+                    val sec = (System.currentTimeMillis() - startedAt) / 1000
+                    _state.value = _state.value.copy(phase = if (sec >= 2) p + "（" + sec + "s）" else p)
+                }
+            )
+            ticker.cancel()
+            r
         }
-
-        // 全部月份的分类统计（支出），让 AI 能回答"哪类花得多"
-        val expenseCatsAll = accountRepository.categoryTotalsAll(Transaction.TYPE_EXPENSE)
-        if (expenseCatsAll.isNotEmpty()) {
-            sb.appendLine("【全部支出分类】" + expenseCatsAll.joinToString("，") { "${it.category}:${MoneyUtil.fenToYuan(it.total ?: 0L)}元" })
-        }
-
-        // 明细：优先全量（紧凑），>300 条则只给最近 300 条 + 提醒可按月问
-        val sorted = all.sortedByDescending { it.date }
-        val detailLimit = 300
-        val detail = sorted.take(detailLimit)
-        sb.appendLine(
-            "【流水明细(最近${detail.size}条，共${all.size}条" +
-                (if (all.size > detailLimit) "，更早记录可按月份询问" else "") +
-                "）】"
+        AppLog.d(
+            "AI-Agent: 完成 toolRounds=" + result.toolRounds + " " +
+                (if (result.error != null) "error=" + result.error else "reply=" + result.reply.take(60))
         )
-        detail.forEach { t ->
-            val typeName = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-            sb.appendLine("- ${t.date} $typeName ${MoneyUtil.fenToYuan(t.amount)}元 分类:${t.category} 商家:${t.merchant} 商品:${t.product}")
+        if (result.error != null) {
+            conversationManager.addMessage(
+                conversationId, AiMessage.ROLE_ASSISTANT, result.error,
+                status = AiMessage.STATUS_ERROR
+            )
+            _state.value = _state.value.copy(typing = false, phase = null, error = result.error)
+        } else {
+            conversationManager.addMessage(
+                conversationId, AiMessage.ROLE_ASSISTANT, result.reply.ifBlank { "（模型未返回内容）" }
+            )
+            _state.value = _state.value.copy(typing = false, phase = null, error = null)
         }
-        return sb.toString()
     }
 
-    /** 生成 [firstMonth, lastMonth]（yyyy-MM）的连续月份列表 */
-    private fun buildMonthlyRange(firstMonth: String, lastMonth: String): List<String> {
-        val y1 = firstMonth.substring(0, 4).toInt()
-        val m1 = firstMonth.substring(5, 7).toInt()
-        val y2 = lastMonth.substring(0, 4).toInt()
-        val m2 = lastMonth.substring(5, 7).toInt()
-        val out = mutableListOf<String>()
-        var y = y1; var m = m1
-        while (y < y2 || (y == y2 && m <= m2)) {
-            out.add("%04d-%02d".format(y, m))
-            m++
-            if (m > 12) { m = 1; y++ }
+    private suspend fun refreshPendingCount() {
+        val pending = merchantRepository.getByStatus(Merchant.STATUS_PENDING).size
+        _state.value = _state.value.copy(pendingCount = pending)
+    }
+
+    // ---------------- 截图 AI 记账 ----------------
+
+    /**
+     * 用户发账单截图（支持多张/长图）：压缩 → 视觉模型提取 → 逐笔去重（同日同商家同金额不重记）→ 入账。
+     * 视觉模型可在 AI 设置里配置（默认 glm-4v-flash，免费；主模型是 DeepSeek 时也能用）。
+     */
+    fun sendScreenshotMessage(daoUris: List<android.net.Uri>) {
+        if (daoUris.isEmpty() || _state.value.typing) return
+        val enabled = settingsRepository.isAiEnabled()
+        if (!enabled) {
+            _state.value = _state.value.copy(error = "AI 功能未开启，请到设置中开启并配置")
+            return
+        }
+        if (_state.value.typing) stopAgent()
+        agentJob = viewModelScope.launch {
+            val convId = _state.value.currentConversationId.ifEmpty {
+                conversationManager.ensureCurrentConversation().id
+            }
+            conversationManager.addMessage(
+                convId, AiMessage.ROLE_USER, "📩 发来 ${daoUris.size} 张账单截图，请帮我记账"
+            )
+            _state.value = _state.value.copy(typing = true, phase = "正在读取截图…", error = null)
+
+            // 识图智能路由：
+            // 「优先用主模型」开 → 先用主模型（多模态主模型零额外配置）；失败自动回退独立识图配置
+            // 关 → 只用独立识图配置（主模型是纯文本如 DeepSeek 时用这个）
+            val useMain = settingsRepository.useMainModelForVision()
+
+            // 压缩/切片：长图自动切成多段（保证文字可读），转 base64
+            val base64List = mutableListOf<String>()
+            for (uri in daoUris) {
+                runCatching { compressImageSlices(appContext, uri) }
+                    .getOrNull()?.let { base64List.addAll(it) }
+            }
+            if (base64List.isEmpty()) {
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT, "图片读取失败，请重试或换截图。",
+                    status = AiMessage.STATUS_ERROR
+                )
+                _state.value = _state.value.copy(typing = false, phase = null)
+                return@launch
+            }
+
+            val prompt = """
+你是账单识别助手。请仔细逐行阅读这张支付记录截图（可能有多笔交易，从上到下、逐行扫描，一行都不要漏），提取每一笔账单记录。
+严格只输出 JSON 数组，不要任何解释、不要 markdown 代码块围栏：
+[{"date":"yyyy-MM-dd","time":"HH:mm","merchant":"商家或交易对象","product":"商品说明，可省略","amount":6.5,"type":"expense"}]
+识别规则：
+- 逐行扫描，先看交易时间列。日期可能是各种写法：2026-08-30、2026/8/30、2026年8月30日、08-30、8月30日、"昨天"、"前天"、"今天"。无论哪种写法，date 一律换算成 yyyy-MM-dd 输出（"昨天/前天/今天"按今天换算成具体日期）；time 保留 HH:mm。
+- 再看商家/交易对象列、商品/备注列、金额列、收/支列。
+- amount 是数字（元），严格按截图原值（保留小数），不要四舍五入。
+- type：支出 expense、收入 income。
+- 不要编造截图里没有的字段；识别不出的行跳过。
+- 若截图里没有任何账单信息，输出 []。
+            """.trimIndent()
+            // （单次视觉识别：直接让多模态模型看图出 JSON，失败才补一轮）
+
+            _state.value = _state.value.copy(phase = "正在识别截图（${if (useMain) "主模型" else "识图模型"}）…")
+
+            // 单次视觉识别：直接让多模态模型看图提取账单 JSON（省 token）；
+            // 结果为空或主模型失败 → 自动补一轮（回退识图模型/重试）
+            // 长图（多切片）时：各切片并发识别后合并（用 DedupEngine 去重），补漏且不增加等待
+            suspend fun visionCall(): String? = runCatching {
+                aiService.chatWithImage(
+                    baseUrl = if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
+                    apiKey = if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
+                    model = if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
+                    prompt = prompt,
+                    imageBase64List = base64List,
+                ).content
+            }.getOrNull()
+
+            // 切片并发识别：每片独立请求，结果合并（仅长图 >1 片时走并发）
+            var items = if (base64List.size > 1) {
+                kotlinx.coroutines.coroutineScope {
+                    val results = base64List.map { slice ->
+                        async {
+                            runCatching {
+                                aiService.chatWithImage(
+                                    baseUrl = if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
+                                    apiKey = if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
+                                    model = if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
+                                    prompt = prompt,
+                                    imageBase64List = listOf(slice),
+                                ).content
+                            }.getOrNull()
+                        }
+                    }
+                    mergeExtracted(results.awaitAll().flatMap { parseExtracted(it ?: "") })
+                }
+            } else {
+                parseExtracted(visionCall() ?: "")
+            }
+
+            if (items.isEmpty() && useMain && settingsRepository.visionApiKey().isNotBlank()) {
+                // 主模型为空/不支持 → 回退独立识图配置
+                AppLog.d("AI识图: 主模型识别为空，回退独立识图配置")
+                _state.value = _state.value.copy(phase = "主模型识别失败，改用识图模型…")
+                items = parseExtracted(runCatching {
+                    aiService.chatWithImage(
+                        baseUrl = settingsRepository.visionBaseUrl(),
+                        apiKey = settingsRepository.visionApiKey(),
+                        model = settingsRepository.visionModel(),
+                        prompt = prompt,
+                        imageBase64List = base64List,
+                    ).content
+                }.getOrNull() ?: "")
+            }
+            if (items.isEmpty()) {
+                // 仍为空 → 同配置重试一轮（模型偶发抽风）
+                _state.value = _state.value.copy(phase = "第一次识别为空，正在重试…")
+                items = parseExtracted(visionCall() ?: "")
+            }
+            val mergedItems = mergeExtracted(items)
+
+            // 识别完成 → 批内去重（切片重叠会把同一笔识别两次）+ 与账本比对 → 挂起待用户勾选确认
+            if (mergedItems.isEmpty()) {
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT,
+                    "没从截图里识别出账单记录。如果截图里有明细，麻烦拍清楚一点再试。"
+                )
+                _state.value = _state.value.copy(typing = false, phase = null)
+                return@launch
+            }
+            val today = java.time.LocalDate.now().toString()
+            val seenBatch = mutableListOf<ExtractedTx>()
+            val existingTxs = accountRepository.getAll()
+
+            val uiItems = mutableListOf<ScreenshotItemUi>()
+            for (item in items) {
+                val amountFen = Math.round(item.amount * 100)
+                if (amountFen <= 0) continue
+                val date = item.date ?: today
+                // 批内去重：同一笔只保留第一次识别（DedupEngine 智能匹配）
+                if (seenBatch.any { o ->
+                        com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
+                            o.date ?: "", Math.round(o.amount * 100), o.merchant, o.time ?: "",
+                            date, amountFen, item.merchant, item.time ?: ""
+                        )
+                    }) continue
+                seenBatch.add(item)
+                val duplicate = existingTxs.any { t ->
+                    com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
+                        t.date, t.amount, t.merchant, t.time,
+                        date, amountFen, item.merchant, item.time ?: ""
+                    )
+                }
+                uiItems.add(
+                    ScreenshotItemUi(
+                        date = item.date, merchant = item.merchant, product = item.product,
+                        amount = item.amount, type = item.type, time = item.time,
+                        duplicate = duplicate, selected = !duplicate,
+                    )
+                )
+            }
+            if (uiItems.isEmpty()) {
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT,
+                    "没从截图里识别出有效的账单记录（或全部与已有账单重复）。"
+                )
+                _state.value = _state.value.copy(typing = false, phase = null)
+                return@launch
+            }
+
+            // 挂起待确认：用户在弹层里勾选，点「确认入账」才写库
+            _state.value = _state.value.copy(
+                typing = false, phase = null,
+                screenshotPending = ScreenshotPendingUi(conversationId = convId, items = uiItems)
+            )
+        }
+    }
+
+    /** 勾选/取消预览里的某一笔（重复笔不可选） */
+    fun toggleScreenshotItem(index: Int) {
+        val pending = _state.value.screenshotPending ?: return
+        val items = pending.items.toMutableList()
+        val target = items.getOrNull(index) ?: return
+        if (target.duplicate) return
+        items[index] = target.copy(selected = !target.selected)
+        _state.value = _state.value.copy(screenshotPending = pending.copy(items = items))
+    }
+
+    /** 全选/全不选（重复笔始终不选） */
+    fun toggleAllScreenshot(select: Boolean) {
+        val pending = _state.value.screenshotPending ?: return
+        _state.value = _state.value.copy(
+            screenshotPending = pending.copy(
+                items = pending.items.map {
+                    if (it.duplicate) it.copy(selected = false) else it.copy(selected = select)
+                }
+            )
+        )
+    }
+
+    /** 放弃本次识别（不入账） */
+    fun dismissScreenshot() {
+        val pending = _state.value.screenshotPending
+        _state.value = _state.value.copy(screenshotPending = null)
+        pending?.let {
+            viewModelScope.launch {
+                conversationManager.addMessage(
+                    it.conversationId, AiMessage.ROLE_ASSISTANT, "已放弃本次截图识别，未入账。"
+                )
+            }
+        }
+    }
+
+    /** 确认入账：把勾选的笔写入账本（写库前再做一次新鲜去重） */
+    fun commitScreenshot() {
+        val pending = _state.value.screenshotPending ?: return
+        val convId = pending.conversationId
+        viewModelScope.launch {
+            val validNames = categoryRepository.getAll().map { it.name }.toSet()
+            var existingTxs = accountRepository.getAll()
+            var recorded = 0
+            var skipped = 0
+            val lines = mutableListOf<String>()
+            val today = java.time.LocalDate.now().toString()
+            for (item in pending.items.filter { it.selected && !it.duplicate }) {
+                val amountFen = Math.round(item.amount * 100)
+                if (amountFen <= 0) continue
+                val date = item.date ?: today
+                val dup = existingTxs.any { t ->
+                    com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
+                        t.date, t.amount, t.merchant, t.time,
+                        date, amountFen, item.merchant, item.time ?: ""
+                    )
+                }
+                if (dup) { skipped++; continue }
+                val category = classificationService.classifyForImport(
+                    item.merchant, item.product ?: "", "", validNames, item.type
+                )
+                val id = accountRepository.insert(
+                    com.simpleaccount.app.data.entity.Transaction(
+                        amount = amountFen,
+                        type = item.type,
+                        category = category,
+                        date = date,
+                        time = item.time ?: "",
+                        merchant = item.merchant,
+                        product = item.product ?: "",
+                        source = com.simpleaccount.app.data.entity.Transaction.SOURCE_MANUAL,
+                    )
+                )
+                existingTxs = existingTxs + com.simpleaccount.app.data.entity.Transaction(
+                    amount = amountFen, type = item.type, category = category, date = date,
+                    time = item.time ?: "", merchant = item.merchant, product = item.product ?: "",
+                    source = com.simpleaccount.app.data.entity.Transaction.SOURCE_MANUAL, id = id
+                )
+                recorded++
+                val dir = if (item.type == com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME) "收入" else "支出"
+                lines.add("- ✅ (流水号:$id) $dir ${"%.2f".format(item.amount)}元 · ${item.merchant.ifBlank { "未记商家" }} · $category · $date ${item.time ?: ""}")
+            }
+            _state.value = _state.value.copy(screenshotPending = null)
+            refreshPendingCount()
+            conversationManager.addMessage(
+                convId, AiMessage.ROLE_ASSISTANT,
+                "### 截图记账完成\n已记 **$recorded** 笔" +
+                    (if (skipped > 0) "，入库时又发现 $skipped 笔重复已跳过" else "") + "：\n" +
+                    lines.ifEmpty { listOf("（没有勾选任何笔）") }.joinToString("\n")
+            )
+        }
+    }
+
+    /** 双轮识别结果合并去重（用 DedupEngine） */
+    private fun mergeExtracted(list: List<ExtractedTx>): List<ExtractedTx> {
+        val out = mutableListOf<ExtractedTx>()
+        for (e in list) {
+            val dup = out.any { o ->
+                com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
+                    o.date ?: "", Math.round(o.amount * 100), o.merchant, o.time ?: "",
+                    e.date ?: "", Math.round(e.amount * 100), e.merchant, e.time ?: ""
+                )
+            }
+            if (!dup) out.add(e)
         }
         return out
     }
 
-    /** 批量归类 pending 商家（每批 ≤20） */
+    /** 相对日期解析：昨天/前天/今天/几月几号/MM-dd/斜杠日期 → yyyy-MM-dd；解析失败返回 null */
+    private fun resolveRelativeDate(raw: String?): String? {
+        val s = raw?.trim() ?: return null
+        val today = java.time.LocalDate.now()
+        // 完整日期：2026-08-30 / 2026/8/30 / 2026年8月30日
+        Regex("(\\d{4})[-/年](\\d{1,2})[-/月](\\d{1,2})").find(s)?.let {
+            val y = it.groupValues[1].toInt()
+            val m = it.groupValues[2].toInt()
+            val d = it.groupValues[3].toInt()
+            if (m in 1..12 && d in 1..31) {
+                return try { "%04d-%02d-%02d".format(y, m, d) } catch (_: Exception) { null }
+            }
+        }
+        return when {
+            s.contains("前天") -> today.minusDays(2).toString()
+            s.contains("昨天") -> today.minusDays(1).toString()
+            s.contains("今天") || s.contains("今日") -> today.toString()
+            // "8月30日"/"08-30"/"8/30" → 今年
+            else -> parseMonthDay(s, today)
+        }
+    }
+
+    /** 裸日期 "8月30日"/"08-30"/"8/30" → yyyy-MM-dd；解析失败返回 null */
+    private fun parseMonthDay(s: String, today: java.time.LocalDate): String? {
+        val m = Regex("(\\d{1,2})[月/-](\\d{1,2})日?").find(s) ?: return null
+        val month = m.groupValues[1].toInt()
+        val day = m.groupValues[2].toInt()
+        if (month !in 1..12 || day !in 1..31) return null
+        return try {
+            java.time.LocalDate.of(today.year, month, day).toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** 从视觉模型输出里抠 JSON 数组（容忍 ```json 围栏和前后杂文字） */
+    private fun parseExtracted(text: String): List<ExtractedTx> {
+        val cleaned = text.replace("```json", "").replace("```", "").trim()
+        val start = cleaned.indexOf('[')
+        val end = cleaned.lastIndexOf(']')
+        if (start < 0 || end <= start) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(cleaned.substring(start, end + 1))
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val amount = o.optDouble("amount", Double.NaN)
+                if (amount.isNaN() || amount <= 0) return@mapNotNull null
+                // 相对日期（昨天/前天）解析成绝对日期
+                val dateRaw = o.optString("date", "").trim()
+                val date = when {
+                    dateRaw.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) -> dateRaw
+                    else -> resolveRelativeDate(dateRaw)
+                }
+                ExtractedTx(
+                    date = date,
+                    merchant = o.optString("merchant", "").trim(),
+                    product = o.optString("product", "").trim().ifBlank { null },
+                    amount = amount,
+                    type = if (o.optString("type") == "income")
+                        com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
+                    else com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE,
+                    time = o.optString("time").takeIf { it.matches(Regex("\\d{1,2}:\\d{2}")) }
+                        ?.let { tm ->
+                            val p = tm.split(":")
+                            "%02d:%02d".format(p[0].toInt().coerceIn(0, 23), p[1].toInt().coerceIn(0, 59))
+                        },
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private data class ExtractedTx(
+        val date: String?,
+        val merchant: String,
+        val product: String?,
+        val amount: Double,
+        val type: String,
+        val time: String? = null,
+    )
+
+    /**
+     * 图片压缩 + 长图切片（保文字可读是第一优先级）：
+     * 1. 宽度保持 ≤1080（手机截图原生宽度，金额小字清晰）；
+     * 2. 高度 ≤2400 整图发送；更长的图用 BitmapRegionDecoder 按 2000px 段解码（带 200px 重叠），
+     *    不整图加载 —— 超长图（几万像素高）整图解码既爆内存又会被服务端压缩到看不清；
+     * 3. 同一条记录可能出现在相邻两段里 —— 由调用方做"批内去重"。
+     */
+    private fun compressImageSlices(context: android.content.Context, uri: android.net.Uri): List<String> {
+        val decoder = runCatching {
+            @Suppress("DEPRECATION")
+            android.graphics.BitmapRegionDecoder.newInstance(
+                context.contentResolver.openInputStream(uri)!!, false
+            )
+        }.getOrNull() ?: return emptyList()
+        return runCatching {
+            val fullW = decoder.width
+            val fullH = decoder.height
+            if (fullW <= 0 || fullH <= 0) return emptyList()
+
+            // 宽度采样：>1080 时按比例减半采样（区域解码支持 inSampleSize）
+            var sample = 1
+            while (fullW / (sample * 2) >= 1080) sample *= 2
+
+            val slices = mutableListOf<String>()
+            fun encode(bmp: android.graphics.Bitmap): String {
+                val out = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, out)
+                return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+            }
+
+            if (fullH <= 2400) {
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = decoder.decodeRegion(android.graphics.Rect(0, 0, fullW, fullH), opts)
+                if (bmp != null) slices.add(encode(bmp))
+            } else {
+                val sliceHeight = 2000
+                val overlap = 200
+                var y = 0
+                while (y < fullH) {
+                    val h = minOf(sliceHeight, fullH - y)
+                    if (h < 150) break
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    val piece = decoder.decodeRegion(android.graphics.Rect(0, y, fullW, y + h), opts)
+                    if (piece != null) {
+                        slices.add(encode(piece))
+                        piece.recycle()
+                    }
+                    if (y + h >= fullH) break
+                    y += sliceHeight - overlap
+                }
+            }
+            slices
+        }.also { runCatching { @Suppress("DEPRECATION") decoder.recycle() } }
+            .getOrDefault(emptyList())
+    }
+
+    // ---------------- 批量归类 ----------------
+
+    /** 批量归类 pending 商家（每批 ≤20），结果写为当前会话的一条 assistant 消息 */
     fun classifyPendingMerchants() {
         val enabled = _state.value.enabled
         if (!enabled) {
             _state.value = _state.value.copy(error = "AI 未开启，无法批量归类")
             return
         }
+        if (_state.value.typing) return
         viewModelScope.launch {
             val apiKey = settingsRepository.apiKey()
             if (apiKey.isBlank()) {
                 _state.value = _state.value.copy(error = "未配置 API Key")
                 return@launch
             }
-            _state.value = _state.value.copy(typing = true, error = null)
+            val convId = _state.value.currentConversationId.ifEmpty {
+                conversationManager.ensureCurrentConversation().id
+            }
+            _state.value = _state.value.copy(typing = true, phase = "正在归类商家…", error = null)
             val pendings = merchantRepository.getByStatus(Merchant.STATUS_PENDING)
             if (pendings.isEmpty()) {
-                _state.value = _state.value.copy(typing = false, error = "当前没有待归类的商家")
+                conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, "当前没有待归类的商家。")
+                _state.value = _state.value.copy(typing = false, phase = null)
                 return@launch
             }
             AppLog.d("AI归类: 开始批量归类 pending=${pendings.size}")
-            val validCategories = categoryRepository.getAll()
-                .map { it.name }
-                .filter { it != "其它" }
+            val validCategories = categoryRepository.getAll().map { it.name }.filter { it != "其它" }
             var done = 0
-            pendings.chunked(20).forEach { batch ->
+            // 批量 40 个/次：83 个待归类从 5 次 API 调用降到 3 次，明显提速
+            pendings.chunked(40).forEach { batch ->
                 val prompt = buildClassifyPrompt(batch, validCategories)
                 val result = aiService.chat(
                     baseUrl = settingsRepository.baseUrl(),
@@ -241,22 +776,27 @@ class AiViewModel @Inject constructor(
                     messages = listOf("user" to prompt)
                 )
                 if (result.error != null) {
-                    _state.value = _state.value.copy(error = "归类失败：${result.error}")
+                    conversationManager.addMessage(
+                        convId, AiMessage.ROLE_ASSISTANT, "归类失败：${result.error}",
+                        status = AiMessage.STATUS_ERROR
+                    )
+                    _state.value = _state.value.copy(typing = false, phase = null, error = result.error)
                     return@launch
                 }
                 val parsed = parseClassifyResult(result.content, validCategories)
                 done += applyClassification(parsed, batch)
             }
-            // 更新 pending 数
+            refreshPendingCount()
             val pendingLeft = merchantRepository.getByStatus(Merchant.STATUS_PENDING).size
-            _state.value = _state.value.copy(typing = false, pendingCount = pendingLeft, error = "已归类 $done 个商家（剩余 $pendingLeft 待归类）")
+            conversationManager.addMessage(
+                convId, AiMessage.ROLE_ASSISTANT,
+                "✅ 已归类 $done 个商家（剩余 $pendingLeft 待归类）。"
+            )
+            _state.value = _state.value.copy(typing = false, phase = null)
         }
     }
 
-    /**
-     * AI 输出格式要求：JSON {"merchant":"商家名1":"分类","商家名2":"分类"...}
-     * 实际更宽容解析：多行 "商家名=分类" 或 JSON。
-     */
+    /** AI 输出宽容解析：JSON 或多行 "商家=分类" */
     private suspend fun parseClassifyResult(text: String, validCategories: List<String>): Map<String, String> {
         val map = mutableMapOf<String, String>()
         val json = runCatching { JSONObject(text) }.getOrNull()
@@ -281,9 +821,7 @@ class AiViewModel @Inject constructor(
     }
 
     private suspend fun applyClassification(map: Map<String, String>, batch: List<Merchant>): Int {
-        // 建立 规范化名 -> 真实商家 的索引（来自本批真实 pending 商家，保证只改本批）
         val normalizedToMerchant = batch.associateBy { normalizeMerchant(it.merchant) }
-
         var count = 0
         for ((aiName, category) in map) {
             val existing = normalizedToMerchant[normalizeMerchant(aiName)]
@@ -293,8 +831,16 @@ class AiViewModel @Inject constructor(
             merchantRepository.update(
                 existing.copy(category = category, status = Merchant.STATUS_CLASSIFIED, updatedAt = System.currentTimeMillis())
             )
-            // 历史追改：只改 source='import'
             val normalizedExisting = normalizeMerchant(existing.merchant)
+            // 别名同名的其他商家行一并归一
+            merchantRepository.getAll()
+                .filter { normalizeMerchant(it.merchant) == normalizedExisting && it.id != existing.id }
+                .forEach { m ->
+                    merchantRepository.update(
+                        m.copy(category = category, status = Merchant.STATUS_CLASSIFIED, updatedAt = System.currentTimeMillis())
+                    )
+                }
+            // 历史追改：账本里该商家的导入交易同步改分类
             accountRepository.getAllImport()
                 .filter { normalizeMerchant(it.merchant) == normalizedExisting }
                 .forEach { t ->
@@ -307,7 +853,6 @@ class AiViewModel @Inject constructor(
         return count
     }
 
-    /** 规范化商家名：去首尾空白 + 去除括号及内容、空白，用于 AI 返回名与真实名的健壮匹配 */
     private fun normalizeMerchant(name: String?): String {
         if (name.isNullOrBlank()) return ""
         return name.trim()

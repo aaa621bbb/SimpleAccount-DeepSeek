@@ -1,6 +1,7 @@
 package com.simpleaccount.app.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -11,8 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,9 +19,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -30,9 +33,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.ui.stats.PieSlice
 import com.simpleaccount.app.ui.stats.TrendPoint
+import kotlin.math.abs
 
 /**
- * 环形饼图（Canvas 自绘）。中心显示总计（保留两位小数）。
+ * 环形饼图（Canvas 自绘，分段留白 + 柔和投影 + 内圈高光的现代样式）。
+ * 中心显示总计（保留两位小数）。
  */
 @Composable
 fun PieChartView(
@@ -42,15 +47,15 @@ fun PieChartView(
 ) {
     val total = slices.sumOf { it.value }
     // 在 @Composable 上下文先取色（不能在 DrawScope 内调用 MaterialTheme）
-    val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp),
+            .height(180.dp),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(120.dp)) {
-            val strokeWidth = 26.dp.toPx()
+        Canvas(Modifier.size(152.dp)) {
+            val strokeWidth = 24.dp.toPx()
             val diameter = size.minDimension - strokeWidth
             val topLeft = Offset(
                 (size.width - diameter) / 2f,
@@ -58,25 +63,56 @@ fun PieChartView(
             )
             val arcSize = Size(diameter, diameter)
 
-            if (total <= 0) {
-                drawArc(
-                    color = surfaceVariant,
-                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
-                    topLeft = topLeft, size = arcSize,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                )
-            } else {
-                var startAngle = -90f
+            // 柔和投影（整环向下偏移的浅黑弧）
+            drawArc(
+                color = Color.Black.copy(alpha = 0.05f),
+                startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                topLeft = topLeft + Offset(0f, 2.dp.toPx()),
+                size = arcSize,
+                style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+            )
+            // 底层浅色轨道
+            drawArc(
+                color = trackColor,
+                startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                topLeft = topLeft, size = arcSize,
+                style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+            )
+
+            if (total > 0) {
+                // 每段之间留 3° 空隙，观感更现代
+                val gapAngle = if (slices.size > 1) 3f else 0f
+                var startAngle = -90f + gapAngle / 2f
                 slices.forEach { slice ->
+                    val base = parseColor(slice.colorHex)
                     val sweep = slice.value.toFloat() / total * 360f
+                    val sweepDraw = (sweep - gapAngle).coerceAtLeast(1f)
+                    // 分段本体：纵向明暗渐变（上亮下深），比纯色更有质感
                     drawArc(
-                        color = parseColor(slice.colorHex),
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                base.copy(alpha = 0.92f),
+                                base
+                            ),
+                            startY = topLeft.y,
+                            endY = topLeft.y + diameter
+                        ),
                         startAngle = startAngle,
-                        sweepAngle = sweep,
+                        sweepAngle = sweepDraw,
                         useCenter = false,
                         topLeft = topLeft,
                         size = arcSize,
                         style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                    )
+                    // 内圈高光细线（玻璃质感）
+                    drawArc(
+                        color = Color.White.copy(alpha = 0.22f),
+                        startAngle = startAngle,
+                        sweepAngle = sweepDraw,
+                        useCenter = false,
+                        topLeft = topLeft + Offset(strokeWidth / 4f, strokeWidth / 4f),
+                        size = Size(diameter - strokeWidth / 2f, diameter - strokeWidth / 2f),
+                        style = Stroke(width = strokeWidth / 5f, cap = StrokeCap.Butt)
                     )
                     startAngle += sweep
                 }
@@ -85,7 +121,7 @@ fun PieChartView(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 centerValue,
-                fontSize = 22.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -95,24 +131,27 @@ fun PieChartView(
 }
 
 /**
- * 折线趋势图（Canvas 自绘）。X 轴按"月"，绘制 支出(红)/收入(绿) 两条线。
- * 带 Y 轴刻度金额 + X 轴月份标注，网格、数据点，美观易读。
+ * 趋势图：Catmull-Rom 平滑曲线 + 渐变填充 + 虚线网格 + 白芯数据点。
+ * X 轴标签与数据点严格对齐（修复旧版标签在格子中心、点在格子边缘的错位问题）。
+ * 点击数据点附近 → onPointClick(该点的月份)。
  */
 @Composable
 fun LineTrendView(
     trend: List<TrendPoint>,
     expenseColor: Color = Color(0xFFFF6B6B),
     incomeColor: Color = Color(0xFF2ECC71),
+    onPointClick: (String) -> Unit = {},
 ) {
-    val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+    val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val padLeft = 38.dp
-    val padRight = 12.dp
-    val padTop = 10.dp
-    val padBottom = 22.dp
+    val cardSurface = MaterialTheme.colorScheme.surface
+    val padLeft = 40.dp
+    val padRight = 14.dp
+    val padTop = 12.dp
+    val padBottom = 24.dp
     val gridRows = 4
 
-    BoxWithConstraints(Modifier.fillMaxWidth().height(170.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(200.dp)) {
         val density = LocalDensity.current
         val pl = with(density) { padLeft.toPx() }
         val pr = with(density) { padRight.toPx() }
@@ -122,24 +161,85 @@ fun LineTrendView(
         val plotH = constraints.maxHeight - pt - pb
         val maxValue = trend.maxOfOrNull { maxOf(it.expense, it.income) }?.coerceAtLeast(1L) ?: 1L
 
-        // 画布：网格 + 折线 + 数据点
-        Canvas(Modifier.fillMaxSize()) {
-            fun xFor(i: Int): Float = pl + plotW * i / (trend.size - 1).coerceAtLeast(1)
-            fun yFor(v: Long): Float = pt + plotH * (1f - v.toFloat() / maxValue)
+        fun xFor(i: Int): Float = pl + plotW * i / (trend.size - 1).coerceAtLeast(1)
+        fun yFor(v: Long): Float = pt + plotH * (1f - v.toFloat() / maxValue)
+
+        Canvas(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(trend) {
+                    detectTapGestures { tap ->
+                        // 找最近的数据点（x 距离在半格内即命中）
+                        var best = -1
+                        var bestDist = Float.MAX_VALUE
+                        for (i in trend.indices) {
+                            val d = abs(xFor(i) - tap.x)
+                            if (d < bestDist) { bestDist = d; best = i }
+                        }
+                        if (best >= 0 && bestDist <= plotW / (trend.size * 2f)) {
+                            onPointClick(trend[best].month)
+                        }
+                    }
+                }
+        ) {
+            // 虚线网格
+            val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 8f))
             for (gi in 0..gridRows) {
                 val gy = pt + plotH * gi / gridRows
-                drawLine(if (gi == 0) gridColor.copy(alpha = 0.4f) else gridColor,
-                    Offset(pl, gy), Offset(pl + plotW, gy), strokeWidth = if (gi == 0) 1.2f else 1f)
+                drawLine(
+                    gridColor,
+                    Offset(pl, gy), Offset(pl + plotW, gy),
+                    strokeWidth = 1.2f, pathEffect = dash
+                )
             }
+
             if (trend.size >= 2) {
-                fun drawSeries(sel: (TrendPoint) -> Long, color: Color) {
-                    val pts = trend.mapIndexed { i, p -> Offset(xFor(i), yFor(sel(p))) }
-                    for (i in 0 until pts.size - 1)
-                        drawLine(color, pts[i], pts[i + 1], strokeWidth = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                    pts.forEach { drawCircle(color, 3.dp.toPx(), it) }
+                // Catmull-Rom 样条 → Bezier：曲线自然圆滑，过每个数据点
+                fun smoothPath(pts: List<Offset>): Path {
+                    val path = Path()
+                    path.moveTo(pts.first().x, pts.first().y)
+                    for (i in 0 until pts.size - 1) {
+                        val p0 = pts.getOrElse(i - 1) { pts[i] }
+                        val p1 = pts[i]
+                        val p2 = pts[i + 1]
+                        val p3 = pts.getOrElse(i + 2) { pts[i + 1] }
+                        val c1x = p1.x + (p2.x - p0.x) / 6f
+                        val c1y = p1.y + (p2.y - p0.y) / 6f
+                        val c2x = p2.x - (p3.x - p1.x) / 6f
+                        val c2y = p2.y - (p3.y - p1.y) / 6f
+                        path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y)
+                    }
+                    return path
                 }
-                drawSeries({ it.expense }, expenseColor)
-                drawSeries({ it.income }, incomeColor)
+
+                fun drawSeries(sel: (TrendPoint) -> Long, color: Color, fill: Boolean) {
+                    val pts = trend.mapIndexed { i, p -> Offset(xFor(i), yFor(sel(p))) }
+                    val path = smoothPath(pts)
+                    if (fill) {
+                        val fillPath = Path().apply {
+                            addPath(path)
+                            lineTo(pts.last().x, pt + plotH)
+                            lineTo(pts.first().x, pt + plotH)
+                            close()
+                        }
+                        drawPath(
+                            fillPath,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(color.copy(alpha = 0.22f), color.copy(alpha = 0.02f)),
+                                startY = pt,
+                                endY = pt + plotH
+                            )
+                        )
+                    }
+                    drawPath(path, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round))
+                    // 白芯数据点
+                    pts.forEach {
+                        drawCircle(cardSurface, 4.dp.toPx() + 1.5f, it)
+                        drawCircle(color, 3.6.dp.toPx(), it)
+                    }
+                }
+                drawSeries({ it.income }, incomeColor, fill = false)
+                drawSeries({ it.expense }, expenseColor, fill = true)
             }
         }
 
@@ -158,23 +258,102 @@ fun LineTrendView(
             }
         }
 
-        // X 轴月份标注（底部，从 padLeft 起，等宽分布）
+        // X 轴月份标签：与数据点 x 坐标严格对齐（首尾点向内收缩半个标签宽防溢出）
         if (trend.isNotEmpty()) {
-            val cellW = plotW / trend.size
-            Row(Modifier.align(Alignment.BottomStart).offset(x = padLeft).width(plotW.dp)) {
-                trend.forEach { p ->
-                    Text(
-                        p.month.substring(5),  // "MM"
-                        fontSize = 9.sp,
-                        color = labelColor,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .width(cellW.dp)
-                            .wrapContentWidth(Alignment.CenterHorizontally)
+            val labelW = with(density) { 26.dp.toPx() }
+            trend.forEachIndexed { i, p ->
+                val cx = (xFor(i) - labelW / 2f)
+                    .coerceIn(pl - labelW / 2f, pl + plotW - labelW / 2f)
+                Text(
+                    p.month.substring(5),
+                    fontSize = 9.sp,
+                    color = labelColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .offset(x = with(density) { cx.toDp() }, y = 176.dp)
+                        .width(with(density) { labelW.toDp() })
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 月度收支柱状图（近 N 个月）：每月两根圆角柱（支出红/收入绿），点击某月柱区回调该月。
+ */
+@Composable
+fun BarChartView(
+    trend: List<TrendPoint>,
+    expenseColor: Color = Color(0xFFFF6B6B),
+    incomeColor: Color = Color(0xFF2ECC71),
+    onBarClick: (String) -> Unit = {},
+) {
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val padBottom = 20.dp
+    val padTop = 6.dp
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(180.dp)
+            .pointerInput(trend) {
+                detectTapGestures { tap ->
+                    if (trend.isEmpty()) return@detectTapGestures
+                    val cellW = size.width / trend.size
+                    val idx = (tap.x / cellW).toInt().coerceIn(0, trend.size - 1)
+                    onBarClick(trend[idx].month)
+                }
+            }
+    ) {
+        val density = LocalDensity.current
+        val pb = with(density) { padBottom.toPx() }
+        val pt = with(density) { padTop.toPx() }
+        val plotH = constraints.maxHeight - pt - pb
+        val cellW = constraints.maxWidth.toFloat() / trend.size.coerceAtLeast(1)
+        val barW = cellW * 0.26f
+        val maxValue = trend.maxOfOrNull { maxOf(it.expense, it.income) }?.coerceAtLeast(1L) ?: 1L
+
+        Canvas(Modifier.fillMaxSize()) {
+            if (trend.isEmpty()) return@Canvas
+            trend.forEachIndexed { i, p ->
+                val cx = cellW * (i + 0.5f)
+                val gap = barW * 0.24f
+                // 支出柱（左）
+                val expH = plotH * p.expense.toFloat() / maxValue
+                if (p.expense > 0) {
+                    drawRoundRect(
+                        color = expenseColor,
+                        topLeft = Offset(cx - barW - gap / 2f, pt + plotH - expH),
+                        size = Size(barW, expH),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barW / 2f, barW / 2f)
+                    )
+                }
+                // 收入柱（右）
+                val incH = plotH * p.income.toFloat() / maxValue
+                if (p.income > 0) {
+                    drawRoundRect(
+                        color = incomeColor.copy(alpha = 0.75f),
+                        topLeft = Offset(cx + gap / 2f, pt + plotH - incH),
+                        size = Size(barW, incH),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barW / 2f, barW / 2f)
                     )
                 }
             }
+        }
+
+        // X 轴月份标签（每格中心，贴底）
+        trend.forEachIndexed { i, p ->
+            Text(
+                p.month.substring(5),
+                fontSize = 9.sp,
+                color = labelColor,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier
+                    .offset(x = with(density) { (cellW * i).toDp() }, y = 158.dp)
+                    .width(with(density) { cellW.toDp() })
+            )
         }
     }
 }
@@ -186,18 +365,5 @@ private fun formatAxisValue(fen: Long): String {
         yuan >= 10000 -> "${(yuan / 10000).let { if (it == it.toLong().toDouble()) it.toLong().toString() else "%.1f".format(it) }}万"
         yuan >= 1000 -> "%.0f".format(yuan)
         else -> if (yuan == 0.0) "0" else "%.0f".format(yuan)
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBackgroundGrid(size: Size, gridColor: Color) {
-    val padLeft = 34.dp.toPx()
-    val padRight = 10.dp.toPx()
-    val padTop = 16.dp.toPx()
-    val padBottom = 28.dp.toPx()
-    val plotW = size.width - padLeft - padRight
-    val plotH = size.height - padTop - padBottom
-    for (gi in 0..4) {
-        val gy = padTop + plotH * gi / 4f
-        drawLine(gridColor, Offset(padLeft, gy), Offset(padLeft + plotW, gy), strokeWidth = 1f)
     }
 }

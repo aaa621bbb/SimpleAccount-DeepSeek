@@ -1,7 +1,7 @@
 package com.simpleaccount.app.ui.home
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,25 +13,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,6 +55,7 @@ fun HomeScreen(
     navController: NavHostController,
 ) {
     val state by viewModel.uiState.collectAsState()
+    var showBudgetDialog by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -65,20 +73,34 @@ fun HomeScreen(
                 )
             )
 
+            // 本月支出卡：固定在顶部，不随列表滚动消失
+            SummaryCards(state, onSetBudget = { showBudgetDialog = true })
+
+            // 最近记录标题 + 排序切换
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 0.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "最近记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { viewModel.toggleSort() }) {
+                    Text(
+                        if (state.sortByAmount) "按金额" else "按时间",
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)
             ) {
-                // 三张横向卡片
-                item { SummaryCards(state) }
-                item {
-                    Text(
-                        "最近记录",
-                        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
                 if (state.recent.isEmpty()) {
                     item {
                         Text(
@@ -89,61 +111,232 @@ fun HomeScreen(
                         )
                     }
                 } else {
-                    items(state.recent) { row ->
-                        TransactionRow(
-                            transaction = row.transaction,
-                            category = row.category,
-                            onClick = {
-                                navController.navigate(Routes.edit(row.transaction.id))
+                    item {
+                        com.simpleaccount.app.ui.components.SoftCard(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            state.recent.forEachIndexed { idx, row ->
+                                Box { TransactionRow(row.transaction, row.category, onClick = { navController.navigate(Routes.edit(row.transaction.id)) }) }
+                                if (idx != state.recent.lastIndex) {
+                                    androidx.compose.material3.HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                                        modifier = Modifier.padding(start = 68.dp)
+                                    )
+                                }
                             }
-                        )
+                        }
                     }
                 }
             }
         }
 
-        // FAB 记一笔
+        // FAB 记一笔（渐变主色）
         FloatingActionButton(
             onClick = { navController.navigate(Routes.ADD) },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 16.dp)
+                .padding(end = 16.dp, bottom = 16.dp),
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = Color.White,
+            shape = RoundedCornerShape(18.dp),
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp)
         ) {
             Icon(Icons.Filled.Add, contentDescription = "记一笔")
         }
     }
-}
 
-@Composable
-private fun SummaryCards(state: HomeUiState) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        SummaryCard("支出", "¥" + MoneyUtil.fenToYuan(state.expense), Color(0xFFFF6B6B))
-        SummaryCard("收入", "¥" + MoneyUtil.fenToYuan(state.income), Color(0xFF2ECC71))
-        SummaryCard("结余", "¥" + MoneyUtil.fenToYuan(state.balance), Color(0xFF2D8CF0))
+    // 每月预算设置对话框（点主卡上的"本月预算"格）
+    if (showBudgetDialog) {
+        var budgetText by remember(showBudgetDialog) {
+            mutableStateOf(
+                if (state.budgetFen > 0) com.simpleaccount.app.util.MoneyUtil.fenToYuan(state.budgetFen) else ""
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { showBudgetDialog = false },
+            title = { Text("每月预算") },
+            text = {
+                Column {
+                    Text(
+                        "设置每月消费预算，超支时首页会提醒。留空并保存可清除预算。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = budgetText,
+                        onValueChange = { budgetText = it },
+                        placeholder = { Text("例如 1500") },
+                        suffix = { Text("元") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cleaned = budgetText.trim().replace("¥", "").replace(",", "")
+                    val yuan = cleaned.toDoubleOrNull()
+                    viewModel.setMonthlyBudget(if (yuan == null || yuan <= 0) 0L else Math.round(yuan * 100))
+                    showBudgetDialog = false
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBudgetDialog = false }) { Text("取消") }
+            }
+        )
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.SummaryCard(label: String, value: String, color: Color) {
-    Card(
-        modifier = Modifier.weight(1f),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                value,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
+        // 主卡：本月支出（渐变底，与新图标蓝紫主色呼应）；点击结余格设置每月预算
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.secondary
+                        )
+                    )
+                )
+                .padding(horizontal = 20.dp, vertical = 18.dp)
+        ) {
+            Column {
+                Text(
+                    "本月支出 · ${java.time.YearMonth.now().monthValue}月",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = 0.85f)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "¥" + MoneyUtil.fenToYuan(state.expense),
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    // 结余 = 预算 − 消费（未设预算时 = 收入 − 支出）
+                    val balanceText = if (state.budgetFen > 0)
+                        "¥" + MoneyUtil.fenToYuan(state.budgetFen - state.expense)
+                    else "¥" + MoneyUtil.fenToYuan(state.balance)
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Column {
+                            Text(
+                                "结余",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.8f)
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                balanceText,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (state.budgetFen > 0 && state.expense > state.budgetFen) Color(0xFFFFB4AB)
+                                else Color.White,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    // 预算格：点击设置
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .clickable(onClick = onSetBudget)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Column {
+                            Text(
+                                "本月预算",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.8f)
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                if (state.budgetFen > 0) "¥" + MoneyUtil.fenToYuan(state.budgetFen) else "点按设置",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                // 预算进度条（已设预算时显示）
+                if (state.budgetFen > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    val usedPercent = (state.expense.toFloat() / state.budgetFen).coerceIn(0f, 1f)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(Color.White.copy(alpha = 0.25f))
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(usedPercent)
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(
+                                    if (state.expense > state.budgetFen) Color(0xFFFFB4AB) else Color.White
+                                )
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (state.expense > state.budgetFen) "已超预算 ¥" + MoneyUtil.fenToYuan(state.expense - state.budgetFen)
+                        else "已用 ¥" + MoneyUtil.fenToYuan(state.expense) + " / ¥" + MoneyUtil.fenToYuan(state.budgetFen),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun SummaryCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.14f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.8f)
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
     }
 }

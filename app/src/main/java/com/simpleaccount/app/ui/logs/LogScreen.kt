@@ -51,7 +51,7 @@ fun LogScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "日志文件 ${state.fileCount} 个 · ${state.totalSizeKb}KB",
+                    "日志文件 ${state.fileCount} 个 · ${state.totalSizeText}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -103,7 +103,7 @@ fun LogScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    file.name + " · " + (file.length() / 1024) + "KB",
+                                    file.name + " · " + com.simpleaccount.app.util.AppLog.formatSize(file.length()),
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.weight(1f)
                                 )

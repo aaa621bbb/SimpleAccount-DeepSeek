@@ -25,6 +25,8 @@ data class AddUiState(
     val amountText: String = "",
     val selectedCategory: Category? = null,
     val date: String = DateUtil.today(),
+    /** 时间 HH:mm（手动记默认当前时刻，可改） */
+    val time: String = "",
     val merchant: String = "",
     val product: String = "",
     val note: String = "",
@@ -74,6 +76,7 @@ class AddTransactionViewModel @Inject constructor(
                     amountText = MoneyUtil.fenToYuan(t.amount),
                     selectedCategory = cat,
                     date = t.date,
+                    time = t.time,
                     merchant = t.merchant,
                     product = t.product,
                     note = t.note,
@@ -107,6 +110,13 @@ class AddTransactionViewModel @Inject constructor(
     fun onDateSet(y: Int, m: Int, d: Int) {
         val date = "%04d-%02d-%02d".format(y, m, d)
         _state.value = _state.value.copy(date = date, error = null)
+    }
+
+    fun onTimeChange(v: String) {
+        // 只接受 HH:mm（可空）
+        if (v.isBlank() || v.matches(Regex("\\d{1,2}:\\d{2}"))) {
+            _state.value = _state.value.copy(time = v, error = null)
+        }
     }
 
     fun onMerchantChange(v: String) = _state.value.let { _state.value = it.copy(merchant = v) }
@@ -156,6 +166,7 @@ class AddTransactionViewModel @Inject constructor(
                         type = s.type,
                         category = cat.name,
                         date = s.date,
+                        time = s.time,
                         merchant = s.merchant.trim(),
                         product = s.product.trim(),
                         note = s.note.trim(),
@@ -170,6 +181,7 @@ class AddTransactionViewModel @Inject constructor(
                     type = s.type,
                     category = cat.name,
                     date = s.date,
+                    time = s.time,
                     merchant = s.merchant.trim(),
                     product = s.product.trim(),
                     note = s.note.trim(),

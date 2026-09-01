@@ -19,7 +19,7 @@ data class LogUiState(
     val lines: List<String> = emptyList(),
     val files: List<File> = emptyList(),
     val fileCount: Int = 0,
-    val totalSizeKb: Int = 0,
+    val totalSizeText: String = "0B",
     val selectedFile: File? = null,
     val fileContent: String = "",
     val error: String? = null,
@@ -40,8 +40,8 @@ class LogViewModel @Inject constructor() : ViewModel() {
         viewModelScope.launch {
             val files = AppLog.logFiles()
             val lines = AppLog.recentLogs()
-            val sizeKb = files.sumOf { it.length() / 1024 }.toInt()
-            _state.value = LogUiState(lines = lines, files = files, fileCount = files.size, totalSizeKb = sizeKb)
+            val totalSize = AppLog.formatSize(files.sumOf { it.length() })
+            _state.value = LogUiState(lines = lines, files = files, fileCount = files.size, totalSizeText = totalSize)
         }
     }
 

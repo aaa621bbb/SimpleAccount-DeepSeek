@@ -2,7 +2,9 @@ package com.simpleaccount.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simpleaccount.app.data.cleanup.DataRetentionManager
 import com.simpleaccount.app.data.dao.AiMessageDao
+import com.simpleaccount.app.data.dao.ConversationDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.MerchantDao
 import com.simpleaccount.app.data.dao.SettingDao
@@ -35,12 +37,28 @@ class DataManageViewModel @Inject constructor(
     private val merchantDao: MerchantDao,
     private val importLogDao: ImportLogDao,
     private val aiMessageDao: AiMessageDao,
+    private val conversationDao: ConversationDao,
     private val settingDao: SettingDao,
     private val settingsRepository: SettingsRepository,
+    private val retentionManager: DataRetentionManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DataManageUiState())
     val state = _state.asStateFlow()
+
+    /** 数据冲突优先级（导入为准 / 手动为准） */
+    val importPriorityFlow = settingsRepository.importPriorityFlow
+
+    /** 首页最近记录条数 */
+    val recentCountFlow = settingsRepository.recentCountFlow
+
+    fun setImportPriority(p: String) {
+        viewModelScope.launch { settingsRepository.setImportPriority(p) }
+    }
+
+    fun setRecentCount(n: Int) {
+        viewModelScope.launch { settingsRepository.setRecentCount(n) }
+    }
 
     /** 生成导出 JSON 字符串 */
     suspend fun buildExportJson(): String {
@@ -107,11 +125,18 @@ class DataManageViewModel @Inject constructor(
         merchantDao.deleteAll()
         importLogDao.deleteAll()
         aiMessageDao.deleteAll()
+        conversationDao.deleteAll()
         settingDao.deleteAll()
         categoryRepository.deleteAll()
         settingsRepository.clearAll()
         // 重建预置分类
         categoryRepository.addAll(CategoryPresets.presetCategories())
         return true
+    }
+
+    /** 一键清理存储：日志/失败记录/孤立商家/旧消息上限 + VACUUM（手动触发） */
+    suspend fun cleanupStorage(): String {
+        val report = retentionManager.runFullCleanup(force = true)
+        return report.summary()
     }
 }

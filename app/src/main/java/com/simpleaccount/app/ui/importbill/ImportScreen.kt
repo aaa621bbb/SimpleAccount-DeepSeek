@@ -119,10 +119,31 @@ fun ImportScreen(
                     Text(
                         "成功导入 ${state.inserted} 条", fontSize = 16.sp
                     )
-                    Text(
-                        "跳过 ${state.skipped} 条", fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (state.skipped > 0) {
+                        Text(
+                            "跳过 ${state.skipped} 条", fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        // 跳过原因构成（解释"为什么跳过"）
+                        if (state.skipReasons.isNotEmpty()) {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                state.skipReasons.entries
+                                    .sortedByDescending { it.value }
+                                    .forEach { (reason, count) ->
+                                        Text(
+                                            "· $reason：$count 条",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                            }
+                        }
+                    }
                     // R1：失败明细入口
                     if (state.failed > 0) {
                         Spacer(Modifier.height(12.dp))
