@@ -200,16 +200,17 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(26.dp))
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.secondary
+                            Color(0xFF1B3344),
+                            Color(0xFF2A4A5C),
+                            Color(0xFF1F3A4D)
                         )
                     )
                 )
-                .padding(horizontal = 20.dp, vertical = 18.dp)
+                .padding(horizontal = 20.dp, vertical = 20.dp)
         ) {
             Column {
                 Text(
@@ -223,6 +224,14 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
                     style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
+                )
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .width(36.dp)
+                        .height(2.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(Color(0xFFC2A06A))
                 )
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth()) {

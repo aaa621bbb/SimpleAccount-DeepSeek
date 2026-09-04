@@ -54,9 +54,12 @@ class AgentLoop @Inject constructor(
         val prevMonth = java.time.YearMonth.now().minusMonths(1)
         val monthsDesc = if (coveredMonths.isEmpty()) "（账本暂无数据）"
         else "${coveredMonths.first()} 至 ${coveredMonths.last()}，共 ${coveredMonths.size} 个月"
+        val dates = com.simpleaccount.app.util.DateResolver.anchorBlock()
         return """
-你是一个专业、贴心的智能会计管家，运行在用户的记账 App 里。今天是 ${today}（${today.year}年${today.monthValue}月${today.dayOfMonth}日），本月是 ${today.year}-${"%02d".format(today.monthValue)}，用户说"上个月"通常指 $prevMonth。
-用户的账本数据覆盖：$monthsDesc。金额单位是元。
+你是一个专业、贴心的智能会计管家（Agent），运行在用户的记账 App 里。
+$dates
+账本数据覆盖：$monthsDesc。金额单位是元。
+用户说「昨天/前天/今天/本月/上个月」时，必须用上面的时间锚点换成 yyyy-MM-dd 或 yyyy-MM 再调工具，绝对不要回答「日期未知」。
 
 你可以调用工具获取/修改真实数据：
 - 核对账本覆盖哪些月份 → list_months（查询结果为空、或不确定某月有没有数据时，先调它再下结论）
@@ -77,7 +80,7 @@ class AgentLoop @Inject constructor(
 
 工作规则：
 1. 凡是涉及数字、金额、明细、统计的问题，必须先调用工具拿到真实结果再回答，绝不凭空编造金额或记录。
-2. 解析用户的相对时间时务必换算成标准月份格式 yyyy-MM 再传参：例如今天 ${today}，用户说"去年九月"指 2025-09，"上个月"指 $prevMonth，"前年"指 ${today.year - 1} 年。月份参数也接受 2025年9月 这类写法，但优先自己换算成 yyyy-MM。
+2. 解析相对时间必须换成具体日期再传参：今天=$today，昨天=${today.minusDays(1)}，前天=${today.minusDays(2)}，上个月=$prevMonth。query_transactions 的 date 传 yyyy-MM-dd，month 传 yyyy-MM。工具层也会再解析一次「昨天」这类词，但你自己先换算更稳。禁止输出「日期未知」。
 3. 任何工具返回"没有数据/没有找到"时，不要直接告诉用户没数据——先调 list_months 核对账本实际覆盖的月份，确认参数月份是否算错；若该月确实无数据，明确说出账本覆盖范围并给出最近有数据月份的参考数字。
 4. 工具结果标注"仅为部分数据"时，回答必须声明这一点；要给占比/排行结论时优先用 get_category_totals / get_merchant_totals（它们是全量汇总），不要用明细列表凑。
 5. 一次工具结果不够就继续调用其它工具，多步综合分析后再回答；查询类问题通常 1-3 次工具调用足够。
@@ -121,7 +124,7 @@ class AgentLoop @Inject constructor(
         val messages = mutableListOf<ToolChatMessage>()
         messages.add(ToolChatMessage("system", buildSystemPrompt(coveredMonths)))
         history.takeLast(40).forEach { (r, c) -> messages.add(ToolChatMessage(r, c)) }
-        messages.add(ToolChatMessage("user", userMessage))
+        messages.add(ToolChatMessage("user", com.simpleaccount.app.util.DateResolver.enrichUserMessage(userMessage)))
 
         var rounds = 0
         var networkRetried = false

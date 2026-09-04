@@ -10,53 +10,84 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-// 配色与 App 图标的蓝紫主色呼应
+/**
+ * 高级感配色：暖纸白 + 墨青主色 + 香槟金点缀（私人银行/精品账本气质）。
+ * 支出用陶土红、收入用松柏绿，避免荧光色。
+ */
+object AppColors {
+    val Ink = Color(0xFF1F3A4D)
+    val InkDeep = Color(0xFF162A38)
+    val Champagne = Color(0xFFC2A06A)
+    val ChampagneSoft = Color(0xFFE8D5B0)
+    val Sage = Color(0xFF3D8F73)
+    val Terracotta = Color(0xFFC45C4A)
+    val Paper = Color(0xFFF5F1E9)
+    val Cream = Color(0xFFFFFCF7)
+    val Expense = Terracotta
+    val Income = Sage
+    val Gold = Champagne
+}
+
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF4C5FD7),
+    primary = Color(0xFF1F3A4D),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFE1E5FF),
-    onPrimaryContainer = Color(0xFF0E1A64),
-    secondary = Color(0xFF5B7BD5),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFDCE6FB),
-    onSecondaryContainer = Color(0xFF1A2E60),
-    tertiary = Color(0xFF7A9AE3),
-    background = Color(0xFFF3F5FA),
-    onBackground = Color(0xFF1A1C22),
-    surface = Color.White,
-    onSurface = Color(0xFF1A1C22),
-    surfaceVariant = Color(0xFFE9EDF6),
-    onSurfaceVariant = Color(0xFF5B6070),
-    outline = Color(0xFFE2E6F0),
-    error = Color(0xFFD9363E),
+    primaryContainer = Color(0xFFE4EBE8),
+    onPrimaryContainer = Color(0xFF132530),
+    secondary = Color(0xFFC2A06A),
+    onSecondary = Color(0xFF2A1F0C),
+    secondaryContainer = Color(0xFFF3E6CF),
+    onSecondaryContainer = Color(0xFF3A2C14),
+    tertiary = Color(0xFF3D8F73),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFD5EDE3),
+    onTertiaryContainer = Color(0xFF12382C),
+    background = Color(0xFFF5F1E9),
+    onBackground = Color(0xFF1C1915),
+    surface = Color(0xFFFFFCF7),
+    onSurface = Color(0xFF1C1915),
+    surfaceVariant = Color(0xFFECE6DA),
+    onSurfaceVariant = Color(0xFF5C564C),
+    outline = Color(0xFFD9D1C4),
+    outlineVariant = Color(0xFFE8E1D4),
+    error = Color(0xFFB54A3C),
+    onError = Color.White,
+    errorContainer = Color(0xFFF6D6D1),
+    onErrorContainer = Color(0xFF4A1C16),
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFBAC5FF),
-    onPrimary = Color(0xFF1A2A7A),
-    primaryContainer = Color(0xFF37459C),
-    onPrimaryContainer = Color(0xFFE1E5FF),
-    secondary = Color(0xFFA8BCF0),
-    onSecondary = Color(0xFF20304F),
-    secondaryContainer = Color(0xFF33456E),
-    onSecondaryContainer = Color(0xFFDCE6FB),
-    tertiary = Color(0xFF8FA9DE),
-    background = Color(0xFF0F1116),
-    onBackground = Color(0xFFE2E4EC),
-    surface = Color(0xFF181B22),
-    onSurface = Color(0xFFE2E4EC),
-    surfaceVariant = Color(0xFF242833),
-    onSurfaceVariant = Color(0xFFA6ABC0),
-    outline = Color(0xFF2B3040),
-    error = Color(0xFFEF8B90),
+    primary = Color(0xFFD4B483),
+    onPrimary = Color(0xFF1A1408),
+    primaryContainer = Color(0xFF3A3224),
+    onPrimaryContainer = Color(0xFFF3E6CF),
+    secondary = Color(0xFFE8D5B0),
+    onSecondary = Color(0xFF1A1408),
+    secondaryContainer = Color(0xFF3A3224),
+    onSecondaryContainer = Color(0xFFF3E6CF),
+    tertiary = Color(0xFF7EC9A8),
+    onTertiary = Color(0xFF0C241C),
+    tertiaryContainer = Color(0xFF1E3D32),
+    onTertiaryContainer = Color(0xFFD5EDE3),
+    background = Color(0xFF0C0B09),
+    onBackground = Color(0xFFEDE6D9),
+    surface = Color(0xFF161410),
+    onSurface = Color(0xFFEDE6D9),
+    surfaceVariant = Color(0xFF221F1A),
+    onSurfaceVariant = Color(0xFFB8AFA0),
+    outline = Color(0xFF3A342C),
+    outlineVariant = Color(0xFF2A2620),
+    error = Color(0xFFE08B7E),
+    onError = Color(0xFF3A1410),
+    errorContainer = Color(0xFF5C2A24),
+    onErrorContainer = Color(0xFFF6D6D1),
 )
 
 private val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(22.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(32.dp),
 )
 
 @Composable

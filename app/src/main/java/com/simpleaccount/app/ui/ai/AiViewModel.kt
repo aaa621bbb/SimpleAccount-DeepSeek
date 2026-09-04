@@ -15,8 +15,6 @@ import com.simpleaccount.app.data.service.AiService
 import com.simpleaccount.app.util.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -365,75 +363,48 @@ class AiViewModel @Inject constructor(
                 return@launch
             }
 
+            val today = java.time.LocalDate.now()
             val prompt = """
-你是账单识别助手。请仔细逐行阅读这张支付记录截图（可能有多笔交易，从上到下、逐行扫描，一行都不要漏），提取每一笔账单记录。
+你是账单识别助手。请仔细逐行阅读这些支付记录截图（可能有多笔，从上到下逐行扫描，一行都不要漏），提取每一笔账单。
+今天是 ${today}（${today.year}年${today.monthValue}月${today.dayOfMonth}日），昨天=${today.minusDays(1)}，前天=${today.minusDays(2)}。
 严格只输出 JSON 数组，不要任何解释、不要 markdown 代码块围栏：
 [{"date":"yyyy-MM-dd","time":"HH:mm","merchant":"商家或交易对象","product":"商品说明，可省略","amount":6.5,"type":"expense"}]
 识别规则：
-- 逐行扫描，先看交易时间列。日期可能是各种写法：2026-08-30、2026/8/30、2026年8月30日、08-30、8月30日、"昨天"、"前天"、"今天"。无论哪种写法，date 一律换算成 yyyy-MM-dd 输出（"昨天/前天/今天"按今天换算成具体日期）；time 保留 HH:mm。
-- 再看商家/交易对象列、商品/备注列、金额列、收/支列。
-- amount 是数字（元），严格按截图原值（保留小数），不要四舍五入。
-- type：支出 expense、收入 income。
-- 不要编造截图里没有的字段；识别不出的行跳过。
-- 若截图里没有任何账单信息，输出 []。
+- date 必须是 yyyy-MM-dd。截图写「昨天/前天/今天/今日」时用上面给出的具体日期，禁止输出「昨天」或空日期。
+- 商家名必须完整抄写，不要截断，不要加省略号。被截图裁掉的尾字（如「有限…」）按能看见的部分抄，不要自己补「公司」。
+- time 保留 HH:mm；amount 按截图原值（元，保留小数）；type：支出 expense、收入 income。
+- 多张切片可能有重叠行，同一笔只输出一次。
+- 不要编造截图里没有的字段；识别不出的行跳过。没有账单则输出 []。
             """.trimIndent()
-            // （单次视觉识别：直接让多模态模型看图出 JSON，失败才补一轮）
 
             _state.value = _state.value.copy(phase = "正在识别截图（${if (useMain) "主模型" else "识图模型"}）…")
 
-            // 单次视觉识别：直接让多模态模型看图提取账单 JSON（省 token）；
-            // 结果为空或主模型失败 → 自动补一轮（回退识图模型/重试）
-            // 长图（多切片）时：各切片并发识别后合并（用 DedupEngine 去重），补漏且不增加等待
-            suspend fun visionCall(): String? = runCatching {
+            // 所有切片一次请求发给模型（省 token、也更快）。最多 2 次：主模型失败才回退识图配置。
+            suspend fun visionCall(base: String, key: String, model: String): String? = runCatching {
                 aiService.chatWithImage(
-                    baseUrl = if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
-                    apiKey = if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
-                    model = if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
-                    prompt = prompt,
-                    imageBase64List = base64List,
+                    baseUrl = base, apiKey = key, model = model,
+                    prompt = prompt, imageBase64List = base64List,
                 ).content
             }.getOrNull()
 
-            // 切片并发识别：每片独立请求，结果合并（仅长图 >1 片时走并发）
-            var items = if (base64List.size > 1) {
-                kotlinx.coroutines.coroutineScope {
-                    val results = base64List.map { slice ->
-                        async {
-                            runCatching {
-                                aiService.chatWithImage(
-                                    baseUrl = if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
-                                    apiKey = if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
-                                    model = if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
-                                    prompt = prompt,
-                                    imageBase64List = listOf(slice),
-                                ).content
-                            }.getOrNull()
-                        }
-                    }
-                    mergeExtracted(results.awaitAll().flatMap { parseExtracted(it ?: "") })
-                }
-            } else {
-                parseExtracted(visionCall() ?: "")
-            }
+            var items = parseExtracted(
+                visionCall(
+                    if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
+                    if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
+                    if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
+                ) ?: ""
+            )
 
             if (items.isEmpty() && useMain && settingsRepository.visionApiKey().isNotBlank()) {
-                // 主模型为空/不支持 → 回退独立识图配置
-                AppLog.d("AI识图: 主模型识别为空，回退独立识图配置")
+                AppLog.d("AI识图: 主模型识别为空，回退独立识图配置（不再第三次重试）")
                 _state.value = _state.value.copy(phase = "主模型识别失败，改用识图模型…")
-                items = parseExtracted(runCatching {
-                    aiService.chatWithImage(
-                        baseUrl = settingsRepository.visionBaseUrl(),
-                        apiKey = settingsRepository.visionApiKey(),
-                        model = settingsRepository.visionModel(),
-                        prompt = prompt,
-                        imageBase64List = base64List,
-                    ).content
-                }.getOrNull() ?: "")
-            }
-            if (items.isEmpty()) {
-                // 仍为空 → 同配置重试一轮（模型偶发抽风）
-                _state.value = _state.value.copy(phase = "第一次识别为空，正在重试…")
-                items = parseExtracted(visionCall() ?: "")
+                items = parseExtracted(
+                    visionCall(
+                        settingsRepository.visionBaseUrl(),
+                        settingsRepository.visionApiKey(),
+                        settingsRepository.visionModel(),
+                    ) ?: ""
+                )
             }
             val mergedItems = mergeExtracted(items)
 
@@ -446,32 +417,34 @@ class AiViewModel @Inject constructor(
                 _state.value = _state.value.copy(typing = false, phase = null)
                 return@launch
             }
-            val today = java.time.LocalDate.now().toString()
+            val todayStr = java.time.LocalDate.now().toString()
             val seenBatch = mutableListOf<ExtractedTx>()
             val existingTxs = accountRepository.getAll()
+            val existingMerchants = merchantRepository.getAll().map { it.merchant }
 
             val uiItems = mutableListOf<ScreenshotItemUi>()
-            for (item in items) {
+            for (item in mergedItems) {
                 val amountFen = Math.round(item.amount * 100)
                 if (amountFen <= 0) continue
-                val date = item.date ?: today
+                val date = item.date ?: todayStr
+                val merchant = com.simpleaccount.app.util.MerchantMatcher.canonicalize(item.merchant, existingMerchants)
                 // 批内去重：同一笔只保留第一次识别（DedupEngine 智能匹配）
                 if (seenBatch.any { o ->
                         com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
                             o.date ?: "", Math.round(o.amount * 100), o.merchant, o.time ?: "",
-                            date, amountFen, item.merchant, item.time ?: ""
+                            date, amountFen, merchant, item.time ?: ""
                         )
                     }) continue
-                seenBatch.add(item)
+                seenBatch.add(item.copy(merchant = merchant, date = date))
                 val duplicate = existingTxs.any { t ->
                     com.simpleaccount.app.data.agent.DedupEngine.isSameTx(
                         t.date, t.amount, t.merchant, t.time,
-                        date, amountFen, item.merchant, item.time ?: ""
+                        date, amountFen, merchant, item.time ?: ""
                     )
                 }
                 uiItems.add(
                     ScreenshotItemUi(
-                        date = item.date, merchant = item.merchant, product = item.product,
+                        date = date, merchant = merchant, product = item.product,
                         amount = item.amount, type = item.type, time = item.time,
                         duplicate = duplicate, selected = !duplicate,
                     )
@@ -648,15 +621,14 @@ class AiViewModel @Inject constructor(
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
                 val amount = o.optDouble("amount", Double.NaN)
                 if (amount.isNaN() || amount <= 0) return@mapNotNull null
-                // 相对日期（昨天/前天）解析成绝对日期
                 val dateRaw = o.optString("date", "").trim()
-                val date = when {
-                    dateRaw.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) -> dateRaw
-                    else -> resolveRelativeDate(dateRaw)
-                }
+                val date = com.simpleaccount.app.util.DateResolver.resolveFlexible(dateRaw)
+                    ?: java.time.LocalDate.now().toString()
                 ExtractedTx(
                     date = date,
-                    merchant = o.optString("merchant", "").trim(),
+                    merchant = com.simpleaccount.app.util.MerchantMatcher.stripEllipsis(
+                        o.optString("merchant", "").trim()
+                    ),
                     product = o.optString("product", "").trim().ifBlank { null },
                     amount = amount,
                     type = if (o.optString("type") == "income")
@@ -707,19 +679,21 @@ class AiViewModel @Inject constructor(
             val slices = mutableListOf<String>()
             fun encode(bmp: android.graphics.Bitmap): String {
                 val out = java.io.ByteArrayOutputStream()
-                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, out)
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
                 return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
             }
 
-            if (fullH <= 2400) {
+            if (fullH <= 3200) {
                 val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
                 val bmp = decoder.decodeRegion(android.graphics.Rect(0, 0, fullW, fullH), opts)
                 if (bmp != null) slices.add(encode(bmp))
             } else {
-                val sliceHeight = 2000
-                val overlap = 200
+                // 最多 3 段，一次请求发给模型；重叠加厚避免一行被切断
+                val overlap = 280
+                val sliceHeight = ((fullH + overlap * 2) / 3).coerceAtLeast(1800)
                 var y = 0
-                while (y < fullH) {
+                var count = 0
+                while (y < fullH && count < 3) {
                     val h = minOf(sliceHeight, fullH - y)
                     if (h < 150) break
                     val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
@@ -727,6 +701,7 @@ class AiViewModel @Inject constructor(
                     if (piece != null) {
                         slices.add(encode(piece))
                         piece.recycle()
+                        count++
                     }
                     if (y + h >= fullH) break
                     y += sliceHeight - overlap
@@ -821,11 +796,14 @@ class AiViewModel @Inject constructor(
     }
 
     private suspend fun applyClassification(map: Map<String, String>, batch: List<Merchant>): Int {
-        val normalizedToMerchant = batch.associateBy { normalizeMerchant(it.merchant) }
         var count = 0
         for ((aiName, category) in map) {
-            val existing = normalizedToMerchant[normalizeMerchant(aiName)]
-                ?: merchantRepository.getByMerchant(aiName.trim())
+            val existing = batch.firstOrNull {
+                com.simpleaccount.app.util.MerchantMatcher.isSameMerchant(it.merchant, aiName)
+            } ?: merchantRepository.getByMerchant(aiName.trim())
+                ?: merchantRepository.getAll().firstOrNull {
+                    com.simpleaccount.app.util.MerchantMatcher.isSameMerchant(it.merchant, aiName)
+                }
                 ?: continue
             if (existing.status == Merchant.STATUS_USER_SET) continue
             merchantRepository.update(
