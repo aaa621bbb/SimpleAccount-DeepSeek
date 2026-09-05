@@ -128,6 +128,9 @@ fun SimpleAccountNavHost() {
                 composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
                 }
+                composable(Routes.LEDGER_MANAGE) {
+                    com.simpleaccount.app.ui.settings.LedgerManageScreen(navController)
+                }
                 composable(Routes.CATEGORY_MANAGE) {
                     CategoryManageScreen(navController)
                 }

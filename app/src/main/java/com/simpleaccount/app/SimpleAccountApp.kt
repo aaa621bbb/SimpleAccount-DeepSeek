@@ -22,6 +22,12 @@ class SimpleAccountApp : Application() {
     @Inject
     lateinit var dataRetentionManager: DataRetentionManager
 
+    @Inject
+    lateinit var ledgerRepository: com.simpleaccount.app.data.repository.LedgerRepository
+
+    @Inject
+    lateinit var settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -33,6 +39,10 @@ class SimpleAccountApp : Application() {
         // 首次启动保证预置分类存在
         appScope.launch {
             ensurePresetCategories()
+            runCatching { ledgerRepository.ensureDefault() }
+            if (settingsRepository.isAutoRecordEnabled()) {
+                com.simpleaccount.app.auto.AutoRecordKeepAliveService.start(this@SimpleAccountApp)
+            }
         }
         // 存储防膨胀：每日启动低频自动清理（日志/失败记录/孤立商家/旧消息上限）
         appScope.launch {

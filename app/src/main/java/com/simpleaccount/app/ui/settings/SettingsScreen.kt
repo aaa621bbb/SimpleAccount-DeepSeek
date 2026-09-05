@@ -59,6 +59,7 @@ data class SettingsEntry(val title: String, val icon: ImageVector, val route: St
 
 private val entries = listOf(
     SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
+    SettingsEntry("账本管理", Icons.Filled.Storage, Routes.LEDGER_MANAGE),
     SettingsEntry("无感记账（自动记账）", Icons.Filled.NotificationsActive, Routes.AUTO_RECORD),
     SettingsEntry("分类管理", Icons.Filled.Category, Routes.CATEGORY_MANAGE),
     SettingsEntry("商家归类管理", Icons.Filled.Store, Routes.MERCHANT_MANAGE),

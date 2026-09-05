@@ -29,38 +29,51 @@ interface TransactionDao {
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("SELECT * FROM transactions WHERE ledgerId = :ledgerId ORDER BY date DESC, time DESC, id DESC")
+    fun observeAll(ledgerId: Long): Flow<List<Transaction>>
+
     @Query("SELECT * FROM transactions ORDER BY date DESC, id DESC")
-    fun observeAll(): Flow<List<Transaction>>
+    fun observeAbsolutelyAll(): Flow<List<Transaction>>
 
     @Query("SELECT * FROM transactions WHERE id = :id")
     suspend fun getById(id: Long): Transaction?
 
     /** 按月份（yyyy-MM 前缀）筛选 */
-    @Query("SELECT * FROM transactions WHERE date LIKE :monthPrefix || '%' ORDER BY date DESC, id DESC")
-    fun observeByMonth(monthPrefix: String): Flow<List<Transaction>>
+    @Query("SELECT * FROM transactions WHERE ledgerId = :ledgerId AND date LIKE :monthPrefix || '%' ORDER BY date DESC, id DESC")
+    fun observeByMonth(ledgerId: Long, monthPrefix: String): Flow<List<Transaction>>
 
     /** 按月 + 分类筛选（AND）。monthPrefix/category 传 null 表示不限 */
     @Query("""
         SELECT * FROM transactions
-        WHERE (:monthPrefix IS NULL OR date LIKE :monthPrefix || '%')
+        WHERE ledgerId = :ledgerId
+          AND (:monthPrefix IS NULL OR date LIKE :monthPrefix || '%')
           AND (:category IS NULL OR category = :category)
-        ORDER BY date DESC, id DESC
+          AND (:type IS NULL OR type = :type)
+        ORDER BY date DESC, time DESC, id DESC
     """)
-    fun observeFiltered(monthPrefix: String?, category: String?): Flow<List<Transaction>>
+    fun observeFiltered(ledgerId: Long, monthPrefix: String?, category: String?, type: String?): Flow<List<Transaction>>
 
     @Query("""
         SELECT * FROM transactions
-        WHERE (note LIKE '%' || :q || '%' OR category LIKE '%' || :q || '%'
+        WHERE ledgerId = :ledgerId
+          AND (note LIKE '%' || :q || '%' OR category LIKE '%' || :q || '%'
             OR merchant LIKE '%' || :q || '%' OR product LIKE '%' || :q || '%')
           AND (:monthPrefix IS NULL OR date LIKE :monthPrefix || '%')
           AND (:category IS NULL OR category = :category)
-        ORDER BY date DESC, id DESC
+          AND (:type IS NULL OR type = :type)
+        ORDER BY date DESC, time DESC, id DESC
     """)
-    fun observeSearch(q: String, monthPrefix: String?, category: String?): Flow<List<Transaction>>
+    fun observeSearch(q: String, ledgerId: Long, monthPrefix: String?, category: String?, type: String?): Flow<List<Transaction>>
 
-    /** 全部（判重用） */
+    /** 当前账本全部（判重 / AI / 统计） */
+    @Query("SELECT * FROM transactions WHERE ledgerId = :ledgerId")
+    suspend fun getAll(ledgerId: Long): List<Transaction>
+
     @Query("SELECT * FROM transactions")
-    suspend fun getAll(): List<Transaction>
+    suspend fun getAbsolutelyAll(): List<Transaction>
+
+    @Query("DELETE FROM transactions WHERE ledgerId = :ledgerId")
+    suspend fun deleteByLedger(ledgerId: Long)
 
     /** 某月收支合计 */
     @Query("SELECT SUM(amount) as total, type FROM transactions WHERE date LIKE :monthPrefix || '%' GROUP BY type")
@@ -94,8 +107,8 @@ interface TransactionDao {
     @Query("SELECT DISTINCT date FROM transactions ORDER BY date DESC LIMIT 1")
     suspend fun lastDate(): String?
 
-    @Query("SELECT * FROM transactions WHERE source = 'import' ORDER BY id DESC")
-    suspend fun getAllImport(): List<Transaction>
+    @Query("SELECT * FROM transactions WHERE ledgerId = :ledgerId AND source = 'import' ORDER BY id DESC")
+    suspend fun getAllImport(ledgerId: Long): List<Transaction>
 
     /** 按来源取全部（供导入时覆盖自动记账记录等） */
     @Query("SELECT * FROM transactions WHERE source = :source ORDER BY id DESC")

@@ -95,37 +95,69 @@ fun LedgerScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // 月份筛选芯片：选某月 = 只看该月记录（筛选语义），数据月份倒序
-            LazyRow(
+            var showMonth by remember { mutableStateOf(false) }
+            var showCat by remember { mutableStateOf(false) }
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(listOf<String?>(null) + state.months) { m ->
-                    FilterChip(
-                        selected = filter.month == m,
-                        onClick = { viewModel.setMonth(m) },
-                        label = { Text(m ?: "全部月份") },
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
+                com.simpleaccount.app.ui.components.SegmentedThree(
+                    options = listOf("全部", "支出", "收入"),
+                    selected = when (filter.type) {
+                        com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE -> 1
+                        com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME -> 2
+                        else -> 0
+                    },
+                    onSelect = {
+                        viewModel.setType(
+                            when (it) {
+                                1 -> com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE
+                                2 -> com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
+                                else -> null
+                            }
+                        )
+                    }
+                )
             }
-            // 分类筛选芯片
-            LazyRow(
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                items(listOf<String?>(null) + state.categories.map { it.name }) { c ->
-                    FilterChip(
-                        selected = filter.category == c,
-                        onClick = { viewModel.setCategory(c) },
-                        label = { Text(c ?: "全部分类") },
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
+                com.simpleaccount.app.ui.components.FilterChipButton(
+                    label = filter.month ?: "全部月份",
+                    onClick = { showMonth = true }
+                )
+                Spacer(Modifier.width(8.dp))
+                com.simpleaccount.app.ui.components.FilterChipButton(
+                    label = filter.category ?: "全部分类",
+                    onClick = { showCat = true }
+                )
+            }
+            if (showMonth) {
+                com.simpleaccount.app.ui.components.MonthPickerSheet(
+                    months = state.months,
+                    selected = filter.month,
+                    onDismiss = { showMonth = false },
+                    onPick = { viewModel.setMonth(it); showMonth = false }
+                )
+            }
+            if (showCat) {
+                val cats = when (filter.type) {
+                    com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE ->
+                        state.categories.filter { it.type == com.simpleaccount.app.data.entity.Category.TYPE_EXPENSE }
+                    com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME ->
+                        state.categories.filter { it.type == com.simpleaccount.app.data.entity.Category.TYPE_INCOME }
+                    else -> state.categories
                 }
+                com.simpleaccount.app.ui.components.CategoryPickerSheet(
+                    categories = cats,
+                    selected = filter.category,
+                    onDismiss = { showCat = false },
+                    onPick = { viewModel.setCategory(it); showCat = false }
+                )
             }
 
             // 记录数 + 排序切换 + 清除筛选
@@ -152,7 +184,7 @@ fun LedgerScreen(
                 }
             }
 
-            // 按金额排序 + 选中全部月份 = 全局金额排行，不再按月分段
+            // 按金额排序 + 未选具体月份 = 全局金额排行，不再按月分段
             // （否则每段内部才按金额排，看起来还是"月份里的排序"）
             val flatAmountView = state.sortByAmount && filter.month == null
 

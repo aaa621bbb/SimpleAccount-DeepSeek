@@ -3,9 +3,12 @@ package com.simpleaccount.app.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.data.insights.InsightTip
 import com.simpleaccount.app.data.insights.InsightsEngine
+import com.simpleaccount.app.data.entity.Ledger
 import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
+import com.simpleaccount.app.data.repository.LedgerRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.ui.components.RowUi
 import com.simpleaccount.app.util.DateUtil
@@ -41,6 +44,10 @@ data class HomeUiState(
     val insightHeadline: String = "",
     val insightSub: String = "",
     val insightReport: String = "",
+    val evidenceTips: List<InsightTip> = emptyList(),
+    val monthTx: List<Transaction> = emptyList(),
+    val ledgers: List<Ledger> = emptyList(),
+    val currentLedgerName: String = Ledger.DEFAULT_NAME,
     val todayFen: Long = 0L,
     val projectedFen: Long = 0L,
     /** 剩余预算按剩余天数摊，今天建议上限 */
@@ -54,6 +61,7 @@ class HomeViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
     private val settingsRepository: SettingsRepository,
+    private val ledgerRepository: LedgerRepository,
 ) : ViewModel() {
 
     private val categoriesFlow = categoryRepository.observeAll()
@@ -124,13 +132,28 @@ class HomeViewModel @Inject constructor(
     }
 
     /** 当月流水 + 分类 + 排序 + 条数，合并为 UI 状态 */
+    fun switchLedger(id: Long) = ledgerRepository.switchTo(id)
+
+    private data class Extra(
+        val count: Int,
+        val sort: HomeSort,
+        val ledgers: List<Ledger>,
+        val lid: Long,
+    )
+
     val uiState: StateFlow<HomeUiState> =
         combine(
             accountRepository.observeAll(),
             categoriesFlow,
             budgetFlow,
-            combine(recentCountFlow, sortFlow) { count, sort -> count to sort }
-        ) { all, categories, budget, (count, sort) ->
+            combine(recentCountFlow, sortFlow, ledgerRepository.observeAll(), ledgerRepository.currentIdFlow) { count, sort, ledgers, lid ->
+                Extra(count, sort, ledgers, lid)
+            }
+        ) { all, categories, budget, q ->
+            val count = q.count
+            val sort = q.sort
+            val ledgers = q.ledgers
+            val lid = q.lid
             val month = DateUtil.thisMonth()
             val transactions = all.filter { it.date.startsWith(month) }
             val catMap = categories.associateBy { it.name }
@@ -180,6 +203,10 @@ class HomeViewModel @Inject constructor(
                 insightHeadline = health.headline,
                 insightSub = health.subline,
                 insightReport = if (all.isEmpty()) "" else InsightsEngine.toMarkdown(health),
+                evidenceTips = health.evidenceTips,
+                monthTx = transactions,
+                ledgers = ledgers,
+                currentLedgerName = ledgers.firstOrNull { it.id == lid }?.name ?: Ledger.DEFAULT_NAME,
                 todayFen = health.todayFen,
                 projectedFen = health.projectedFen,
                 todayCapFen = todayCap,

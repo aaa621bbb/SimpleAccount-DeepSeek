@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -52,11 +54,7 @@ import com.simpleaccount.app.ui.components.parseColor
 import com.simpleaccount.app.util.IconMapper
 import kotlinx.coroutines.launch
 
-/** 可选图标库（预置图标名 → 显示用 ImageVector） */
-private val iconLibrary = listOf(
-    "restaurant", "directions_car", "shopping_cart", "movie", "local_hospital",
-    "school", "home", "phone", "attach_money", "card_giftcard", "trending_up", "work", "more_horiz"
-)
+
 
 /** 可选颜色库 */
 private val colorLibrary = listOf(
@@ -139,6 +137,7 @@ fun CategoryManageScreen(
     // 新增分类对话框
     if (showAddDialog) {
         AddCategoryDialog(
+            type = state.type,
             onDismiss = { showAddDialog = false },
             onConfirm = { name, icon, color ->
                 showAddDialog = false
@@ -171,11 +170,13 @@ fun CategoryManageScreen(
 
 @Composable
 private fun AddCategoryDialog(
+    type: String,
     onDismiss: () -> Unit,
     onConfirm: (String, String, String) -> Unit,
 ) {
+    val icons = com.simpleaccount.app.util.IconMapper.allChoices(type)
     var name by remember { mutableStateOf("") }
-    var icon by remember { mutableStateOf("more_horiz") }
+    var icon by remember { mutableStateOf(icons.firstOrNull()?.name ?: "more_horiz") }
     var color by remember { mutableStateOf("#BDC3C7") }
 
     AlertDialog(
@@ -191,26 +192,32 @@ private fun AddCategoryDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                Text("选择图标", style = MaterialTheme.typography.titleSmall)
-                Row {
-                    iconLibrary.forEach { ic ->
-                        val selected = ic == icon
-                        Box(
-                            Modifier
-                                .padding(4.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(if (selected) MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { icon = ic },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                IconMapper.map(ic),
-                                contentDescription = ic,
-                                tint = if (selected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
+                Text("选择图标（支出/收入各 30+，互不重复）", style = MaterialTheme.typography.titleSmall)
+                Column(Modifier.height(220.dp).verticalScroll(rememberScrollState())) {
+                    icons.chunked(6).forEach { row ->
+                        Row(Modifier.fillMaxWidth()) {
+                            row.forEach { ic ->
+                                val selected = ic.name == icon
+                                Box(
+                                    Modifier
+                                        .padding(4.dp)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                        .clickable { icon = ic.name },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        IconMapper.map(ic.name),
+                                        contentDescription = ic.label,
+                                        tint = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
                         }
                     }
                 }

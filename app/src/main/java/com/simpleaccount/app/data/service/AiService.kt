@@ -205,6 +205,41 @@ class AiService @Inject constructor() {
     /**
      * 根据用户填的 baseUrl 构造 chat/completions 端点 URL。
      */
+    /**
+     * 按模型族打开深度思考。用户可在设置里选 off/low/medium/high。
+     * 不支持的模型会忽略这些字段。
+     */
+    private fun applyThinking(body: JSONObject, model: String, level: String) {
+        if (level == "off") {
+            val m = model.lowercase()
+            if (m.contains("glm")) {
+                body.put("thinking", JSONObject().put("type", "disabled"))
+            }
+            return
+        }
+        val effort = when (level) {
+            "low" -> "low"
+            "high" -> "high"
+            else -> "medium"
+        }
+        val m = model.lowercase()
+        when {
+            m.contains("gpt") || m.contains("o1") || m.contains("o3") || m.contains("o4") ->
+                body.put("reasoning_effort", effort)
+            m.contains("qwen") || m.contains("qwq") -> {
+                body.put("enable_thinking", true)
+            }
+            m.contains("glm") || m.contains("chatglm") -> {
+                body.put("thinking", JSONObject().put("type", "enabled"))
+            }
+            m.contains("deepseek") || m.contains("reasoner") || m.contains("r1") -> {
+                // reasoner 模型本身就会思考；chat 模型加一句无害
+                body.put("enable_thinking", true)
+            }
+            else -> body.put("enable_thinking", true)
+        }
+    }
+
     private fun buildChatUrl(baseUrl: String): String {
         var b = baseUrl.trim()
         while (b.endsWith("/")) b = b.substring(0, b.length - 1)
@@ -247,12 +282,15 @@ class AiService @Inject constructor() {
         messages: List<ToolChatMessage>,
         tools: List<AgentToolSpec>,
         onDelta: ((String) -> Unit)? = null,
+        thinkingLevel: String = "off",
+        onReasoning: ((String) -> Unit)? = null,
     ): ToolChatResult = withContextIo {
         val body = JSONObject().apply {
             put("model", model)
             put("messages", messagesToJson(messages))
-            put("temperature", 0.2)
+            put("temperature", if (thinkingLevel == "off") 0.2 else 0.4)
             put("stream", true)
+            applyThinking(this, model, thinkingLevel)
             if (tools.isNotEmpty()) {
                 val arr = JSONArray()
                 tools.forEach { tool -> arr.put(tool.toJson()) }
@@ -312,6 +350,11 @@ class AiService @Inject constructor() {
                                     }
                                 }
                             }
+                        }
+                        val reasoning = delta.optString("reasoning_content")
+                            .ifBlank { delta.optString("reasoning") }
+                        if (reasoning.isNotEmpty() && reasoning != "null") {
+                            onReasoning?.invoke(reasoning)
                         }
                         if (!delta.isNull("content") && delta.has("content")) {
                             val c = delta.optString("content")
