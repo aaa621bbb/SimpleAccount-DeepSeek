@@ -4,6 +4,7 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import dagger.hilt.android.AndroidEntryPoint
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,9 +13,10 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * 通知监听服务：抓取微信/支付宝的支付通知 → 解析 → 自动入账。
- * 需要用户在系统设置授予「通知使用权」（App 内有无感记账设置页引导）。
- * 仅处理能解析出金额的支付类通知；开关关闭时直接忽略。
+ * 通知监听：抓取支付类通知 → 解析 → 自动入账。
+ *
+ * Hilt 注入可能晚于首条通知；一律走 [resolveDeps] 兜底 EntryPoint，避免丢单。
+ * 绑定/解绑上报 [AutoRecordRuntime]，由保活服务周期 requestRebind。
  */
 @AndroidEntryPoint
 class PaymentNotificationListenerService : NotificationListenerService() {
@@ -22,43 +24,113 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     @Inject
     lateinit var autoRecordManager: AutoRecordManager
 
+    @Inject
+    lateinit var runtime: AutoRecordRuntime
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        resolveRuntime().markListenerBound(true)
+    }
+
+    override fun onListenerDisconnected() {
+        resolveRuntime().markListenerBound(false)
+        runCatching { requestRebind(android.content.ComponentName(this, javaClass)) }
+        super.onListenerDisconnected()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val n = sbn ?: return
         val pkg = n.packageName ?: return
-        // 诊断日志：监听服务收到"任何"通知都记录一条（证明服务活着/被绑定），
-        // 之后才按包名过滤 —— 排障时在日志里能看到系统到底有没有把通知送进来
-        com.simpleaccount.app.util.AppLog.d(
-            "无感记账: onNotificationPosted pkg=${pkg.substringAfterLast('.')} " +
-                "title=${n.notification?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.take(20)}"
-        )
-        // 快速过滤：只看微信/支付宝/云闪付
-        val pkgLower = pkg.lowercase()
-        if (!pkgLower.contains("tencent.mm") && !pkgLower.contains("alipay") && !pkgLower.contains("unionpay")) return
 
-        val extras = n.notification?.extras ?: return
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        if ((n.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+        if (n.isOngoing) return
+
+        val (title, text) = extractBody(n.notification)
+        val pkgLower = pkg.lowercase()
+        val interesting = pkgLower.contains("tencent.mm") ||
+            pkgLower.contains("alipay") ||
+            pkgLower.contains("unionpay") ||
+            pkgLower.contains("mipay") ||
+            pkgLower.contains("xiaomi.payment") ||
+            pkgLower.contains("huawei.wallet") ||
+            pkgLower.contains("huawei.payment") ||
+            pkgLower.contains("bank") ||
+            pkgLower.contains("wallet")
+        if (!interesting) return
         if (title.isBlank() && text.isBlank()) return
 
+        val manager = resolveManager()
+        val rt = resolveRuntime()
         scope.launch {
             val parsed = runCatching { NotificationParser.parse(pkg, title, text) }.getOrNull()
-            // 诊断日志：每条微信/支付宝/云闪付通知都记录解析结论（排障用，可在日志页查看/分享）
             com.simpleaccount.app.util.AppLog.d(
                 "无感记账: 收到通知 pkg=${pkg.substringAfterLast('.')} " +
-                    "title=${title.take(24)} text=${text.take(48)} → " +
+                    "title=${title.take(24)} text=${text.take(64)} → " +
                     (parsed?.let { "解析成功 ${it.type} ${it.amountFen / 100.0}元 ${it.merchant}" }
-                        ?: "忽略（未匹配到支付金额/模式）")
+                        ?: "忽略（未匹配到支付金额/模式）"),
             )
-            if (parsed != null) {
-                runCatching { autoRecordManager.onPaymentParsed(parsed) }
-                    .onFailure { android.util.Log.w("SimpleAccount", "auto record failed", it) }
+            if (parsed == null) {
+                rt.markSkipped("未解析 ${pkg.substringAfterLast('.')} ${title.take(16)}")
+                return@launch
             }
+            runCatching { manager.onPaymentParsed(parsed) }
+                .onSuccess { ok ->
+                    if (ok) {
+                        rt.markRecorded("${parsed.merchant} ${parsed.amountFen / 100.0}元")
+                    } else {
+                        rt.markSkipped("未入账 ${parsed.merchant}")
+                    }
+                }
+                .onFailure {
+                    android.util.Log.w("SimpleAccount", "auto record failed", it)
+                    rt.markError(it.message ?: "入账失败")
+                }
         }
     }
 
+    private fun extractBody(notification: Notification): Pair<String, String> {
+        val extras = notification.extras
+        val title = listOf(
+            extras.getCharSequence(Notification.EXTRA_TITLE),
+            extras.getCharSequence(Notification.EXTRA_TITLE_BIG),
+            notification.tickerText,
+        ).mapNotNull { it?.toString()?.trim() }.firstOrNull { it.isNotBlank() } ?: ""
+
+        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.mapNotNull { it?.toString()?.trim() }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
+        val parts = listOf(
+            extras.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString(),
+            lines.joinToString("\n").ifBlank { null },
+            notification.tickerText?.toString(),
+        ).mapNotNull { it?.trim() }.filter { it.isNotBlank() }.distinct()
+
+        return title to parts.joinToString("\n")
+    }
+
+    private fun resolveManager(): AutoRecordManager {
+        if (::autoRecordManager.isInitialized) return autoRecordManager
+        return entryPoint().manager()
+    }
+
+    private fun resolveRuntime(): AutoRecordRuntime {
+        if (::runtime.isInitialized) return runtime
+        return entryPoint().runtime()
+    }
+
+    private fun entryPoint(): AutoRecordEntryPoint {
+        return EntryPointAccessors.fromApplication(applicationContext, AutoRecordEntryPoint::class.java)
+    }
+
     override fun onDestroy() {
+        if (::runtime.isInitialized) runtime.markListenerBound(false)
         scope.cancel()
         super.onDestroy()
     }

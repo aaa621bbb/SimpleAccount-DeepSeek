@@ -26,7 +26,7 @@ data class AddUiState(
     val selectedCategory: Category? = null,
     val date: String = DateUtil.today(),
     /** 时间 HH:mm（手动记默认当前时刻，可改） */
-    val time: String = "",
+    val time: String = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) },
     val merchant: String = "",
     val product: String = "",
     val note: String = "",

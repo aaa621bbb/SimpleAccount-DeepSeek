@@ -109,6 +109,12 @@ fun SimpleAccountNavHost() {
                 composable(Routes.SETTINGS) {
                     SettingsScreen(navController)
                 }
+                composable(Routes.APPEARANCE) {
+                    com.simpleaccount.app.ui.settings.AppearanceScreen(navController)
+                }
+                composable(Routes.STATS_LAYOUT) {
+                    com.simpleaccount.app.ui.settings.StatsLayoutScreen(navController)
+                }
                 composable(Routes.ADD) {
                     AddTransactionScreen(navController, editId = null)
                 }
@@ -127,6 +133,9 @@ fun SimpleAccountNavHost() {
                 }
                 composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
+                }
+                composable(Routes.LEDGER_MANAGE) {
+                    com.simpleaccount.app.ui.settings.LedgerManageScreen(navController)
                 }
                 composable(Routes.CATEGORY_MANAGE) {
                     CategoryManageScreen(navController)
@@ -153,7 +162,11 @@ private fun SimpleBottomBar(
     currentDestination: NavDestination?,
     navController: NavHostController,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+        tonalElevation = 0.dp,
+    ) {
         NavigationBar(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             tonalElevation = 0.dp,

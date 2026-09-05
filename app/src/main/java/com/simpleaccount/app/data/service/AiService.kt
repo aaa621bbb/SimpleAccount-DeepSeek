@@ -24,6 +24,13 @@ class AiService @Inject constructor() {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    /** 识图单独超时：卡住很久后必须报超时，不能静默当成「图里没有账单」 */
+    private val visionClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     /** 进行中的 HTTP 调用（支持用户点"停止"时真正掐断网络请求，而不是等它超时） */
     private val activeCalls = java.util.Collections.newSetFromMap(
         java.util.concurrent.ConcurrentHashMap<okhttp3.Call, Boolean>()
@@ -190,7 +197,7 @@ class AiService @Inject constructor() {
             put("temperature", 0.1)
             put("max_tokens", 4000)
         }
-        val resp = execute(baseUrl, apiKey, body)
+        val resp = execute(baseUrl, apiKey, body, http = visionClient, vision = true)
         if (resp.error != null) return@withContextIo ChatResult("", resp.error)
         ChatResult(resp.content)
     }
@@ -205,6 +212,41 @@ class AiService @Inject constructor() {
     /**
      * 根据用户填的 baseUrl 构造 chat/completions 端点 URL。
      */
+    /**
+     * 按模型族打开深度思考。用户可在设置里选 off/low/medium/high。
+     * 不支持的模型会忽略这些字段。
+     */
+    private fun applyThinking(body: JSONObject, model: String, level: String) {
+        if (level == "off") {
+            val m = model.lowercase()
+            if (m.contains("glm")) {
+                body.put("thinking", JSONObject().put("type", "disabled"))
+            }
+            return
+        }
+        val effort = when (level) {
+            "low" -> "low"
+            "high" -> "high"
+            else -> "medium"
+        }
+        val m = model.lowercase()
+        when {
+            m.contains("gpt") || m.contains("o1") || m.contains("o3") || m.contains("o4") ->
+                body.put("reasoning_effort", effort)
+            m.contains("qwen") || m.contains("qwq") -> {
+                body.put("enable_thinking", true)
+            }
+            m.contains("glm") || m.contains("chatglm") -> {
+                body.put("thinking", JSONObject().put("type", "enabled"))
+            }
+            m.contains("deepseek") || m.contains("reasoner") || m.contains("r1") -> {
+                // reasoner 模型本身就会思考；chat 模型加一句无害
+                body.put("enable_thinking", true)
+            }
+            else -> body.put("enable_thinking", true)
+        }
+    }
+
     private fun buildChatUrl(baseUrl: String): String {
         var b = baseUrl.trim()
         while (b.endsWith("/")) b = b.substring(0, b.length - 1)
@@ -236,9 +278,9 @@ class AiService @Inject constructor() {
     }
 
     /**
-     * 带工具调用的对话请求。模型可以选择：正常回复文本，或要求调用工具（tool_calls）。
-     * messages 里 role 支持 "system"/"user"/"assistant"/"tool"，
-     * content 为对应用户/助手消息；assistant 的 tool_calls 由外层 Loop 传入（含 tool blocks）。
+     * 带工具调用的对话请求（SSE）。
+     * 模型若走 tool_calls：累积完整调用后返回，**不**把中间碎片推给 onDelta（避免把 JSON 参数打到气泡里）。
+     * 模型若直接给终答：content 增量走 onDelta，UI 打字机效果。
      */
     suspend fun chatWithTools(
         baseUrl: String,
@@ -246,80 +288,158 @@ class AiService @Inject constructor() {
         model: String,
         messages: List<ToolChatMessage>,
         tools: List<AgentToolSpec>,
+        onDelta: ((String) -> Unit)? = null,
+        thinkingLevel: String = "off",
+        onReasoning: ((String) -> Unit)? = null,
     ): ToolChatResult = withContextIo {
         val body = JSONObject().apply {
             put("model", model)
-            put("messages", JSONArray().apply {
-                messages.forEach { msg ->
-                    when (msg.role) {
-                        "assistant" -> {
-                            val obj = JSONObject()
-                                .put("role", "assistant")
-                                .put("content", msg.content ?: "")
-                            if (!msg.toolCalls.isNullOrEmpty()) {
-                                obj.put("tool_calls", JSONArray().apply {
-                                    msg.toolCalls.forEach { tc ->
-                                        put(JSONObject().apply {
-                                            put("id", tc.id)
-                                            put("type", "function")
-                                            put("function", JSONObject().apply {
-                                                put("name", tc.name)
-                                                put("arguments", tc.arguments)
-                                            })
-                                        })
-                                    }
-                                })
-                            }
-                            put(obj)
-                        }
-                        "tool" -> {
-                            put(JSONObject()
-                                .put("role", "tool")
-                                .put("tool_call_id", msg.toolCallId)
-                                .put("content", msg.content ?: ""))
-                        }
-                        else -> {
-                            put(JSONObject().put("role", msg.role).put("content", msg.content ?: ""))
-                        }
-                    }
-                }
-            })
-            put("temperature", 0.2)
+            put("messages", messagesToJson(messages))
+            put("temperature", if (thinkingLevel == "off") 0.2 else 0.4)
+            put("stream", true)
+            applyThinking(this, model, thinkingLevel)
             if (tools.isNotEmpty()) {
                 val arr = JSONArray()
                 tools.forEach { tool -> arr.put(tool.toJson()) }
                 put("tools", arr)
             }
         }
-        val resp = execute(baseUrl, apiKey, body)
-        if (resp.error != null) return@withContextIo ToolChatResult("", error = resp.error)
-
-        // 解析响应
-        val json = resp.rawJson
-        val choices = json?.optJSONArray("choices") ?: return@withContextIo ToolChatResult(resp.content)
-        val msg = choices.optJSONObject(0)?.optJSONObject("message")
-        val content = msg?.optString("content") ?: ""
-        val toolCalls = mutableListOf<AgentToolCall>()
-        val tcs = msg?.optJSONArray("tool_calls")
-        if (tcs != null) {
-            for (i in 0 until tcs.length()) {
-                val tc = tcs.optJSONObject(i) ?: continue
-                val func = tc.optJSONObject("function") ?: continue
-                toolCalls.add(
+        val url = buildChatUrl(baseUrl)
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        val call = client.newCall(request)
+        activeCalls.add(call)
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val err = resp.body?.string().orEmpty()
+                    return@withContextIo ToolChatResult("", error = "HTTP ${resp.code}: ${err.take(200)}")
+                }
+                val source = resp.body?.source()
+                    ?: return@withContextIo ToolChatResult("", error = "流式响应为空")
+                val contentSb = StringBuilder()
+                val toolsAcc = sortedMapOf<Int, ToolCallAcc>()
+                var sawTools = false
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank() || line.startsWith(":")) continue
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    runCatching {
+                        val json = JSONObject(data)
+                        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return@runCatching
+                        val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message") ?: return@runCatching
+                        val tcs = delta.optJSONArray("tool_calls")
+                        if (tcs != null && tcs.length() > 0) {
+                            sawTools = true
+                            for (i in 0 until tcs.length()) {
+                                val tc = tcs.optJSONObject(i) ?: continue
+                                val idx = if (tc.has("index")) tc.optInt("index") else i
+                                val acc = toolsAcc.getOrPut(idx) { ToolCallAcc() }
+                                if (tc.has("id")) {
+                                    val id = tc.optString("id")
+                                    if (id.isNotBlank() && id != "null") acc.id = id
+                                }
+                                val func = tc.optJSONObject("function")
+                                if (func != null) {
+                                    if (func.has("name")) {
+                                        val n = func.optString("name")
+                                        if (n.isNotBlank() && n != "null") acc.name.append(n)
+                                    }
+                                    if (func.has("arguments") && !func.isNull("arguments")) {
+                                        acc.args.append(func.optString("arguments"))
+                                    }
+                                }
+                            }
+                        }
+                        val reasoning = delta.optString("reasoning_content")
+                            .ifBlank { delta.optString("reasoning") }
+                        if (reasoning.isNotEmpty() && reasoning != "null") {
+                            onReasoning?.invoke(reasoning)
+                        }
+                        if (!delta.isNull("content") && delta.has("content")) {
+                            val c = delta.optString("content")
+                            if (c.isNotEmpty() && c != "null") {
+                                contentSb.append(c)
+                                if (!sawTools) onDelta?.invoke(c)
+                            }
+                        }
+                    }
+                }
+                val toolCalls = toolsAcc.values.mapIndexed { i, acc ->
                     AgentToolCall(
-                        id = tc.optString("id").ifEmpty { "call_$i" },
-                        name = func.optString("name"),
-                        arguments = func.optString("arguments"),
+                        id = acc.id.ifBlank { "call_$i" },
+                        name = acc.name.toString(),
+                        arguments = acc.args.toString().ifBlank { "{}" },
                     )
+                }.filter { it.name.isNotBlank() }
+                ToolChatResult(content = contentSb.toString(), toolCalls = toolCalls)
+            }
+        } catch (e: java.io.IOException) {
+            if (call.isCanceled()) ToolChatResult("", error = "已停止")
+            else ToolChatResult("", error = e.message ?: "网络错误")
+        } catch (e: Exception) {
+            ToolChatResult("", error = e.message ?: "网络错误")
+        } finally {
+            activeCalls.remove(call)
+        }
+    }
+
+    private class ToolCallAcc {
+        var id: String = ""
+        val name = StringBuilder()
+        val args = StringBuilder()
+    }
+
+    private fun messagesToJson(messages: List<ToolChatMessage>): JSONArray = JSONArray().apply {
+        messages.forEach { msg ->
+            when (msg.role) {
+                "assistant" -> {
+                    val obj = JSONObject()
+                        .put("role", "assistant")
+                        .put("content", msg.content ?: "")
+                    if (!msg.toolCalls.isNullOrEmpty()) {
+                        obj.put("tool_calls", JSONArray().apply {
+                            msg.toolCalls.forEach { tc ->
+                                put(JSONObject().apply {
+                                    put("id", tc.id)
+                                    put("type", "function")
+                                    put("function", JSONObject().apply {
+                                        put("name", tc.name)
+                                        put("arguments", tc.arguments)
+                                    })
+                                })
+                            }
+                        })
+                    }
+                    put(obj)
+                }
+                "tool" -> put(
+                    JSONObject()
+                        .put("role", "tool")
+                        .put("tool_call_id", msg.toolCallId)
+                        .put("content", msg.content ?: "")
                 )
+                else -> put(JSONObject().put("role", msg.role).put("content", msg.content ?: ""))
             }
         }
-        ToolChatResult(content = content, toolCalls = toolCalls)
     }
 
     private data class HttpResp(val content: String, val error: String?, val rawJson: JSONObject?)
 
-    private fun execute(baseUrl: String, apiKey: String, body: JSONObject): HttpResp {
+    private fun execute(
+        baseUrl: String,
+        apiKey: String,
+        body: JSONObject,
+        http: OkHttpClient = client,
+        vision: Boolean = false,
+    ): HttpResp {
         return try {
             val url = buildChatUrl(baseUrl)
             val request = Request.Builder()
@@ -328,7 +448,7 @@ class AiService @Inject constructor() {
                 .header("Content-Type", "application/json")
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-            val call = client.newCall(request)
+            val call = http.newCall(request)
             activeCalls.add(call)
             runCatching {
                 call.execute().use { resp ->
@@ -345,7 +465,13 @@ class AiService @Inject constructor() {
                     HttpResp(content, null, json)
                 }
             }.getOrElse { e ->
-                HttpResp("", e.message ?: "网络错误", null)
+                val timeout = e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException
+                val msg = when {
+                    timeout && vision -> "识图超时，请裁切图片后重试——不是「图里没有账单」。"
+                    timeout -> "请求超时"
+                    else -> e.message ?: "网络错误"
+                }
+                HttpResp("", msg, null)
             }.also { activeCalls.remove(call) }
         } catch (e: Exception) {
             HttpResp("", e.message ?: "网络错误", null)

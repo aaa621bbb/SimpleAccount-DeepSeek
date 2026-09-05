@@ -18,6 +18,9 @@ object Routes {
     const val ABOUT = "about"
     const val AI_SETTINGS = "ai_settings"
     const val AUTO_RECORD = "auto_record"
+    const val LEDGER_MANAGE = "ledger_manage"
+    const val APPEARANCE = "appearance"
+    const val STATS_LAYOUT = "stats_layout"
 
     fun edit(id: Long) = "edit/$id"
 }

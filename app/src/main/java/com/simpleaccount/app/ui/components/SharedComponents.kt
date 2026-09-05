@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,10 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
-/** 统一的卡片样式：白底 + 发丝边框 + 20dp 圆角 + 轻投影（扁平而有层次） */
+/** 统一卡片：暖白底 + 极淡描边 + 大圆角 + 轻投影 */
 @Composable
 fun SoftCard(
     modifier: Modifier = Modifier,
@@ -43,16 +43,16 @@ fun SoftCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
     ) {
         Column(content = content)
     }
 }
 
-/** 分类彩色圆底 + 图标（柔和色调：浅色底 + 彩色图标，比纯色底更精致） */
+/** 分类彩色圆底 + 图标 */
 @Composable
 fun CategoryIconCircle(
     category: Category?,
@@ -64,19 +64,19 @@ fun CategoryIconCircle(
         modifier = modifier
             .size(size.dp)
             .clip(CircleShape)
-            .background(color.copy(alpha = 0.16f)),
+            .background(color.copy(alpha = 0.14f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = IconMapper.map(category?.iconName ?: "more_horiz"),
             contentDescription = category?.name,
             tint = color,
-            modifier = Modifier.size((size * 0.55).dp)
+            modifier = Modifier.size((size * 0.52).dp)
         )
     }
 }
 
-/** 单条流水行：圆形图标 + 分类·商家(左侧)，日期+金额(右侧) */
+/** 单条流水行 */
 @Composable
 fun TransactionRow(
     transaction: Transaction,
@@ -86,11 +86,11 @@ fun TransactionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 11.dp)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CategoryIconCircle(category, size = 40)
+        CategoryIconCircle(category, size = 42)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -120,7 +120,7 @@ fun TransactionRow(
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (transaction.type == Transaction.TYPE_INCOME)
-                    Color(0xFF2ECC71) else MaterialTheme.colorScheme.onSurface
+                    LocalAppPalette.current.income else MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = transaction.date + (if (transaction.time.isNotBlank()) " " + transaction.time else ""),

@@ -50,13 +50,31 @@ data class StatsUiState(
     val calDayTx: Map<Int, List<CalDayTx>> = emptyMap(),
     /** 当前月份+收支口径下，每个分类的流水明细（供点击分类弹出账单） */
     val catTx: Map<String, List<CalDayTx>> = emptyMap(),
+    val topMerchants: List<Pair<String, Long>> = emptyList(),
+    val weekdayAvgFen: Long = 0L,
+    val weekendAvgFen: Long = 0L,
+    val dailyAvgFen: Long = 0L,
+    val lastMonthTotal: Long = 0L,
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) : ViewModel() {
+
+    val layout: StateFlow<StatsLayoutUi> = kotlinx.coroutines.flow.combine(
+        settingsRepository.statsOrderFlow,
+        settingsRepository.statsHiddenFlow,
+        settingsRepository.pieLegendCountFlow,
+    ) { order, hidden, count ->
+        StatsLayoutUi(
+            order = StatsModules.parseOrder(order),
+            hidden = StatsModules.parseHidden(hidden),
+            pieLegendCount = count,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsLayoutUi())
 
     private val monthFlow = kotlinx.coroutines.flow.MutableStateFlow(DateUtil.thisMonth())
     private val typeFlow = kotlinx.coroutines.flow.MutableStateFlow(Transaction.TYPE_EXPENSE)
@@ -152,6 +170,35 @@ class StatsViewModel @Inject constructor(
                 list.sortedByDescending { it.date }.map {
                     CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date)
                 }
+            },
+            topMerchants = filtered.filter { it.merchant.isNotBlank() }
+                .groupBy { it.merchant }
+                .mapValues { it.value.sumOf { t -> t.amount } }
+                .toList()
+                .sortedByDescending { it.second }
+                .take(8),
+            weekdayAvgFen = run {
+                val days = filtered.groupBy { it.date }.filterKeys {
+                    runCatching { java.time.LocalDate.parse(it).dayOfWeek.value }.getOrDefault(1) < 6
+                }
+                if (days.isEmpty()) 0L else days.values.sumOf { list -> list.sumOf { it.amount } } / days.size
+            },
+            weekendAvgFen = run {
+                val days = filtered.groupBy { it.date }.filterKeys {
+                    runCatching { java.time.LocalDate.parse(it).dayOfWeek.value }.getOrDefault(1) >= 6
+                }
+                if (days.isEmpty()) 0L else days.values.sumOf { list -> list.sumOf { it.amount } } / days.size
+            },
+            dailyAvgFen = run {
+                val days = filtered.groupBy { it.date }
+                if (days.isEmpty()) 0L else total / days.size
+            },
+            lastMonthTotal = run {
+                val last = runCatching {
+                    if (month == "all") null else java.time.YearMonth.parse(month).minusMonths(1).toString()
+                }.getOrNull()
+                if (last == null) 0L
+                else txs.filter { it.type == type && it.date.startsWith(last) }.sumOf { it.amount }
             }
         )
     }
