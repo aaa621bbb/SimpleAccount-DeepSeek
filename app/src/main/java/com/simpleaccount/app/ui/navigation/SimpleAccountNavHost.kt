@@ -153,7 +153,11 @@ private fun SimpleBottomBar(
     currentDestination: NavDestination?,
     navController: NavHostController,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+        tonalElevation = 0.dp,
+    ) {
         NavigationBar(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             tonalElevation = 0.dp,

@@ -50,10 +50,13 @@ interface TransactionDao {
 
     @Query("""
         SELECT * FROM transactions
-        WHERE (note LIKE '%' || :q || '%' OR category LIKE '%' || :q || '%' OR merchant LIKE '%' || :q || '%')
+        WHERE (note LIKE '%' || :q || '%' OR category LIKE '%' || :q || '%'
+            OR merchant LIKE '%' || :q || '%' OR product LIKE '%' || :q || '%')
+          AND (:monthPrefix IS NULL OR date LIKE :monthPrefix || '%')
+          AND (:category IS NULL OR category = :category)
         ORDER BY date DESC, id DESC
     """)
-    fun observeSearch(q: String): Flow<List<Transaction>>
+    fun observeSearch(q: String, monthPrefix: String?, category: String?): Flow<List<Transaction>>
 
     /** 全部（判重用） */
     @Query("SELECT * FROM transactions")

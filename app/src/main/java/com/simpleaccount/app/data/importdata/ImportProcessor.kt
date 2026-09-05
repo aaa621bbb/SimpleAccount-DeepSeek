@@ -1,8 +1,10 @@
 package com.simpleaccount.app.data.importdata
 
+import androidx.room.withTransaction
 import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.TransactionDao
+import com.simpleaccount.app.data.db.AppDatabase
 import com.simpleaccount.app.data.entity.ImportFailure
 import com.simpleaccount.app.data.entity.ImportLog
 import com.simpleaccount.app.data.entity.Transaction
@@ -19,6 +21,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ImportProcessor @Inject constructor(
+    private val db: AppDatabase,
     private val transactionDao: TransactionDao,
     private val importLogDao: ImportLogDao,
     private val importFailureDao: ImportFailureDao,
@@ -43,9 +46,17 @@ class ImportProcessor @Inject constructor(
         parseSkip: Int,
         failures: List<ParseFailure> = emptyList(),
         parsedSkipReasons: Map<String, Int> = emptyMap(),
-    ): ImportResult {
+    ): ImportResult = db.withTransaction {
         val batchId = UUID.randomUUID().toString()
-        val existing = transactionDao.getAll()
+        val allCache = transactionDao.getAll().toMutableList()
+        fun cacheReplace(t: Transaction) {
+            val i = allCache.indexOfFirst { it.id == t.id }
+            if (i >= 0) allCache[i] = t else allCache.add(t)
+        }
+        fun cacheRemove(id: Long) {
+            allCache.removeAll { it.id == id }
+        }
+        val existing = allCache
         val validNames = categoryRepository.getAll().map { it.name }.toHashSet()
 
         // 归一化判重（两级三集合）：
@@ -109,7 +120,7 @@ class ImportProcessor @Inject constructor(
             // 手动记账的同笔交易：按用户选择的优先级处理
             if (row.special != RowSpecial.REFUND) {
                 val key = baseKey(row.date, row.amount, row.merchant, row.product)
-                val manualHit = transactionDao.getAll().firstOrNull {
+                val manualHit = allCache.firstOrNull {
                     baseKey(it.date, it.amount, it.merchant, it.product) == key &&
                         it.source == Transaction.SOURCE_MANUAL
                 }
@@ -118,8 +129,30 @@ class ImportProcessor @Inject constructor(
                         skip("保留手动记账（优先级：手动为准）")
                         continue
                     } else {
-                        // 导入为准：删除同笔手动记录，由导入数据取代（信息更全：商家/单号/分类）
-                        transactionDao.deleteById(manualHit.id)
+                        // 导入为准：原地更新手动记录，不删后插
+                        val cat = classificationService.classifyForImport(
+                            row.merchant, row.product, row.sourceCategory, validNames, row.type
+                        )
+                        val updated = manualHit.copy(
+                            amount = row.amount,
+                            type = row.type,
+                            category = cat,
+                            date = row.date,
+                            time = row.time,
+                            merchant = row.merchant,
+                            product = row.product,
+                            paymentMethod = row.paymentMethod,
+                            tradeOrderNo = row.tradeOrderNo,
+                            merchantOrderNo = row.merchantOrderNo,
+                            source = Transaction.SOURCE_IMPORT,
+                            importBatchId = batchId,
+                            updatedAt = now
+                        )
+                        transactionDao.update(updated)
+                        cacheReplace(updated)
+                        markInserted(row)
+                        inserted++
+                        continue
                     }
                 }
             }
@@ -143,23 +176,23 @@ class ImportProcessor @Inject constructor(
                     val cat = classificationService.classifyForImport(
                         row.merchant, row.product, row.sourceCategory, validNames, row.type
                     )
-                    transactionDao.update(
-                        autoHit.copy(
-                            date = row.date,
-                            amount = row.amount,
-                            type = row.type,
-                            category = cat,
-                            merchant = row.merchant,
-                            product = row.product,
-                            paymentMethod = row.paymentMethod,
-                            tradeOrderNo = row.tradeOrderNo,
-                            merchantOrderNo = row.merchantOrderNo,
-                            time = row.time,
-                            source = Transaction.SOURCE_IMPORT,
-                            importBatchId = batchId,
-                            updatedAt = now
-                        )
+                    val updatedAuto = autoHit.copy(
+                        date = row.date,
+                        amount = row.amount,
+                        type = row.type,
+                        category = cat,
+                        merchant = row.merchant,
+                        product = row.product,
+                        paymentMethod = row.paymentMethod,
+                        tradeOrderNo = row.tradeOrderNo,
+                        merchantOrderNo = row.merchantOrderNo,
+                        time = row.time,
+                        source = Transaction.SOURCE_IMPORT,
+                        importBatchId = batchId,
+                        updatedAt = now
                     )
+                    transactionDao.update(updatedAuto)
+                    cacheReplace(updatedAuto)
                     skip("覆盖自动记账（以导入账单为准）")
                     continue
                 }
@@ -170,7 +203,7 @@ class ImportProcessor @Inject constructor(
                 val transferCategory = if (row.type == Transaction.TYPE_EXPENSE)
                     CategoryPresets.TRANSFER_CATEGORY
                 else CategoryPresets.DEFAULT_INCOME_CATEGORY
-                insertRow(row, row.amount, row.type, transferCategory, batchId, now, manualPriority)
+                cacheReplace(insertRow(row, row.amount, row.type, transferCategory, batchId, now))
                 markInserted(row)
                 inserted++
                 continue
@@ -188,7 +221,7 @@ class ImportProcessor @Inject constructor(
             val cat = classificationService.classifyForImport(
                 row.merchant, row.product, row.sourceCategory, validNames, row.type
             )
-            insertRow(row, row.amount, row.type, cat, batchId, now, manualPriority)
+            cacheReplace(insertRow(row, row.amount, row.type, cat, batchId, now))
             markInserted(row)
             inserted++
         }
@@ -210,15 +243,18 @@ class ImportProcessor @Inject constructor(
                 // 该付款已通过 dedupKey 入账，找到它的 Transaction 并减少金额
                 val targetRow = rows[target.first]
                 val tKey = dedupKey(targetRow)
-                val existingT = transactionDao.getAll()
+                val existingT = allCache
                     .firstOrNull { dedupKey(it) == tKey && it.source == Transaction.SOURCE_IMPORT && it.importBatchId == batchId }
                 if (existingT != null && existingT.amount >= refundAmount) {
                     val newAmount = existingT.amount - refundAmount
                     if (newAmount <= 0) {
                         // 扣减到 0：删除该付款记录（退款完全抵消）
                         transactionDao.delete(existingT)
+                        cacheRemove(existingT.id)
                     } else {
-                        transactionDao.update(existingT.copy(amount = newAmount))
+                        val updated = existingT.copy(amount = newAmount)
+                        transactionDao.update(updated)
+                        cacheReplace(updated)
                     }
                     markInserted(row)
                     skip("退款与同商家付款抵消")
@@ -226,13 +262,12 @@ class ImportProcessor @Inject constructor(
                 }
             }
             // 找不到可抵消的付款 → 记入收入，分类"退款"
-            insertRow(row, refundAmount, Transaction.TYPE_INCOME, CategoryPresets.REFUND_CATEGORY, batchId, now, manualPriority)
+            cacheReplace(insertRow(row, refundAmount, Transaction.TYPE_INCOME, CategoryPresets.REFUND_CATEGORY, batchId, now))
             markInserted(row)
             inserted++
         }
 
-        val refreshed = transactionDao.getAll()
-        val lastDate = refreshed.maxOfOrNull { it.date }
+        val lastDate = allCache.maxOfOrNull { it.date }
 
         importLogDao.insert(
             ImportLog(
@@ -260,7 +295,7 @@ class ImportProcessor @Inject constructor(
             )
         }
 
-        return ImportResult(
+        ImportResult(
             inserted = inserted,
             skipped = skipped + parseSkip,
             failed = failures.size,
@@ -309,7 +344,7 @@ class ImportProcessor @Inject constructor(
     private fun tripleKey(date: String, amount: Long, merchant: String): String =
         "$date|$amount|${normalizeText(merchant)}"
 
-    /** 插入一条导入交易记录（若同基础键存在手动记录且导入优先，则覆盖为导入记录）。 */
+    /** 插入一条导入交易。手动命中已在主循环原地更新，这里只 insert。 */
     private suspend fun insertRow(
         row: ParsedRow,
         amount: Long,
@@ -317,49 +352,24 @@ class ImportProcessor @Inject constructor(
         category: String,
         batchId: String,
         now: Long,
-        manualPriority: Boolean,
-    ) {
-        val key = baseKey(row.date, row.amount, row.merchant, row.product)
-        val existingManual = if (manualPriority) null else transactionDao.getAll().firstOrNull {
-            baseKey(it.date, it.amount, it.merchant, it.product) == key && it.source == Transaction.SOURCE_MANUAL
-        }
-        if (existingManual != null) {
-            transactionDao.update(
-                existingManual.copy(
-                    amount = amount,
-                    type = type,
-                    category = category,
-                    date = row.date,
-                    time = row.time,
-                    merchant = row.merchant,
-                    product = row.product,
-                    paymentMethod = row.paymentMethod,
-                    tradeOrderNo = row.tradeOrderNo,
-                    merchantOrderNo = row.merchantOrderNo,
-                    source = Transaction.SOURCE_IMPORT,
-                    importBatchId = batchId,
-                    updatedAt = now
-                )
-            )
-        } else {
-            transactionDao.insert(
-                Transaction(
-                    amount = amount,
-                    type = type,
-                    category = category,
-                    date = row.date,
-                    time = row.time,
-                    merchant = row.merchant,
-                    product = row.product,
-                    paymentMethod = row.paymentMethod,
-                    tradeOrderNo = row.tradeOrderNo,
-                    merchantOrderNo = row.merchantOrderNo,
-                    source = Transaction.SOURCE_IMPORT,
-                    importBatchId = batchId,
-                    createdAt = now,
-                    updatedAt = now
-                )
-            )
-        }
+    ): Transaction {
+        val t = Transaction(
+            amount = amount,
+            type = type,
+            category = category,
+            date = row.date,
+            time = row.time,
+            merchant = row.merchant,
+            product = row.product,
+            paymentMethod = row.paymentMethod,
+            tradeOrderNo = row.tradeOrderNo,
+            merchantOrderNo = row.merchantOrderNo,
+            source = Transaction.SOURCE_IMPORT,
+            importBatchId = batchId,
+            createdAt = now,
+            updatedAt = now
+        )
+        val id = transactionDao.insert(t)
+        return t.copy(id = id)
     }
 }

@@ -31,10 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,13 +41,11 @@ import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.ui.components.SoftCard
 import com.simpleaccount.app.ui.components.parseColor
+import com.simpleaccount.app.ui.theme.AppColors
 import com.simpleaccount.app.util.MoneyUtil
 
 /**
- * 每日花销日历（支付宝风格）：
- * - 月份前后切换
- * - 每个日期格显示当天支出（红）/收入（绿）
- * - 点击某天弹出当日流水明细
+ * 每日花销日历：热力底色 + 固定 6 行（月份切换高度不变，日历不再上下跳）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,11 +58,10 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
-        // 头部：标题 + 月份切换
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 18.dp, end = 6.dp, top = 4.dp),
+                .padding(start = 18.dp, end = 6.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -90,47 +83,65 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
             }
         }
 
-        // 星期表头（周一开始）
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
-            listOf("一", "二", "三", "四", "五", "六", "日").forEach { w ->
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
+            listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { i, w ->
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text(w, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        w,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (i >= 5) AppColors.Champagne
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
 
-        // 日期网格
         val ym = java.time.YearMonth.of(state.calYear, state.calMonthNum)
         val leading = ym.atDay(1).dayOfWeek.value - 1
+        // 固定 6 周 × 7 格 = 42，月份切换日历高度不变
         val cells: List<Int?> = List(leading) { null } + (1..ym.lengthOfMonth()).toList()
+        val padded = cells + List((42 - cells.size).coerceAtLeast(0)) { null }
+
+        val maxShown = remember(state.calDayTotals, state.type) {
+            state.calDayTotals.values.maxOfOrNull {
+                if (state.type == Transaction.TYPE_EXPENSE) it.expense else it.income
+            }?.coerceAtLeast(1L) ?: 1L
+        }
+        val heat = if (state.type == Transaction.TYPE_EXPENSE) AppColors.Expense else AppColors.Income
         val today = java.time.LocalDate.now()
-        cells.chunked(7).forEach { week ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
-                (1..7).forEach { col ->
-                    val day = week.getOrNull(col - 1)
+
+        padded.chunked(7).forEach { week ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                week.forEach { day ->
                     val isToday = day != null &&
                         today.year == state.calYear &&
                         today.monthValue == state.calMonthNum &&
                         today.dayOfMonth == day
+                    val totals = day?.let { state.calDayTotals[it] }
+                    val shown = if (state.type == Transaction.TYPE_EXPENSE) totals?.expense else totals?.income
+                    val intensity = if (shown != null && shown > 0) {
+                        (shown.toFloat() / maxShown).coerceIn(0.12f, 0.55f)
+                    } else 0f
                     Box(
                         Modifier
                             .weight(1f)
-                            .height(56.dp)
-                            .padding(horizontal = 1.dp, vertical = 1.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .height(52.dp)
+                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                            .clip(RoundedCornerShape(10.dp))
                             .background(
                                 when {
-                                    isToday -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                    day != null -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                    else -> Color.Transparent
+                                    day == null -> Color.Transparent
+                                    intensity > 0f -> heat.copy(alpha = intensity)
+                                    isToday -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
                                 }
                             )
                             .then(
-                                // 每格细边框，形成独立格子
-                                if (day != null) Modifier.border(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
-                                    RoundedCornerShape(8.dp)
+                                if (isToday) Modifier.border(
+                                    1.5.dp,
+                                    AppColors.Champagne,
+                                    RoundedCornerShape(10.dp)
                                 ) else Modifier
                             )
                             .then(
@@ -143,25 +154,21 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
                                     "$day",
-                                    fontSize = 14.sp,
-                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (intensity > 0.35f) Color.White
+                                    else MaterialTheme.colorScheme.onSurface
                                 )
-                                val totals = state.calDayTotals[day]
-                                // 金额跟随顶部支出/收入口径：支出页显示支出额，收入页显示收入额
-                                val shown = if (state.type == Transaction.TYPE_EXPENSE) totals?.expense else totals?.income
-                                val shownColor = if (state.type == Transaction.TYPE_EXPENSE) Color(0xFFE53935) else Color(0xFF2ECC71)
                                 if (shown != null && shown > 0) {
                                     Text(
                                         (if (state.type == Transaction.TYPE_EXPENSE) "-" else "+") +
-                                            MoneyUtil.fenToYuan(shown),
-                                        fontSize = 10.sp,
+                                            compactYuan(shown),
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = shownColor,
+                                        color = if (intensity > 0.35f) Color.White.copy(alpha = 0.92f)
+                                        else heat,
                                         maxLines = 1
                                     )
-                                } else {
-                                    Spacer(Modifier.height(12.dp))
                                 }
                             }
                         }
@@ -170,10 +177,9 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
     }
 
-    // 点击某天 → 当日流水明细弹层
     if (selectedDay != null) {
         val day = selectedDay!!
         val txList = state.calDayTx[day] ?: emptyList()
@@ -188,7 +194,6 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                     .padding(bottom = 24.dp)
             ) {
                 val dateLabel = "${state.calYear}-${state.calMonthNum.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}"
-                // 排序切换：时间/金额
                 var byAmount by remember { mutableStateOf(false) }
                 val sortedList = if (byAmount) txList.sortedByDescending { it.amount } else txList
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -254,7 +259,7 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                                         "¥" + MoneyUtil.fenToYuan(t.amount),
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp,
-                                    color = if (t.type == Transaction.TYPE_INCOME) Color(0xFF2ECC71)
+                                    color = if (t.type == Transaction.TYPE_INCOME) AppColors.Income
                                     else MaterialTheme.colorScheme.onSurface
                                 )
                             }
@@ -265,3 +270,15 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
         }
     }
 }
+
+private fun compactYuan(fen: Long): String {
+    val y = fen / 100.0
+    return when {
+        y >= 10000 -> "%.1f万".format(y / 10000)
+        y >= 1000 -> "%.0f".format(y)
+        y >= 100 -> "%.0f".format(y)
+        else -> MoneyUtil.fenToYuan(fen)
+    }
+}
+
+

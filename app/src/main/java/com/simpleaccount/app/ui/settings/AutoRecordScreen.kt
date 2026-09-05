@@ -2,6 +2,8 @@ package com.simpleaccount.app.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,9 +23,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -109,6 +115,14 @@ fun AutoRecordScreen(
     val state by viewModel.state.collectAsState()
 
     LaunchedEffect(Unit) { viewModel.load(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) viewModel.load(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
 
     Scaffold(
         topBar = {
@@ -168,6 +182,38 @@ fun AutoRecordScreen(
             }
             HorizontalDivider(Modifier.padding(start = 16.dp))
 
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("忽略电池优化", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "小米/华为等机会把后台服务杀掉，支付通知就记不上。建议允许本应用不优化。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = {
+                    runCatching {
+                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                        if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                            )
+                        } else {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                    }
+                }) { Text("去设置") }
+            }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+
             // 模拟测试：跑内置通知样本，验证解析/去重/入库全链路
             val testOutput by viewModel.testOutput.collectAsState()
             TextButton(onClick = { viewModel.runSimulation() }) {
@@ -196,11 +242,11 @@ fun AutoRecordScreen(
                 Text("说明", fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "· 监听微信/支付宝的支付通知，自动解析金额并按你的分类规则入账；\n" +
-                        "· 通知里一般只有金额，商家名可能不完整，导入账单时会自动覆盖补全（以账单为准）；\n" +
-                        "· 60 秒内相同金额的重复通知只记一笔；\n" +
-                        "· 不读取任何短信；解析失败的通知直接忽略。\n" +
-                        "· 建议同时把本 App 加入系统后台白名单，避免服务被清理。",
+                    "· 监听微信/支付宝/云闪付/钱包的支付通知，自动解析金额入账；\n" +
+                        "· 必须同时打开「自动记账」开关，并授予通知使用权，否则通知来了也不会记；\n" +
+                        "· 通知里一般只有金额，商家名可能不完整，导入账单时会自动覆盖补全；\n" +
+                        "· 60 秒内相同金额的重复通知只记一笔；不读取任何短信；\n" +
+                        "· 小米/华为请把本 App 加入后台白名单并关闭电池优化，否则服务会被清掉。",
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

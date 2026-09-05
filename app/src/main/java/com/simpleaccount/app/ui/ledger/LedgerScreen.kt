@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import com.simpleaccount.app.ui.components.RowUi
 import com.simpleaccount.app.ui.components.TransactionRow
 import com.simpleaccount.app.ui.navigation.Routes
 
@@ -151,6 +152,10 @@ fun LedgerScreen(
                 }
             }
 
+            // 按金额排序 + 选中全部月份 = 全局金额排行，不再按月分段
+            // （否则每段内部才按金额排，看起来还是"月份里的排序"）
+            val flatAmountView = state.sortByAmount && filter.month == null
+
             if (grouped.isEmpty()) {
                 Spacer(Modifier.height(48.dp))
                 Text(
@@ -166,40 +171,39 @@ fun LedgerScreen(
                     Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)
                 ) {
-                    grouped.forEach { (month, rows) ->
-                        item(key = "h_$month") {
-                            // 月份横幅
-                            Row(
-                                Modifier
-                                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    "$month · ${rows.size} 笔",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
+                    if (flatAmountView) {
+                        items(state.rows, key = { it.transaction.id }) { row ->
+                            LedgerRowLine(
+                                row = row,
+                                onDelete = { pendingDelete = row.transaction.id },
+                                onOpen = { navController.navigate(Routes.edit(row.transaction.id)) }
+                            )
                         }
-                        items(rows, key = { it.transaction.id }) { row ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.weight(1f)) {
-                                    TransactionRow(
-                                        transaction = row.transaction,
-                                        category = row.category,
-                                        onClick = { navController.navigate(Routes.edit(row.transaction.id)) }
+                    } else {
+                        grouped.forEach { (month, rows) ->
+                            item(key = "h_$month") {
+                                // 月份横幅
+                                Row(
+                                    Modifier
+                                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
+                                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        "$month · ${rows.size} 笔",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                 }
-                                IconButton(onClick = { pendingDelete = row.transaction.id }) {
-                                    Icon(
-                                        Icons.Filled.Delete,
-                                        contentDescription = "删除",
-                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-                                    )
-                                }
+                            }
+                            items(rows, key = { it.transaction.id }) { row ->
+                                LedgerRowLine(
+                                    row = row,
+                                    onDelete = { pendingDelete = row.transaction.id },
+                                    onOpen = { navController.navigate(Routes.edit(row.transaction.id)) }
+                                )
                             }
                         }
                     }
@@ -222,5 +226,26 @@ fun LedgerScreen(
                 TextButton(onClick = { pendingDelete = null }) { Text("取消") }
             }
         )
+    }
+}
+
+/** 账本行 + 删除按钮（金额扁平视图与月份分组视图共用） */
+@Composable
+private fun LedgerRowLine(row: RowUi, onDelete: () -> Unit, onOpen: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            TransactionRow(
+                transaction = row.transaction,
+                category = row.category,
+                onClick = onOpen
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "删除",
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+            )
+        }
     }
 }

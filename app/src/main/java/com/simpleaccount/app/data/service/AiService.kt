@@ -236,9 +236,9 @@ class AiService @Inject constructor() {
     }
 
     /**
-     * 带工具调用的对话请求。模型可以选择：正常回复文本，或要求调用工具（tool_calls）。
-     * messages 里 role 支持 "system"/"user"/"assistant"/"tool"，
-     * content 为对应用户/助手消息；assistant 的 tool_calls 由外层 Loop 传入（含 tool blocks）。
+     * 带工具调用的对话请求（SSE）。
+     * 模型若走 tool_calls：累积完整调用后返回，**不**把中间碎片推给 onDelta（避免把 JSON 参数打到气泡里）。
+     * 模型若直接给终答：content 增量走 onDelta，UI 打字机效果。
      */
     suspend fun chatWithTools(
         baseUrl: String,
@@ -246,75 +246,139 @@ class AiService @Inject constructor() {
         model: String,
         messages: List<ToolChatMessage>,
         tools: List<AgentToolSpec>,
+        onDelta: ((String) -> Unit)? = null,
     ): ToolChatResult = withContextIo {
         val body = JSONObject().apply {
             put("model", model)
-            put("messages", JSONArray().apply {
-                messages.forEach { msg ->
-                    when (msg.role) {
-                        "assistant" -> {
-                            val obj = JSONObject()
-                                .put("role", "assistant")
-                                .put("content", msg.content ?: "")
-                            if (!msg.toolCalls.isNullOrEmpty()) {
-                                obj.put("tool_calls", JSONArray().apply {
-                                    msg.toolCalls.forEach { tc ->
-                                        put(JSONObject().apply {
-                                            put("id", tc.id)
-                                            put("type", "function")
-                                            put("function", JSONObject().apply {
-                                                put("name", tc.name)
-                                                put("arguments", tc.arguments)
-                                            })
-                                        })
-                                    }
-                                })
-                            }
-                            put(obj)
-                        }
-                        "tool" -> {
-                            put(JSONObject()
-                                .put("role", "tool")
-                                .put("tool_call_id", msg.toolCallId)
-                                .put("content", msg.content ?: ""))
-                        }
-                        else -> {
-                            put(JSONObject().put("role", msg.role).put("content", msg.content ?: ""))
-                        }
-                    }
-                }
-            })
+            put("messages", messagesToJson(messages))
             put("temperature", 0.2)
+            put("stream", true)
             if (tools.isNotEmpty()) {
                 val arr = JSONArray()
                 tools.forEach { tool -> arr.put(tool.toJson()) }
                 put("tools", arr)
             }
         }
-        val resp = execute(baseUrl, apiKey, body)
-        if (resp.error != null) return@withContextIo ToolChatResult("", error = resp.error)
-
-        // 解析响应
-        val json = resp.rawJson
-        val choices = json?.optJSONArray("choices") ?: return@withContextIo ToolChatResult(resp.content)
-        val msg = choices.optJSONObject(0)?.optJSONObject("message")
-        val content = msg?.optString("content") ?: ""
-        val toolCalls = mutableListOf<AgentToolCall>()
-        val tcs = msg?.optJSONArray("tool_calls")
-        if (tcs != null) {
-            for (i in 0 until tcs.length()) {
-                val tc = tcs.optJSONObject(i) ?: continue
-                val func = tc.optJSONObject("function") ?: continue
-                toolCalls.add(
+        val url = buildChatUrl(baseUrl)
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        val call = client.newCall(request)
+        activeCalls.add(call)
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val err = resp.body?.string().orEmpty()
+                    return@withContextIo ToolChatResult("", error = "HTTP ${resp.code}: ${err.take(200)}")
+                }
+                val source = resp.body?.source()
+                    ?: return@withContextIo ToolChatResult("", error = "流式响应为空")
+                val contentSb = StringBuilder()
+                val toolsAcc = sortedMapOf<Int, ToolCallAcc>()
+                var sawTools = false
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank() || line.startsWith(":")) continue
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    runCatching {
+                        val json = JSONObject(data)
+                        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return@runCatching
+                        val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message") ?: return@runCatching
+                        val tcs = delta.optJSONArray("tool_calls")
+                        if (tcs != null && tcs.length() > 0) {
+                            sawTools = true
+                            for (i in 0 until tcs.length()) {
+                                val tc = tcs.optJSONObject(i) ?: continue
+                                val idx = if (tc.has("index")) tc.optInt("index") else i
+                                val acc = toolsAcc.getOrPut(idx) { ToolCallAcc() }
+                                if (tc.has("id")) {
+                                    val id = tc.optString("id")
+                                    if (id.isNotBlank() && id != "null") acc.id = id
+                                }
+                                val func = tc.optJSONObject("function")
+                                if (func != null) {
+                                    if (func.has("name")) {
+                                        val n = func.optString("name")
+                                        if (n.isNotBlank() && n != "null") acc.name.append(n)
+                                    }
+                                    if (func.has("arguments") && !func.isNull("arguments")) {
+                                        acc.args.append(func.optString("arguments"))
+                                    }
+                                }
+                            }
+                        }
+                        if (!delta.isNull("content") && delta.has("content")) {
+                            val c = delta.optString("content")
+                            if (c.isNotEmpty() && c != "null") {
+                                contentSb.append(c)
+                                if (!sawTools) onDelta?.invoke(c)
+                            }
+                        }
+                    }
+                }
+                val toolCalls = toolsAcc.values.mapIndexed { i, acc ->
                     AgentToolCall(
-                        id = tc.optString("id").ifEmpty { "call_$i" },
-                        name = func.optString("name"),
-                        arguments = func.optString("arguments"),
+                        id = acc.id.ifBlank { "call_$i" },
+                        name = acc.name.toString(),
+                        arguments = acc.args.toString().ifBlank { "{}" },
                     )
+                }.filter { it.name.isNotBlank() }
+                ToolChatResult(content = contentSb.toString(), toolCalls = toolCalls)
+            }
+        } catch (e: java.io.IOException) {
+            if (call.isCanceled()) ToolChatResult("", error = "已停止")
+            else ToolChatResult("", error = e.message ?: "网络错误")
+        } catch (e: Exception) {
+            ToolChatResult("", error = e.message ?: "网络错误")
+        } finally {
+            activeCalls.remove(call)
+        }
+    }
+
+    private class ToolCallAcc {
+        var id: String = ""
+        val name = StringBuilder()
+        val args = StringBuilder()
+    }
+
+    private fun messagesToJson(messages: List<ToolChatMessage>): JSONArray = JSONArray().apply {
+        messages.forEach { msg ->
+            when (msg.role) {
+                "assistant" -> {
+                    val obj = JSONObject()
+                        .put("role", "assistant")
+                        .put("content", msg.content ?: "")
+                    if (!msg.toolCalls.isNullOrEmpty()) {
+                        obj.put("tool_calls", JSONArray().apply {
+                            msg.toolCalls.forEach { tc ->
+                                put(JSONObject().apply {
+                                    put("id", tc.id)
+                                    put("type", "function")
+                                    put("function", JSONObject().apply {
+                                        put("name", tc.name)
+                                        put("arguments", tc.arguments)
+                                    })
+                                })
+                            }
+                        })
+                    }
+                    put(obj)
+                }
+                "tool" -> put(
+                    JSONObject()
+                        .put("role", "tool")
+                        .put("tool_call_id", msg.toolCallId)
+                        .put("content", msg.content ?: "")
                 )
+                else -> put(JSONObject().put("role", msg.role).put("content", msg.content ?: ""))
             }
         }
-        ToolChatResult(content = content, toolCalls = toolCalls)
     }
 
     private data class HttpResp(val content: String, val error: String?, val rawJson: JSONObject?)

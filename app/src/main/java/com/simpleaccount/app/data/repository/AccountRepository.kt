@@ -31,7 +31,8 @@ class AccountRepository @Inject constructor(
     fun observeFiltered(monthPrefix: String?, category: String?): Flow<List<Transaction>> =
         transactionDao.observeFiltered(monthPrefix, category)
 
-    fun observeSearch(q: String): Flow<List<Transaction>> = transactionDao.observeSearch(q)
+    fun observeSearch(q: String, monthPrefix: String? = null, category: String? = null): Flow<List<Transaction>> =
+        transactionDao.observeSearch(q, monthPrefix, category)
 
     suspend fun getAll(): List<Transaction> = transactionDao.getAll()
 

@@ -32,6 +32,7 @@ class SettingsRepository @Inject constructor(
         const val KEY_AI_BASE_URL = "ai_base_url"
         const val KEY_AI_MODEL = "ai_model"
         const val KEY_AI_KEY = "ai_api_key"
+        const val KEY_AI_PROVIDER_ID = "ai_provider_id"
 
         /** 识图 API Key（独立于主 Key，存加密 prefs） */
         const val KEY_VISION_KEY = "vision_api_key"
@@ -92,6 +93,9 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setModel(model: String) = setSetting(KEY_AI_MODEL, model)
     fun model(): String = readSetting(KEY_AI_MODEL) ?: DEFAULT_MODEL
+
+    suspend fun setProviderId(id: String) = setSetting(KEY_AI_PROVIDER_ID, id)
+    fun providerId(): String = readSetting(KEY_AI_PROVIDER_ID).orEmpty()
 
     fun apiKey(): String = prefs.getString(KEY_AI_KEY, "") ?: ""
     fun setApiKey(key: String) {

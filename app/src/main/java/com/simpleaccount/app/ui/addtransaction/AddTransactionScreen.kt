@@ -44,10 +44,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -85,6 +87,7 @@ fun AddTransactionScreen(
 
     var showCategorySheet by remember { mutableStateOf(false) }
     var showDateSheet by remember { mutableStateOf(false) }
+    var showTimeSheet by remember { mutableStateOf(false) }
     var showMerchantSheet by remember { mutableStateOf(false) }
     var showProductSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
@@ -168,6 +171,14 @@ fun AddTransactionScreen(
             )
             Spacer(Modifier.height(12.dp))
 
+            PickerRow(
+                label = "时间",
+                value = state.time.ifBlank { "现在" },
+                isPlaceholder = state.time.isBlank(),
+                onClick = { showTimeSheet = true }
+            )
+            Spacer(Modifier.height(12.dp))
+
             // 商家：点选（搜索 + 候选 + 其他）
             PickerRow(
                 label = "商家（可选）",
@@ -237,6 +248,17 @@ fun AddTransactionScreen(
             onDismiss = { showDateSheet = false },
             onConfirm = { y, m, d ->
                 vm.onDateSet(y, m, d); showDateSheet = false
+            }
+        )
+    }
+
+    if (showTimeSheet) {
+        TimePickerSheet(
+            initial = state.time,
+            onDismiss = { showTimeSheet = false },
+            onConfirm = { hhmm ->
+                vm.onTimeChange(hhmm)
+                showTimeSheet = false
             }
         )
     }
@@ -402,6 +424,51 @@ private fun DatePickerSheet(
             headline = null,
             showModeToggle = false
         )
+    }
+}
+
+/** 时间选择：Material3 时钟弹层（24 小时制）；未选过时间时从当前时刻开始 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickerSheet(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val now = java.time.LocalTime.now()
+    val parts = initial.split(":").mapNotNull { it.toIntOrNull() }
+    val tpState = rememberTimePickerState(
+        initialHour = parts.getOrElse(0) { now.hour }.coerceIn(0, 23),
+        initialMinute = parts.getOrElse(1) { now.minute }.coerceIn(0, 59),
+        is24Hour = true
+    )
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "选择时间",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+            TimePicker(state = tpState)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) { Text("取消") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { onConfirm("%02d:%02d".format(tpState.hour, tpState.minute)) }) {
+                    Text("确定")
+                }
+            }
+        }
     }
 }
 

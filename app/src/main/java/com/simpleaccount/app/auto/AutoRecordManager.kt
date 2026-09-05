@@ -44,9 +44,10 @@ class AutoRecordManager @Inject constructor(
         }
         lastInsertAt[key] = now
 
+        val merchant = com.simpleaccount.app.util.MerchantMatcher.stripEllipsis(parsed.merchant)
         val validNames = categoryRepository.getAll().map { it.name }.toSet()
         val category = classificationService.classifyForImport(
-            parsed.merchant, "", "", validNames, parsed.type
+            merchant, "", "", validNames, parsed.type
         )
         val id = accountRepository.insert(
             Transaction(
@@ -54,7 +55,7 @@ class AutoRecordManager @Inject constructor(
                 type = parsed.type,
                 category = category,
                 date = DateUtil.today(),
-                merchant = parsed.merchant,
+                merchant = merchant,
                 product = "",
                 source = Transaction.SOURCE_AUTO,
             )
