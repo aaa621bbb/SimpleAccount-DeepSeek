@@ -26,7 +26,7 @@ data class AddUiState(
     val selectedCategory: Category? = null,
     val date: String = DateUtil.today(),
     /** 时间 HH:mm（手动记默认当前时刻，可改） */
-    val time: String = "",
+    val time: String = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) },
     val merchant: String = "",
     val product: String = "",
     val note: String = "",
@@ -39,8 +39,12 @@ data class AddUiState(
 class AddTransactionViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    val dateStyle = settingsRepository.datePickerFlow
+    val timeStyle = settingsRepository.timePickerFlow
 
     private val _state = MutableStateFlow(AddUiState())
     val state: StateFlow<AddUiState> = _state.asStateFlow()

@@ -1,9 +1,13 @@
 package com.simpleaccount.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -39,7 +43,20 @@ private sealed class MdBlock {
     object Hr : MdBlock()
 }
 
-private fun parseMarkdown(src: String): List<MdBlock> {
+private fun isCjk(c: Char) = c in '\u4e00'..'\u9fff'
+
+/** 模型把「一千二百」拆成一字一行时，拼回连贯句子。 */
+private fun coalesceShards(src: String): String {
+    val lines = src.lines()
+    val nonempty = lines.filter { it.isNotBlank() }
+    if (nonempty.size >= 4 && nonempty.count { it.trim().length <= 2 } * 2 >= nonempty.size) {
+        return nonempty.joinToString("") { it.trim() }
+    }
+    return src
+}
+
+private fun parseMarkdown(raw: String): List<MdBlock> {
+    val src = coalesceShards(raw)
     val blocks = mutableListOf<MdBlock>()
     val lines = src.lines()
     var i = 0
@@ -117,7 +134,11 @@ private fun parseMarkdown(src: String): List<MdBlock> {
                         nt.startsWith("- ") || nt.startsWith("> ") || nt == "---" ||
                         Regex("^\\d+[.、)] ").containsMatchIn(nt)
                     ) break
-                    sb.append('\n').append(nt)
+                    if (sb.isNotEmpty() && isCjk(sb.last()) && nt.isNotEmpty() && isCjk(nt.first())) {
+                        sb.append(nt)
+                    } else {
+                        sb.append(' ').append(nt)
+                    }
                     i++
                 }
                 blocks.add(MdBlock.Paragraph(sb.toString()))
@@ -148,6 +169,61 @@ private fun inlineStyle(text: String, baseColor: androidx.compose.ui.graphics.Co
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MdTable(header: List<String>, rows: List<List<String>>, baseColor: androidx.compose.ui.graphics.Color) {
+    val line = baseColor.copy(alpha = 0.18f)
+    val cols = header.size.coerceAtLeast(rows.maxOfOrNull { it.size } ?: 0)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, line, RoundedCornerShape(10.dp))
+    ) {
+        MdTableRow(header, cols, isHeader = true, zebra = false, line = line, baseColor = baseColor)
+        Box(Modifier.fillMaxWidth().height(1.dp).background(line))
+        rows.forEachIndexed { ri, row ->
+            if (ri > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(line))
+            MdTableRow(row, cols, isHeader = false, zebra = ri % 2 == 1, line = line, baseColor = baseColor)
+        }
+    }
+}
+
+@Composable
+private fun MdTableRow(
+    cells: List<String>,
+    cols: Int,
+    isHeader: Boolean,
+    zebra: Boolean,
+    line: androidx.compose.ui.graphics.Color,
+    baseColor: androidx.compose.ui.graphics.Color,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(
+                when {
+                    isHeader -> baseColor.copy(alpha = 0.10f)
+                    zebra -> baseColor.copy(alpha = 0.04f)
+                    else -> androidx.compose.ui.graphics.Color.Transparent
+                }
+            )
+    ) {
+        for (c in 0 until cols) {
+            if (c > 0) {
+                Box(Modifier.width(1.dp).fillMaxHeight().background(line))
+            }
+            Text(
+                inlineStyle(cells.getOrElse(c) { "" }, baseColor),
+                fontSize = 12.5.sp,
+                fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                color = baseColor,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp)
+            )
         }
     }
 }
@@ -233,45 +309,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, baseColor: android
 
                 is MdBlock.Table -> {
                     Spacer(Modifier.height(4.dp))
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(baseColor.copy(alpha = 0.05f))
-                    ) {
-                        // 表头
-                        Row(Modifier.fillMaxWidth().background(baseColor.copy(alpha = 0.08f)).padding(vertical = 6.dp, horizontal = 8.dp)) {
-                            block.header.forEach { cell ->
-                                Text(
-                                    inlineStyle(cell, baseColor),
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = baseColor,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
-                        // 数据行（斑马纹）
-                        block.rows.forEachIndexed { ri, row ->
-                            val zebra = if (ri % 2 == 1) baseColor.copy(alpha = 0.04f) else androidx.compose.ui.graphics.Color.Transparent
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(zebra)
-                                    .padding(vertical = 5.dp, horizontal = 8.dp)
-                            ) {
-                                val cols = block.header.size.coerceAtLeast(row.size)
-                                for (c in 0 until cols) {
-                                    Text(
-                                        inlineStyle(row.getOrElse(c) { "" }, baseColor),
-                                        fontSize = 12.5.sp,
-                                        color = baseColor,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    MdTable(block.header, block.rows, baseColor)
                     Spacer(Modifier.height(4.dp))
                 }
             }
