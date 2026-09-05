@@ -1,12 +1,18 @@
 package com.simpleaccount.app.data.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
  * 流水记录。金额一律以"分"(Long) 存储，避免浮点误差。
+ * ledgerId 索引必须与 MIGRATION_6_7 里建的 index_transactions_ledgerId 一致，
+ * 否则 Room 迁移后校验（indices 精确比对）会报 "Migration didn't properly handle" 直接闪退。
  */
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    indices = [Index(value = ["ledgerId"])]
+)
 data class Transaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     /** 金额，单位为分（1元 = 100分），恒为正数 */
@@ -28,6 +34,8 @@ data class Transaction(
     val tradeOrderNo: String = "",
     /** 商家/商户单号（微信"商户单号"，存着不展示） */
     val merchantOrderNo: String = "",
+    /** 所属账本。默认主账本，查询/AI 都按当前账本隔离。 */
+    val ledgerId: Long = 1L,
     /** "manual" 手动 | "import" 导入 | "auto" 无感记账自动抓取 */
     val source: String,
     /** 导入批次 ID，手动记录为 null */

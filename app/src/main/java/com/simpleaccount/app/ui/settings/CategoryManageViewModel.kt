@@ -40,6 +40,23 @@ class CategoryManageViewModel @Inject constructor(
         _type.value = t
     }
 
+    /** 二次修改图标/颜色；自定义分类还可改名（预置只改外观）。 */
+    suspend fun updateStyle(cat: Category, iconName: String, colorHex: String, name: String? = null): Boolean {
+        val newName = if (cat.isPreset) cat.name else (name?.trim()?.ifBlank { cat.name } ?: cat.name)
+        if (newName != cat.name) {
+            if (categoryRepository.getByName(newName) != null) return false
+            accountRepository.getAll()
+                .filter { it.category == cat.name }
+                .forEach { t ->
+                    accountRepository.update(t.copy(category = newName, updatedAt = System.currentTimeMillis()))
+                }
+        }
+        categoryRepository.update(
+            cat.copy(iconName = iconName, colorHex = colorHex, name = newName)
+        )
+        return true
+    }
+
     suspend fun add(name: String, iconName: String, colorHex: String): Boolean {
         val type = _type.value
         val trimmed = name.trim()

@@ -104,10 +104,25 @@ fun SimpleAccountNavHost() {
                     StatsScreen(vm)
                 }
                 composable(Routes.AI) {
-                    AiScreen(navController = navController)
+                    AiScreen(navController = navController, autoPickImage = false)
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(navController)
+                }
+                composable(Routes.APPEARANCE) {
+                    com.simpleaccount.app.ui.settings.AppearanceScreen(navController)
+                }
+                composable(Routes.STATS_LAYOUT) {
+                    com.simpleaccount.app.ui.settings.StatsLayoutScreen(navController)
+                }
+                composable(Routes.PICKER_STYLE) {
+                    com.simpleaccount.app.ui.settings.PickerStyleScreen(navController)
+                }
+                composable(Routes.MEMORY) {
+                    com.simpleaccount.app.ui.settings.MemoryScreen(navController)
+                }
+                composable(Routes.AI_SHOT) {
+                    AiScreen(navController = navController, autoPickImage = true)
                 }
                 composable(Routes.ADD) {
                     AddTransactionScreen(navController, editId = null)
@@ -127,6 +142,9 @@ fun SimpleAccountNavHost() {
                 }
                 composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
+                }
+                composable(Routes.LEDGER_MANAGE) {
+                    com.simpleaccount.app.ui.settings.LedgerManageScreen(navController)
                 }
                 composable(Routes.CATEGORY_MANAGE) {
                     CategoryManageScreen(navController)
@@ -153,7 +171,11 @@ private fun SimpleBottomBar(
     currentDestination: NavDestination?,
     navController: NavHostController,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+        tonalElevation = 0.dp,
+    ) {
         NavigationBar(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             tonalElevation = 0.dp,
