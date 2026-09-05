@@ -55,6 +55,7 @@ fun StatsScreen(viewModel: StatsViewModel) {
     val state by viewModel.uiState.collectAsState()
     // 点击某分类 → 弹出该分类的账单明细
     var categorySheet by remember { mutableStateOf<String?>(null) }
+    var showAllCats by remember { mutableStateOf(false) }
     val categorySheetState = androidx.compose.material3.rememberModalBottomSheetState()
 
     Scaffold(
@@ -90,8 +91,8 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 Text(
                     "¥" + MoneyUtil.fenToYuan(state.total),
                     style = MaterialTheme.typography.titleMedium,
-                    color = if (state.type == Transaction.TYPE_EXPENSE) MaterialTheme.colorScheme.error
-                    else Color(0xFF2ECC71)
+                    color = if (state.type == Transaction.TYPE_EXPENSE) com.simpleaccount.app.ui.theme.AppColors.Expense
+                    else com.simpleaccount.app.ui.theme.AppColors.Income
                 )
                 Spacer(Modifier.weight(1f))
                 Row(
@@ -110,25 +111,25 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 }
             }
 
-            // 月份芯片（横向滚动，来自真实数据月份）
-            LazyRow(
+            var showMonth by remember { mutableStateOf(false) }
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                items(listOf("all") + state.months) { m ->
-                    FilterChip(
-                        selected = state.month == m,
-                        onClick = { viewModel.setMonth(m) },
-                        label = { Text(if (m == "all") "全部" else m) },
-                        shape = RoundedCornerShape(50),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                        ),
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
+                com.simpleaccount.app.ui.components.FilterChipButton(
+                    label = if (state.month == "all") "全部月份" else state.month,
+                    onClick = { showMonth = true }
+                )
+            }
+            if (showMonth) {
+                com.simpleaccount.app.ui.components.MonthPickerSheet(
+                    months = state.months,
+                    selected = state.month.takeIf { it != "all" },
+                    allLabel = "全部月份",
+                    onDismiss = { showMonth = false },
+                    onPick = { m -> viewModel.setMonth(m ?: "all"); showMonth = false }
+                )
             }
 
             // ── 分类构成：环形图 + 占比条形（第一个卡片）──
@@ -143,84 +144,178 @@ fun StatsScreen(viewModel: StatsViewModel) {
                     centerValue = "¥" + MoneyUtil.fenToYuan(state.total)
                 )
                 if (state.slices.isEmpty()) {
-                    Text(
-                        "本月暂无数据",
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp
-                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(324.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "本月暂无数据",
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp
+                        )
+                    }
                 } else {
-                    // 默认只展示前 6 项，点击展开全部；不足 6 项按实际数量显示
-                    var legendExpanded by remember { mutableStateOf(false) }
-                    val shownSlices = if (legendExpanded) state.slices else state.slices.take(6)
+                    // 图例固定 6 行高度：月份切换时分类数量变化不会把下面的日历顶得乱跳。
+                    // 超过 6 类点「查看全部」弹层，不撑开卡片。
+                    val shownSlices = state.slices.take(6)
                     Column(
                         Modifier
                             .padding(horizontal = 18.dp)
-                            .padding(bottom = 14.dp)
+                            .padding(bottom = 8.dp)
                     ) {
-                        shownSlices.forEach { s ->
-                            val percent = if (state.total > 0) s.value.toFloat() / state.total else 0f
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { categorySheet = s.categoryName }
-                                    .padding(vertical = 5.dp, horizontal = 2.dp)
-                            ) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .size(10.dp)
-                                            .clip(CircleShape)
-                                            .background(parseColor(s.colorHex))
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
-                                    Spacer(Modifier.weight(1f))
-                                    Text(
-                                        "%.0f%%".format(percent * 100),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(
-                                        "¥" + MoneyUtil.fenToYuan(s.value),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Spacer(Modifier.height(4.dp))
-                                Box(
+                        Column(Modifier.height(288.dp)) {
+                            shownSlices.forEach { s ->
+                                val percent = if (state.total > 0) s.value.toFloat() / state.total else 0f
+                                Column(
                                     Modifier
                                         .fillMaxWidth()
-                                        .height(5.dp)
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                        .height(48.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { categorySheet = s.categoryName }
+                                        .padding(vertical = 4.dp, horizontal = 2.dp)
                                 ) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(parseColor(s.colorHex))
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
+                                        Spacer(Modifier.weight(1f))
+                                        Text(
+                                            "%.0f%%".format(percent * 100),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            "¥" + MoneyUtil.fenToYuan(s.value),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
                                     Box(
                                         Modifier
-                                            .fillMaxWidth(percent.coerceIn(0.02f, 1f))
+                                            .fillMaxWidth()
                                             .height(5.dp)
                                             .clip(RoundedCornerShape(3.dp))
-                                            .background(parseColor(s.colorHex))
-                                    )
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth(percent.coerceIn(0.02f, 1f))
+                                                .height(5.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(parseColor(s.colorHex))
+                                        )
+                                    }
                                 }
                             }
                         }
-                        // 展开/收起其余分类
-                        if (state.slices.size > 6) {
-                            TextButton(
-                                onClick = { legendExpanded = !legendExpanded },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
+                        // 按钮行始终占位，避免「有/没有更多分类」造成高度差
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(36.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (state.slices.size > 6) {
+                                TextButton(onClick = { showAllCats = true }) {
+                                    Text("查看全部 ${state.slices.size} 类", fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (showAllCats) {
+                        androidx.compose.material3.ModalBottomSheet(
+                            onDismissRequest = { showAllCats = false }
+                        ) {
+                            Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
                                 Text(
-                                    if (legendExpanded) "收起" else "展开其余 ${state.slices.size - 6} 项",
-                                    fontSize = 13.sp
+                                    "全部分类",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
+                                Spacer(Modifier.height(8.dp))
+                                state.slices.forEach { s ->
+                                    val percent = if (state.total > 0) s.value.toFloat() / state.total else 0f
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                showAllCats = false
+                                                categorySheet = s.categoryName
+                                            }
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            Modifier.size(10.dp).clip(CircleShape)
+                                                .background(parseColor(s.colorHex))
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(s.categoryName, modifier = Modifier.weight(1f))
+                                        Text(
+                                            "%.0f%%  ¥".format(percent * 100) + MoneyUtil.fenToYuan(s.value),
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.total > 0) {
+                SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("对照", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text("日均 ¥${MoneyUtil.fenToYuan(state.dailyAvgFen)}", fontSize = 13.sp)
+                        Text(
+                            "工作日日均 ¥${MoneyUtil.fenToYuan(state.weekdayAvgFen)} · 周末日均 ¥${MoneyUtil.fenToYuan(state.weekendAvgFen)}",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (state.lastMonthTotal > 0 && state.month != "all") {
+                            val diff = state.total - state.lastMonthTotal
+                            Text(
+                                "上月同期 ¥${MoneyUtil.fenToYuan(state.lastMonthTotal)}，" +
+                                    if (diff >= 0) "多 ¥${MoneyUtil.fenToYuan(diff)}" else "少 ¥${MoneyUtil.fenToYuan(-diff)}",
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+            if (state.topMerchants.isNotEmpty()) {
+                SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("商家排行", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        state.topMerchants.forEachIndexed { i, (name, amt) ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${i + 1}", modifier = Modifier.width(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(name, modifier = Modifier.weight(1f), maxLines = 1)
+                                Text("¥${MoneyUtil.fenToYuan(amt)}", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -248,9 +343,9 @@ fun StatsScreen(viewModel: StatsViewModel) {
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.weight(1f))
-                    LegendDot(Color(0xFFFF6B6B), "支出")
+                    LegendDot(com.simpleaccount.app.ui.theme.AppColors.Expense, "支出")
                     Spacer(Modifier.width(12.dp))
-                    LegendDot(Color(0xFF2ECC71), "收入")
+                    LegendDot(com.simpleaccount.app.ui.theme.AppColors.Income, "收入")
                 }
                 Text(
                     "点击曲线上的点可查看对应月份",

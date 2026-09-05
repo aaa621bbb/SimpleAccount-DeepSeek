@@ -32,6 +32,7 @@ class SettingsRepository @Inject constructor(
         const val KEY_AI_BASE_URL = "ai_base_url"
         const val KEY_AI_MODEL = "ai_model"
         const val KEY_AI_KEY = "ai_api_key"
+        const val KEY_AI_PROVIDER_ID = "ai_provider_id"
 
         /** 识图 API Key（独立于主 Key，存加密 prefs） */
         const val KEY_VISION_KEY = "vision_api_key"
@@ -69,6 +70,15 @@ class SettingsRepository @Inject constructor(
 
         const val DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
         const val DEFAULT_MODEL = "deepseek-chat"
+
+        const val KEY_CURRENT_LEDGER = "current_ledger_id"
+
+        /** 思考深度：off / low / medium / high */
+        const val KEY_THINKING_LEVEL = "thinking_level"
+        const val THINKING_OFF = "off"
+        const val THINKING_LOW = "low"
+        const val THINKING_MEDIUM = "medium"
+        const val THINKING_HIGH = "high"
     }
 
     private val prefs: SharedPreferences by lazy {
@@ -92,6 +102,9 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setModel(model: String) = setSetting(KEY_AI_MODEL, model)
     fun model(): String = readSetting(KEY_AI_MODEL) ?: DEFAULT_MODEL
+
+    suspend fun setProviderId(id: String) = setSetting(KEY_AI_PROVIDER_ID, id)
+    fun providerId(): String = readSetting(KEY_AI_PROVIDER_ID).orEmpty()
 
     fun apiKey(): String = prefs.getString(KEY_AI_KEY, "") ?: ""
     fun setApiKey(key: String) {
@@ -189,6 +202,20 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseMainModelForVision(use: Boolean) {
         setSetting(KEY_VISION_USE_MAIN, use.toString())
     }
+
+    fun currentLedgerId(): Long = readSetting(KEY_CURRENT_LEDGER)?.toLongOrNull() ?: 1L
+
+    fun setCurrentLedgerId(id: Long) {
+        runBlocking { setSetting(KEY_CURRENT_LEDGER, id.toString()) }
+    }
+
+    fun thinkingLevel(): String {
+        val v = readSetting(KEY_THINKING_LEVEL)
+        return if (v == THINKING_LOW || v == THINKING_MEDIUM || v == THINKING_HIGH || v == THINKING_OFF) v
+        else THINKING_OFF
+    }
+
+    suspend fun setThinkingLevel(level: String) = setSetting(KEY_THINKING_LEVEL, level)
 
     private suspend fun setSetting(key: String, value: String) = withContext(Dispatchers.IO) {
         settingDao.insert(Setting(key, value))

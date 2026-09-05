@@ -2,20 +2,43 @@
 
 一个面向个人的原生 Android 记账 App。支持手动记账、微信/支付宝账单导入、自动/辅助分类、账本、分类管理、统计报表、AI 辅助记账。
 
-## 编译
+仓库已包含 Gradle Wrapper、依赖镜像和签名回退，**克隆后即可编译**，不必自己整理 Gradle / keystore。
 
-**推荐方式：GitHub Actions 云编译（已配置）**
+## 克隆后直接编译
 
-把本项目推送到 GitHub 仓库（`main` 分支），或手动触发 `Actions → Build APK → Run workflow`，
-自动出包（JDK17 + `./gradlew assembleDebug`），在 workflow 的 Artifacts 里下载 `SimpleAccount-debug` APK。
+需要：**JDK 17** + **Android SDK（platform 34 / build-tools 34）**。Gradle 不用装，用仓库里的 `./gradlew`。
 
-**本地编译**
+`local.properties` 不要提交（本机 SDK 路径）。可复制 `local.properties.example` 改 `sdk.dir`，或让 Android Studio 自动生成。没有 `app/debug.keystore` 时会回退到系统默认 debug 签名，**不影响编译和安装**。
 
-需要 JDK 17 + Android SDK（platform 34 / build-tools 34）。
+### 方式 A：Android Studio（推荐）
+
+1. 安装 [Android Studio](https://developer.android.com/studio) Hedgehog 或更新（自带 JDK 17）。
+2. SDK Manager 勾选 **Android 14 (API 34)** 和 **Build-Tools 34.x**。
+3. `File → Open` 选本仓库根目录（含 `settings.gradle` 的那一层）。
+4. 等 Gradle Sync 结束，点 Run，或 `Build → Build APK(s)`。
+5. 产物：`app/build/outputs/apk/debug/app-debug.apk`。
+
+国内网络已在 `settings.gradle` 配了阿里云镜像，一般能直接拉依赖。
+
+### 方式 B：命令行
+
 ```bash
+git clone <本仓库> && cd SimpleAccount-DeepSeek
+chmod +x gradlew
+
+# 指定本机 SDK（二选一）
+export ANDROID_HOME=$HOME/Android/Sdk          # 按实际路径改
+# 或：cp local.properties.example local.properties 然后改 sdk.dir
+
 ./gradlew assembleDebug
 # 产物：app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`JAVA_HOME` 指到 JDK 17。macOS 示例：`/Applications/Android Studio.app/Contents/jbr/Contents/Home`。
+
+### 方式 C：GitHub Actions 云编译
+
+推送任意分支，或 `Actions → Build APK → Run workflow`。JDK 17 + `./gradlew assembleDebug`，在 Artifacts 下载 `SimpleAccount-debug`。
 
 ## 技术栈
 - Kotlin 1.9.22 · Jetpack Compose（BOM 2024.02）· Material3
@@ -25,16 +48,19 @@
 - minSdk 26 / target 34 / compileSdk 34
 
 ## 已实现功能
-- **记一笔**：金额/收支切换/分类(BottomSheet 单击)/日期/商家/商品/备注；编辑复用
+- **多账本**：自定义名称，默认「主账本」；流水/统计/AI 严格隔离，不会串味
+- **记一笔**：金额键盘 + 分类宫格 + 滚轮日期/时间
+- **无感记账**：通知监听 + 前台保活，打开开关会拉起守护通知并引导授权
 - **账单导入**：微信/支付宝 xlsx/csv/zip；表头语义识别；编码检测(UTF-8/GBK)；金额清洗；自动去重；自动分类（商家记忆→关键词规则→其它）；导入进度与结果页
-- **账本**：按日倒序+按月分组；搜索；月份+分类筛选(AND)+清除；编辑/删除(二次确认)
-- **分类管理**：支出/收入 Tab；新增自定义分类(选图标/色)；预置不可删；删除非空自动转"其它"
-- **统计**：环形饼图(分类占比，月份筛选)+近12月趋势折线(不受筛选影响)；金额保留两位小数；Canvas 自绘
-- **AI 辅助**：对话窗口；开关/BaseUrl/Key(掩码)/模型名设置；API Key 用 EncryptedSharedPreferences 加密存储；"帮我归类商家"批量归类 pending(≤20/批)+历史追改；失败明确提示
+- **账本**：全部/支出/收入分段；月份、分类用弹层网格而不是长横条
+- **分类管理**：支出/收入各 30+ 互不相同的图标
+- **统计**：饼图 + 商家排行 + 工作日/周末日均 + 热力日历 + 月份弹层
+- **AI 辅助**：对话窗口；开关/BaseUrl/Key(掩码)/模型名设置；API Key 用 EncryptedSharedPreferences 加密存储；"帮我归类商家"批量归类+历史追改；失败明确提示
+- **本地会计（快路径）**：只答「查实数 / 记一笔」。分析、建议、怎么办、体检（AI 开启时）一律交给模型，避免模板截胡
+- **本月体检**：环比、订阅雷达、异常日、工作日/周末日均、夜间消费、按速度预估月底
+- **首页**：支出卡 + 日均燃尽（今天还能花多少）+ 可能重复记账提醒 + 再记一笔芯片
 - **商家归类管理**：状态筛选(全部/待归类/已归类/手动)+搜索；点击选分类；历史追改只改 import 记录
 - **数据管理**：导出 JSON(经 SAF)；清空所有数据(清全部表+加密Key+重建预置)
-- **首页**：支出/收入/结余三卡 + 最近记录(5条)；FAB=记一笔、工具栏=导入；不显示 App 名
-- **纯手动用户**首页正常显示当月数据
 - 深色模式跟随系统；应用名"记账"；全中文；底部导航 5 项
 
 ## 已知 / 未完成

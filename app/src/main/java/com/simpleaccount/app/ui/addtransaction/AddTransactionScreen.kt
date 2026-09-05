@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -83,8 +84,8 @@ fun AddTransactionScreen(
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
-    var showCategorySheet by remember { mutableStateOf(false) }
     var showDateSheet by remember { mutableStateOf(false) }
+    var showTimeSheet by remember { mutableStateOf(false) }
     var showMerchantSheet by remember { mutableStateOf(false) }
     var showProductSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
@@ -114,19 +115,13 @@ fun AddTransactionScreen(
                     detectTapGestures { showKeypad = false }
                 }
         ) {
-            // 收支切换
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = state.type == Transaction.TYPE_EXPENSE,
-                    onClick = { vm.onTypeChange(Transaction.TYPE_EXPENSE) },
-                    label = { Text("支出") }
-                )
-                FilterChip(
-                    selected = state.type == Transaction.TYPE_INCOME,
-                    onClick = { vm.onTypeChange(Transaction.TYPE_INCOME) },
-                    label = { Text("收入") }
-                )
-            }
+            com.simpleaccount.app.ui.components.SegmentedThree(
+                options = listOf("支出", "收入"),
+                selected = if (state.type == Transaction.TYPE_EXPENSE) 0 else 1,
+                onSelect = {
+                    vm.onTypeChange(if (it == 0) Transaction.TYPE_EXPENSE else Transaction.TYPE_INCOME)
+                }
+            )
             Spacer(Modifier.height(16.dp))
 
             // 金额：可点击行 + 内置数字键盘（不抢焦点，无光标）
@@ -156,8 +151,40 @@ fun AddTransactionScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            // 分类
-            CategorySelector(selected = state.selectedCategory, onClick = { showCategorySheet = true })
+            Text("分类", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            val catRows = categories.chunked(4)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                catRows.forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { cat ->
+                            val sel = state.selectedCategory?.name == cat.name
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        if (sel) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                    .clickable { vm.onCategorySelect(cat) }
+                                    .padding(vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CategoryIconCircle(cat, size = 36)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    cat.name,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             // 日期：点选 年/月/日
@@ -165,6 +192,14 @@ fun AddTransactionScreen(
                 label = "日期",
                 value = state.date,
                 onClick = { showDateSheet = true }
+            )
+            Spacer(Modifier.height(12.dp))
+
+            PickerRow(
+                label = "时间",
+                value = state.time.ifBlank { "现在" },
+                isPlaceholder = state.time.isBlank(),
+                onClick = { showTimeSheet = true }
             )
             Spacer(Modifier.height(12.dp))
 
@@ -215,28 +250,23 @@ fun AddTransactionScreen(
         }
     }
 
-    if (showCategorySheet) {
-        ModalBottomSheet(onDismissRequest = { showCategorySheet = false }, sheetState = sheetState) {
-            LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                item {
-                    Text("选择分类", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                }
-                items(categories) { cat ->
-                    CategorySheetRow(cat, state.selectedCategory?.name == cat.name) {
-                        vm.onCategorySelect(cat); showCategorySheet = false
-                    }
-                }
-            }
-        }
-    }
-
     if (showDateSheet) {
-        DatePickerSheet(
+        com.simpleaccount.app.ui.components.DateWheelSheet(
             initialDate = state.date,
             onDismiss = { showDateSheet = false },
             onConfirm = { y, m, d ->
                 vm.onDateSet(y, m, d); showDateSheet = false
+            }
+        )
+    }
+
+    if (showTimeSheet) {
+        com.simpleaccount.app.ui.components.TimePickerSheet(
+            initial = state.time,
+            onDismiss = { showTimeSheet = false },
+            onConfirm = { hhmm ->
+                vm.onTimeChange(hhmm)
+                showTimeSheet = false
             }
         )
     }
@@ -474,39 +504,3 @@ private fun CandidateRow(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun CategorySelector(selected: Category?, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (selected != null) {
-            CategoryIconCircle(selected, size = 36)
-            Spacer(Modifier.size(10.dp))
-            Text(selected.name, style = MaterialTheme.typography.bodyLarge)
-        } else {
-            Text("请选择分类", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.weight(1f))
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null)
-    }
-}
-
-@Composable
-private fun CategorySheetRow(cat: Category, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        CategoryIconCircle(cat, size = 36)
-        Spacer(Modifier.size(12.dp))
-        Text(cat.name, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f))
-        if (selected) Icon(Icons.Filled.Check, contentDescription = "已选择", tint = MaterialTheme.colorScheme.primary)
-    }
-}
