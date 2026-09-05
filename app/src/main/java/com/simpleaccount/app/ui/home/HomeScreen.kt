@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
@@ -63,13 +64,26 @@ fun HomeScreen(
     val snack by viewModel.snack.collectAsState()
     var showBudgetDialog by remember { mutableStateOf(false) }
     var showInsight by remember { mutableStateOf(false) }
+    var showLedgers by remember { mutableStateOf(false) }
+    var evidenceTip by remember { mutableStateOf<com.simpleaccount.app.data.insights.InsightTip?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             // 顶部工具条（不显示 App 名，仅导入入口）
             TopAppBar(
-                title = { },
-                navigationIcon = { Box(Modifier.width(48.dp)) },
+                title = {
+                    Row(
+                        Modifier.clickable { showLedgers = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(state.currentLedgerName, fontWeight = FontWeight.Bold)
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "切换账本",
+                            modifier = Modifier.padding(start = 2.dp)
+                        )
+                    }
+                },
                 actions = {
                     IconButton(onClick = { navController.navigate(Routes.IMPORT) }) {
                         Icon(Icons.Filled.FileUpload, contentDescription = "导入账单")
@@ -269,18 +283,103 @@ fun HomeScreen(
         }
     }
 
+    if (showLedgers) {
+        AlertDialog(
+            onDismissRequest = { showLedgers = false },
+            title = { Text("切换账本") },
+            text = {
+                Column {
+                    state.ledgers.forEach { l ->
+                        Text(
+                            l.name + if (l.isDefault) "（主）" else "",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.switchLedger(l.id)
+                                    showLedgers = false
+                                }
+                                .padding(vertical = 10.dp),
+                            fontWeight = if (l.name == state.currentLedgerName) FontWeight.Bold else FontWeight.Normal,
+                            color = if (l.name == state.currentLedgerName) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        "到「我的 → 账本管理」可以新建或改名。不同账本的流水完全独立，AI 也不会串味。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { showLedgers = false }) { Text("关闭") } }
+        )
+    }
+
     if (showInsight) {
         AlertDialog(
             onDismissRequest = { showInsight = false },
             title = { Text("本月体检") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
+                    Text(
+                        "数字都来自当前账本「${state.currentLedgerName}」本月流水，不是模型编的。点一条建议可看对应账单。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (state.evidenceTips.isEmpty()) {
+                        com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
+                    } else {
+                        state.evidenceTips.forEach { tip ->
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                    .clickable { evidenceTip = tip }
+                                    .padding(12.dp)
+                            ) {
+                                Text(tip.title, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(2.dp))
+                                Text(tip.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (tip.evidenceIds.isNotEmpty()) {
+                                    Text("点开看 ${tip.evidenceIds.size} 笔依据 →", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showInsight = false }) { Text("好的") }
             }
+        )
+    }
+
+    evidenceTip?.let { tip ->
+        val rows = state.monthTx.filter { it.id in tip.evidenceIds.toSet() }
+        AlertDialog(
+            onDismissRequest = { evidenceTip = null },
+            title = { Text(tip.title) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(tip.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    if (rows.isEmpty()) Text("没有对应流水（可能已删除）")
+                    else rows.take(30).forEach { t ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(t.merchant.ifBlank { t.category }, fontWeight = FontWeight.Medium)
+                                Text("${t.date} ${t.time} · ${t.category}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("¥${MoneyUtil.fenToYuan(t.amount)}", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { evidenceTip = null }) { Text("关闭") } }
         )
     }
 
@@ -341,9 +440,9 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            Color(0xFF1B3344),
-                            Color(0xFF2A4A5C),
-                            Color(0xFF1F3A4D)
+                            Color(0xFF1A4A3E),
+                            Color(0xFF1F6F5B),
+                            Color(0xFF165A4A)
                         )
                     )
                 )

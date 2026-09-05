@@ -23,6 +23,7 @@ class AgentTools @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val appControl: AppControlCenter,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
+    private val memoryStore: com.simpleaccount.app.data.memory.MemoryStore,
 ) {
 
     companion object {
@@ -212,6 +213,25 @@ class AgentTools @Inject constructor(
             required = listOf("mappings"),
         ),
         AgentToolSpec(
+            name = "memory_get",
+            description = "检索长期记忆。keywords 空格分隔，全部词都要命中。scope=daily 只每日日志，all 含 GLOBAL。",
+            parameters = mapOf(
+                "keywords" to ("string" to "关键词，空格分隔"),
+                "scope" to ("string" to "daily 或 all，默认 daily"),
+            ),
+            required = listOf("keywords"),
+        ),
+        AgentToolSpec(
+            name = "memory_write",
+            description = "写入记忆。scope=daily 写今日日志；global 仅当用户明确说「记住这个（全局）」。禁止写密码/Key。",
+            parameters = mapOf(
+                "title" to ("string" to "条目标题"),
+                "body" to ("string" to "内容"),
+                "scope" to ("string" to "daily 或 global"),
+            ),
+            required = listOf("title", "body"),
+        ),
+        AgentToolSpec(
             name = "get_insights",
             description = "生成本月（或指定月）花销体检：环比、分类排行、异常日、订阅/固定支出雷达。用户问「体检」「花哪了」「有没有订阅」时优先调用。",
             parameters = mapOf(
@@ -248,6 +268,24 @@ class AgentTools @Inject constructor(
                 "list_merchants" -> listMerchants(call.arguments)
                 "classify_merchants" -> classifyMerchants(call.arguments)
                 "get_insights" -> getInsights(call.arguments)
+                "memory_get" -> {
+                    val a = parseArgs(call.arguments)
+                    memoryStore.search(a.optString("keywords"), a.optString("scope").ifBlank { "daily" })
+                }
+                "memory_write" -> {
+                    val a = parseArgs(call.arguments)
+                    val title = a.optString("title")
+                    val body = a.optString("body")
+                    val scope = a.optString("scope").ifBlank { "daily" }
+                    if (memoryStore.looksSecret(title + body)) "拒绝：疑似密钥，未写入。"
+                    else if (scope == "global") {
+                        if (memoryStore.appendGlobal("$title：$body")) "已写入 GLOBAL.md"
+                        else "GLOBAL 写入失败"
+                    } else {
+                        memoryStore.appendDaily(title, body)
+                        "已写入今日日志"
+                    }
+                }
                 else -> "错误：未知工具 ${call.name}"
             }
         } catch (e: Exception) {
@@ -593,7 +631,7 @@ class AgentTools @Inject constructor(
                 type = type,
                 sortOrder = 99,
                 isPreset = false,
-                iconName = "more_horiz",
+                iconName = com.simpleaccount.app.util.IconMapper.allChoices(type).firstOrNull { it.name != "more_horiz" }?.name ?: "category",
                 colorHex = "#7A9AE3",
             )
         )

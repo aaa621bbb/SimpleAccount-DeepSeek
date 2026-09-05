@@ -108,6 +108,7 @@ data class AiSettingsUiState(
     /** 从接口拉到的可用模型列表（借鉴 OpenMinis：填好 Key 自动 GET /models） */
     val models: List<String> = emptyList(),
     val loadingModels: Boolean = false,
+    val thinkingLevel: String = SettingsRepository.THINKING_OFF,
 )
 
 @HiltViewModel
@@ -144,6 +145,7 @@ class AiSettingsViewModel @Inject constructor(
                 visionApiKey = settingsRepository.visionApiKey(),
                 visionModel = settingsRepository.visionModel(),
                 useMainForVision = settingsRepository.useMainModelForVision(),
+                thinkingLevel = settingsRepository.thinkingLevel(),
             )
             // 已配好 Key → 自动拉取该接口的可用模型列表
             if (settingsRepository.apiKey().isNotBlank()) refreshModels()
@@ -241,6 +243,12 @@ class AiSettingsViewModel @Inject constructor(
             settingsRepository.setVisionApiKey(_state.value.visionApiKey)
             settingsRepository.setVisionModel(_state.value.visionModel.ifBlank { SettingsRepository.DEFAULT_VISION_MODEL })
             settingsRepository.setUseMainModelForVision(_state.value.useMainForVision)
+            settingsRepository.setThinkingLevel(_state.value.thinkingLevel)
         }
+    }
+
+    fun setThinkingLevel(level: String) {
+        _state.value = _state.value.copy(thinkingLevel = level)
+        viewModelScope.launch { settingsRepository.setThinkingLevel(level) }
     }
 }

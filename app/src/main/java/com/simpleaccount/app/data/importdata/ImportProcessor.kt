@@ -28,6 +28,7 @@ class ImportProcessor @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val classificationService: ClassificationService,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
+    private val ledgerRepository: com.simpleaccount.app.data.repository.LedgerRepository,
 ) {
 
     data class ImportResult(
@@ -48,7 +49,8 @@ class ImportProcessor @Inject constructor(
         parsedSkipReasons: Map<String, Int> = emptyMap(),
     ): ImportResult = db.withTransaction {
         val batchId = UUID.randomUUID().toString()
-        val allCache = transactionDao.getAll().toMutableList()
+        val lid = ledgerRepository.currentId()
+        val allCache = transactionDao.getAll(lid).toMutableList()
         fun cacheReplace(t: Transaction) {
             val i = allCache.indexOfFirst { it.id == t.id }
             if (i >= 0) allCache[i] = t else allCache.add(t)
@@ -105,7 +107,7 @@ class ImportProcessor @Inject constructor(
 
         // 先把普通行入账，同时收集付款候选（仅支出，非退款/转账）
         // 自动记账（无感抓取）的记录在导入时被同笔账单覆盖：以导入为准
-        val autoRows = transactionDao.getAllBySource(Transaction.SOURCE_AUTO)
+        val autoRows = transactionDao.getAllBySource(Transaction.SOURCE_AUTO).filter { it.ledgerId == lid }
         // 数据冲突优先级（用户可配）：
         // import=以导入账单为准（默认）：导入覆盖手动/截图/自动的同笔记录
         // manual=以手动·截图·AI记录为准：导入遇到同笔的 手动/自动 记录只跳过，不覆盖
@@ -203,7 +205,7 @@ class ImportProcessor @Inject constructor(
                 val transferCategory = if (row.type == Transaction.TYPE_EXPENSE)
                     CategoryPresets.TRANSFER_CATEGORY
                 else CategoryPresets.DEFAULT_INCOME_CATEGORY
-                cacheReplace(insertRow(row, row.amount, row.type, transferCategory, batchId, now))
+                cacheReplace(insertRow(row, row.amount, row.type, transferCategory, batchId, now, lid))
                 markInserted(row)
                 inserted++
                 continue
@@ -221,7 +223,7 @@ class ImportProcessor @Inject constructor(
             val cat = classificationService.classifyForImport(
                 row.merchant, row.product, row.sourceCategory, validNames, row.type
             )
-            cacheReplace(insertRow(row, row.amount, row.type, cat, batchId, now))
+            cacheReplace(insertRow(row, row.amount, row.type, cat, batchId, now, lid))
             markInserted(row)
             inserted++
         }
@@ -262,7 +264,7 @@ class ImportProcessor @Inject constructor(
                 }
             }
             // 找不到可抵消的付款 → 记入收入，分类"退款"
-            cacheReplace(insertRow(row, refundAmount, Transaction.TYPE_INCOME, CategoryPresets.REFUND_CATEGORY, batchId, now))
+            cacheReplace(insertRow(row, refundAmount, Transaction.TYPE_INCOME, CategoryPresets.REFUND_CATEGORY, batchId, now, lid))
             markInserted(row)
             inserted++
         }

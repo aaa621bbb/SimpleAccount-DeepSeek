@@ -11,71 +11,71 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
- * 高级感配色：暖纸白 + 墨青主色 + 香槟金点缀（私人银行/精品账本气质）。
- * 支出用陶土红、收入用松柏绿，避免荧光色。
+ * 冷白 + 松绿主色。支出陶土、收入翠绿，整页同一套灰阶，不再混香槟金和墨青。
  */
 object AppColors {
-    val Ink = Color(0xFF1F3A4D)
-    val InkDeep = Color(0xFF162A38)
-    val Champagne = Color(0xFFC2A06A)
-    val ChampagneSoft = Color(0xFFE8D5B0)
-    val Sage = Color(0xFF3D8F73)
-    val Terracotta = Color(0xFFC45C4A)
-    val Paper = Color(0xFFF5F1E9)
-    val Cream = Color(0xFFFFFCF7)
-    val Expense = Terracotta
-    val Income = Sage
-    val Gold = Champagne
+    val Pine = Color(0xFF1F6F5B)
+    val PineSoft = Color(0xFF2F8A72)
+    val Sand = Color(0xFFE8A87C)
+    val Expense = Color(0xFFD4523E)
+    val Income = Color(0xFF2A9D6E)
+    val Gold = Sand
+    val Champagne = Sand
+    val Ink = Pine
+    val Sage = Income
+    val Terracotta = Expense
+    val Paper = Color(0xFFF4F6F8)
+    val Cream = Color(0xFFFFFFFF)
 }
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF1F3A4D),
+    primary = Color(0xFF1F6F5B),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFE4EBE8),
-    onPrimaryContainer = Color(0xFF132530),
-    secondary = Color(0xFFC2A06A),
-    onSecondary = Color(0xFF2A1F0C),
-    secondaryContainer = Color(0xFFF3E6CF),
-    onSecondaryContainer = Color(0xFF3A2C14),
-    tertiary = Color(0xFF3D8F73),
+    primaryContainer = Color(0xFFD7EFE7),
+    onPrimaryContainer = Color(0xFF0C3D32),
+    secondary = Color(0xFF5B6B73),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE3E8EB),
+    onSecondaryContainer = Color(0xFF243038),
+    tertiary = Color(0xFF2A9D6E),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFD5EDE3),
-    onTertiaryContainer = Color(0xFF12382C),
-    background = Color(0xFFF5F1E9),
-    onBackground = Color(0xFF1C1915),
-    surface = Color(0xFFFFFCF7),
-    onSurface = Color(0xFF1C1915),
-    surfaceVariant = Color(0xFFECE6DA),
-    onSurfaceVariant = Color(0xFF5C564C),
-    outline = Color(0xFFD9D1C4),
-    outlineVariant = Color(0xFFE8E1D4),
-    error = Color(0xFFB54A3C),
+    tertiaryContainer = Color(0xFFD4F3E4),
+    onTertiaryContainer = Color(0xFF0D3B28),
+    background = Color(0xFFF4F6F8),
+    onBackground = Color(0xFF1A1F22),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF1A1F22),
+    surfaceVariant = Color(0xFFEAEEF1),
+    onSurfaceVariant = Color(0xFF5A646A),
+    outline = Color(0xFFD5DCE1),
+    outlineVariant = Color(0xFFE8EDF0),
+    error = Color(0xFFD4523E),
     onError = Color.White,
-    errorContainer = Color(0xFFF6D6D1),
+    errorContainer = Color(0xFFF8D8D3),
     onErrorContainer = Color(0xFF4A1C16),
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFD4B483),
-    onPrimary = Color(0xFF1A1408),
-    primaryContainer = Color(0xFF3A3224),
-    onPrimaryContainer = Color(0xFFF3E6CF),
-    secondary = Color(0xFFE8D5B0),
-    onSecondary = Color(0xFF1A1408),
-    secondaryContainer = Color(0xFF3A3224),
-    onSecondaryContainer = Color(0xFFF3E6CF),
-    tertiary = Color(0xFF7EC9A8),
+    primary = Color(0xFF7DCFB6),
+    onPrimary = Color(0xFF07382C),
+    primaryContainer = Color(0xFF1A4A3E),
+    onPrimaryContainer = Color(0xFFD7EFE7),
+    secondary = Color(0xFFB7C2C8),
+    onSecondary = Color(0xFF1C2428),
+    secondaryContainer = Color(0xFF2A3338),
+    onSecondaryContainer = Color(0xFFE3E8EB),
+    tertiary = Color(0xFF7ED9AE),
     onTertiary = Color(0xFF0C241C),
     tertiaryContainer = Color(0xFF1E3D32),
-    onTertiaryContainer = Color(0xFFD5EDE3),
-    background = Color(0xFF0C0B09),
-    onBackground = Color(0xFFEDE6D9),
-    surface = Color(0xFF161410),
-    onSurface = Color(0xFFEDE6D9),
-    surfaceVariant = Color(0xFF221F1A),
-    onSurfaceVariant = Color(0xFFB8AFA0),
-    outline = Color(0xFF3A342C),
-    outlineVariant = Color(0xFF2A2620),
+    onTertiaryContainer = Color(0xFFD4F3E4),
+    background = Color(0xFF101416),
+    onBackground = Color(0xFFE6EBEE),
+    surface = Color(0xFF181C1F),
+    onSurface = Color(0xFFE6EBEE),
+    surfaceVariant = Color(0xFF242A2E),
+    onSurfaceVariant = Color(0xFFA8B2B8),
+    outline = Color(0xFF3A4248),
+    outlineVariant = Color(0xFF2A3136),
     error = Color(0xFFE08B7E),
     onError = Color(0xFF3A1410),
     errorContainer = Color(0xFF5C2A24),

@@ -22,6 +22,7 @@ class AppControlCenter @Inject constructor() {
         "分类管理" to "category_manage", "商家归类管理" to "merchant_manage",
         "数据管理" to "data_manage", "日志" to "logs", "关于" to "about",
         "无感记账" to "auto_record",
+        "账本管理" to "ledger_manage",
     )
 
     /** 导航执行器（由 NavHost 注册；AI 工具调用时执行） */

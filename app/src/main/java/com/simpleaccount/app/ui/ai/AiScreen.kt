@@ -207,6 +207,18 @@ fun AiScreen(
                 }
                 if (state.typing) {
                     item {
+                        if (state.traces.isNotEmpty()) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                                state.traces.takeLast(8).forEach { t ->
+                                    Text(
+                                        "· $t",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2
+                                    )
+                                }
+                            }
+                        }
                         val stream = state.streamingText
                         if (!stream.isNullOrEmpty()) StreamingBubble(stream)
                         else TypingBubble(state.phase)

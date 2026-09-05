@@ -35,7 +35,8 @@ object AppModule {
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
             )
             // 硬约束：禁止 fallback 清数据。迁移链 1→5 完整，任何真实升级路径都有迁移；
             // 移除 fallback 后若出现未知路径会直接报错（可排查），而不是悄悄清空用户数据
@@ -64,6 +65,9 @@ object AppModule {
 
     @Provides
     fun provideSettingDao(db: AppDatabase): SettingDao = db.settingDao()
+
+    @Provides
+    fun provideLedgerDao(db: AppDatabase): com.simpleaccount.app.data.dao.LedgerDao = db.ledgerDao()
 
     @Provides
     @Named("ioDispatcher")

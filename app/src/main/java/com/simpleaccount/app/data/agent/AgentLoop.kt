@@ -23,6 +23,8 @@ class AgentLoop @Inject constructor(
     private val agentTools: AgentTools,
     private val settingsRepository: SettingsRepository,
     private val accountRepository: AccountRepository,
+    private val memoryStore: com.simpleaccount.app.data.memory.MemoryStore,
+    private val ledgerRepository: com.simpleaccount.app.data.repository.LedgerRepository,
 ) {
 
     data class PendingConfirm(
@@ -50,6 +52,8 @@ class AgentLoop @Inject constructor(
             "list_merchants" -> "正在查看商家归类…"
             "classify_merchants" -> "正在归类商家…"
             "get_insights" -> "正在生成本月体检…"
+            "memory_get" -> "正在检索长期记忆…"
+            "memory_write" -> "正在写入记忆…"
             else -> "正在调用工具 $toolName…"
         }
 
@@ -63,7 +67,7 @@ class AgentLoop @Inject constructor(
      * 构建系统提示词。注入今天日期、账本覆盖月份、本月/上月快照。
      * 快照让弱模型就算不会调工具，也不会把「本月花了多少」答成胡编。
      */
-    private fun buildSystemPrompt(coveredMonths: List<String>, snapshot: String): String {
+    private fun buildSystemPrompt(coveredMonths: List<String>, snapshot: String, ledgerName: String = "主账本"): String {
         val today = java.time.LocalDate.now()
         val prevMonth = java.time.YearMonth.now().minusMonths(1)
         val monthsDesc = if (coveredMonths.isEmpty()) "（账本暂无数据）"
@@ -71,8 +75,10 @@ class AgentLoop @Inject constructor(
         val dates = com.simpleaccount.app.util.DateResolver.anchorBlock()
         return """
 你是一个专业、贴心的智能会计管家（Agent），运行在用户的记账 App 里。
+当前账本：「$ledgerName」。所有工具只返回这一本的流水，禁止把别的账本当成数据。
 $dates
 账本数据覆盖：$monthsDesc。金额单位是元。
+用户说「记住这个（全局）」时调用 memory_write(scope=global)；发现偏好可记住今日日志。禁止写入密码/API Key。
 用户说「昨天/前天/今天/本月/上个月」时，必须用上面的时间锚点换成 yyyy-MM-dd 或 yyyy-MM 再调工具，绝对不要回答「日期未知」。
 
 $snapshot
@@ -134,6 +140,8 @@ $snapshot
         if (s.contains("预算")) names += "set_monthly_budget"
         if (Regex("主题|深色|浅色|暗色|夜间").containsMatchIn(s)) names += "set_theme"
         if (Regex("打开|跳转|带我去").containsMatchIn(s)) names += "navigate"
+        names += "memory_get"
+        if (Regex("记住").containsMatchIn(s)) names += "memory_write"
         return all.filter { it.name in names }.ifEmpty { all }
     }
 
@@ -179,7 +187,7 @@ $snapshot
     suspend fun run(
         userMessage: String,
         history: List<Pair<String, String>> = emptyList(),
-        maxRounds: Int = 10,
+        maxRounds: Int = 5,
         onStatus: (String) -> Unit = {},
         onDelta: (String) -> Unit = {},
     ): AgentResult {
@@ -194,10 +202,13 @@ $snapshot
         val coveredMonths = allTx.map { it.date.take(7) }.distinct().sorted()
         val snapshot = buildSnapshot(allTx)
         val tools = pickTools(userMessage)
+        val memory = runCatching { memoryStore.injectForNewSession() }.getOrDefault("")
+        runCatching { memoryStore.maybeCaptureFromUser(userMessage) }
 
         val messages = mutableListOf<ToolChatMessage>()
-        messages.add(ToolChatMessage("system", buildSystemPrompt(coveredMonths, snapshot)))
-        history.takeLast(40).forEach { (r, c) -> messages.add(ToolChatMessage(r, c)) }
+        val ledgerName = runCatching { ledgerRepository.getCurrent()?.name }.getOrNull() ?: "主账本"
+        messages.add(ToolChatMessage("system", buildSystemPrompt(coveredMonths, snapshot, ledgerName) + "\n\n" + memory))
+        history.takeLast(12).forEach { (r, c) -> messages.add(ToolChatMessage(r, c)) }
         messages.add(ToolChatMessage("user", com.simpleaccount.app.util.DateResolver.enrichUserMessage(userMessage)))
 
         var rounds = 0
@@ -206,8 +217,12 @@ $snapshot
         onStatus("正在思考…")
         while (rounds < maxRounds) {
             rounds++
+            val thinking = settingsRepository.thinkingLevel()
             val resp = aiService.chatWithTools(
-                baseUrl, apiKey, model, messages, tools, onDelta = onDelta
+                baseUrl, apiKey, model, messages, tools,
+                onDelta = onDelta,
+                thinkingLevel = thinking,
+                onReasoning = { r -> onStatus("思考中：${r.take(80)}") },
             )
             if (resp.error != null) {
                 if (resp.error == "已停止") return AgentResult("", rounds, "已停止")
@@ -232,7 +247,7 @@ $snapshot
             )
             var anyExecuted = false
             for (tc in resp.toolCalls) {
-                onStatus(toolPhaseLabel(tc.name))
+                onStatus("调用 ${tc.name}（${tc.arguments.take(100)}）")
                 val check = loopDetector.check(tc.name, tc.arguments)
                 val result = if (check.level == ToolLoopDetector.Level.CRITICAL) {
                     check.message ?: "[LOOP BLOCKED] 检测到死循环，请直接基于已有信息回答。"
@@ -266,7 +281,11 @@ $snapshot
                 content = "请立即基于上面工具已经查到的数据，直接给出最终回答。不要再调用任何工具。"
             )
         )
-        val finalResp = aiService.chatWithTools(baseUrl, apiKey, model, messages, emptyList(), onDelta = onDelta)
+        val finalResp = aiService.chatWithTools(
+            baseUrl, apiKey, model, messages, emptyList(),
+            onDelta = onDelta,
+            thinkingLevel = settingsRepository.thinkingLevel(),
+        )
         return if (finalResp.error != null || finalResp.content.isBlank()) {
             AgentResult("（分析了 ${rounds} 轮仍不完整，请把问题拆小一点再问）", rounds)
         } else {

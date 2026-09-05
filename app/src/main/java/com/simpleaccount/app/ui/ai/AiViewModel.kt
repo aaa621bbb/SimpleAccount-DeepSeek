@@ -39,6 +39,9 @@ data class AiUiState(
     /** 截图记账：识别结果待确认（用户勾选后才入账） */
     val screenshotPending: ScreenshotPendingUi? = null,
     val pendingConfirm: PendingConfirmUi? = null,
+    /** Agent 过程日志（调用了什么工具、查了哪本账） */
+    val traces: List<String> = emptyList(),
+    val reasoning: String? = null,
 )
 
 data class PendingConfirmUi(
@@ -261,7 +264,7 @@ class AiViewModel @Inject constructor(
             conversationManager.addMessage(convId, AiMessage.ROLE_USER, trimmed)
             _state.value = _state.value.copy(
                 input = "", typing = true, phase = "正在思考…", error = null,
-                streamingText = null, pendingConfirm = null
+                streamingText = null, pendingConfirm = null, traces = emptyList(), reasoning = null
             )
             val modelOn = settingsRepository.isAiEnabled() && settingsRepository.apiKey().isNotBlank()
             val local = runCatching { localAccountant.tryAnswer(trimmed, modelOn) }.getOrNull()
@@ -342,7 +345,12 @@ class AiViewModel @Inject constructor(
                 onStatus = { p ->
                     phaseBase = p
                     val sec = (System.currentTimeMillis() - startedAt) / 1000
-                    _state.value = _state.value.copy(phase = if (sec >= 2) p + "（" + sec + "s）" else p)
+                    val traces = _state.value.traces + p
+                    _state.value = _state.value.copy(
+                        phase = if (sec >= 2) p + "（" + sec + "s）" else p,
+                        traces = traces.takeLast(12),
+                        reasoning = if (p.startsWith("思考中")) (_state.value.reasoning.orEmpty() + p.removePrefix("思考中：")) else _state.value.reasoning
+                    )
                 },
                 onDelta = { d ->
                     val cur = _state.value.streamingText.orEmpty() + d
@@ -405,7 +413,10 @@ class AiViewModel @Inject constructor(
             conversationManager.addMessage(
                 convId, AiMessage.ROLE_USER, "📩 发来 ${daoUris.size} 张账单截图，请帮我记账"
             )
-            _state.value = _state.value.copy(typing = true, phase = "正在读取截图…", error = null)
+            _state.value = _state.value.copy(
+                typing = true, phase = "正在读取截图…", error = null,
+                traces = listOf("开始识图：${daoUris.size} 张")
+            )
 
             // 识图智能路由：
             // 「优先用主模型」开 → 先用主模型（多模态主模型零额外配置）；失败自动回退独立识图配置
@@ -441,7 +452,10 @@ class AiViewModel @Inject constructor(
 - 不要编造截图里没有的字段；识别不出的行跳过。没有账单则输出 []。
             """.trimIndent()
 
-            _state.value = _state.value.copy(phase = "正在识别截图（${if (useMain) "主模型" else "识图模型"}）…")
+            _state.value = _state.value.copy(
+                phase = "正在识别截图（${if (useMain) "主模型" else "识图模型"}）…",
+                traces = _state.value.traces + "已压缩 ${base64List.size} 段，一次发给模型（不再反复识别）"
+            )
 
             // 所有切片一次请求发给模型（省 token、也更快）。最多 2 次：主模型失败才回退识图配置。
             suspend fun visionCall(base: String, key: String, model: String): String? = runCatching {
@@ -471,6 +485,9 @@ class AiViewModel @Inject constructor(
                 )
             }
             val mergedItems = mergeExtracted(items)
+            _state.value = _state.value.copy(
+                traces = _state.value.traces + "模型返回 ${items.size} 笔，合并去重后 ${mergedItems.size} 笔"
+            )
 
             // 识别完成 → 批内去重（切片重叠会把同一笔识别两次）+ 与账本比对 → 挂起待用户勾选确认
             if (mergedItems.isEmpty()) {

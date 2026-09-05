@@ -111,25 +111,25 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 }
             }
 
-            // 月份芯片（横向滚动，来自真实数据月份）
-            LazyRow(
+            var showMonth by remember { mutableStateOf(false) }
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                items(listOf("all") + state.months) { m ->
-                    FilterChip(
-                        selected = state.month == m,
-                        onClick = { viewModel.setMonth(m) },
-                        label = { Text(if (m == "all") "全部" else m) },
-                        shape = RoundedCornerShape(50),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                        ),
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
+                com.simpleaccount.app.ui.components.FilterChipButton(
+                    label = if (state.month == "all") "全部月份" else state.month,
+                    onClick = { showMonth = true }
+                )
+            }
+            if (showMonth) {
+                com.simpleaccount.app.ui.components.MonthPickerSheet(
+                    months = state.months,
+                    selected = state.month.takeIf { it != "all" },
+                    allLabel = "全部月份",
+                    onDismiss = { showMonth = false },
+                    onPick = { m -> viewModel.setMonth(m ?: "all"); showMonth = false }
+                )
             }
 
             // ── 分类构成：环形图 + 占比条形（第一个卡片）──
@@ -270,6 +270,52 @@ fun StatsScreen(viewModel: StatsViewModel) {
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.total > 0) {
+                SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("对照", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text("日均 ¥${MoneyUtil.fenToYuan(state.dailyAvgFen)}", fontSize = 13.sp)
+                        Text(
+                            "工作日日均 ¥${MoneyUtil.fenToYuan(state.weekdayAvgFen)} · 周末日均 ¥${MoneyUtil.fenToYuan(state.weekendAvgFen)}",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (state.lastMonthTotal > 0 && state.month != "all") {
+                            val diff = state.total - state.lastMonthTotal
+                            Text(
+                                "上月同期 ¥${MoneyUtil.fenToYuan(state.lastMonthTotal)}，" +
+                                    if (diff >= 0) "多 ¥${MoneyUtil.fenToYuan(diff)}" else "少 ¥${MoneyUtil.fenToYuan(-diff)}",
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+            if (state.topMerchants.isNotEmpty()) {
+                SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("商家排行", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        state.topMerchants.forEachIndexed { i, (name, amt) ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${i + 1}", modifier = Modifier.width(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(name, modifier = Modifier.weight(1f), maxLines = 1)
+                                Text("¥${MoneyUtil.fenToYuan(amt)}", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }

@@ -93,6 +93,18 @@ class AutoRecordViewModel @Inject constructor(
     fun setEnabled(context: Context, enabled: Boolean) {
         _state.value = _state.value.copy(enabled = enabled)
         viewModelScope.launch { settingsRepository.setAutoRecordEnabled(enabled) }
+        runCatching {
+            if (enabled) {
+                com.simpleaccount.app.auto.AutoRecordKeepAliveService.start(context)
+                if (!isListenerGranted(context)) {
+                    runCatching {
+                        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    }
+                }
+            } else {
+                com.simpleaccount.app.auto.AutoRecordKeepAliveService.stop(context)
+            }
+        }
     }
 
     fun isListenerGranted(context: Context): Boolean {

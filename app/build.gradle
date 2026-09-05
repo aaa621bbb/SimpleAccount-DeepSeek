@@ -13,8 +13,8 @@ android {
         applicationId "com.simpleaccount.app.test"
         minSdk 26
         targetSdk 34
-        versionCode 34
-        versionName "2.18.0"
+        versionCode 35
+        versionName "2.19.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 

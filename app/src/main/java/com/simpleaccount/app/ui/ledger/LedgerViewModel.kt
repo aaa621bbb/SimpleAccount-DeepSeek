@@ -31,6 +31,8 @@ data class LedgerFilter(
     val month: String? = null,       // null = 全部
     val category: String? = null,    // null = 全部
     val query: String = "",
+    /** null = 全部；expense / income */
+    val type: String? = null,
 )
 
 /** 按月分组的一段账目（分组计算在后台线程完成，避免切页卡顿） */
@@ -63,9 +65,9 @@ class LedgerViewModel @Inject constructor(
         .distinctUntilChanged()
         .flatMapLatest { f ->
             if (f.query.isNotBlank()) {
-                accountRepository.observeSearch(f.query, f.month, f.category)
+                accountRepository.observeSearch(f.query, f.month, f.category, f.type)
             } else {
-                accountRepository.observeFiltered(f.month, f.category)
+                accountRepository.observeFiltered(f.month, f.category, f.type)
             }
         }
 
@@ -114,6 +116,10 @@ class LedgerViewModel @Inject constructor(
 
     fun setCategory(c: String?) {
         _filter.value = _filter.value.copy(category = c)
+    }
+
+    fun setType(t: String?) {
+        _filter.value = _filter.value.copy(type = t)
     }
 
     fun setQuery(q: String) {
