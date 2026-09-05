@@ -1,10 +1,12 @@
 package com.simpleaccount.app.data.agent
 
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.data.insights.InsightsEngine
 import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.MerchantRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.entity.Merchant
+import com.simpleaccount.app.util.DateUtil
 import com.simpleaccount.app.util.MoneyUtil
 import org.json.JSONObject
 import javax.inject.Inject
@@ -21,7 +23,17 @@ class AgentTools @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val appControl: AppControlCenter,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
+    private val memoryStore: com.simpleaccount.app.data.memory.MemoryStore,
+    private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
+
+    companion object {
+        const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
+        val DESTRUCTIVE = setOf(
+            "delete_category",
+            "classify_merchants",
+        )
+    }
 
     /** 全部工具定义（提供给模型） */
     val specs: List<AgentToolSpec> = listOf(
@@ -29,7 +41,8 @@ class AgentTools @Inject constructor(
             name = "query_transactions",
             description = "查询账本交易明细。可按月份(yyyy-MM)、收支类型、分类、商家/商品关键词筛选用；全部留空则返回最近50条。返回每条记录：日期/收支/金额/分类/商家/商品。",
             parameters = mapOf(
-                "month" to ("string" to "月份，格式 yyyy-MM，例如 2026-03；空则不限月份"),
+                "month" to ("string" to "月份，格式 yyyy-MM，例如 2026-03；也接受「本月/上个月」；空则不限月份"),
+                "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天」。与 month 同时出现时优先用 date"),
                 "type" to ("string" to "'expense' 支出 或 'income' 收入；空则不限"),
                 "category" to ("string" to "分类名，例如 餐饮；空则不限"),
                 "keyword" to ("string" to "商家或商品关键词，用于搜索；空则不限"),
@@ -95,11 +108,19 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "withdraw_transaction",
-            description = "撤回（删除）一笔之前记的账。transaction_id 为之前 add_transaction 返回的流水号。用户说「把刚才那笔删掉/撤回」时调用。",
+            description = "立刻撤回一笔账，不要再问、不要思考。transaction_id 可空：空则删最新一笔。用户说「撤回一笔账单」时马上调用。",
             parameters = mapOf(
-                "transaction_id" to ("integer" to "要撤回的流水号（add_transaction 返回的 id）"),
+                "transaction_id" to ("integer" to "流水号；不传则撤回账本里最新一笔"),
             ),
-            required = listOf("transaction_id"),
+            required = emptyList(),
+        ),
+        AgentToolSpec(
+            name = "set_auto_record",
+            description = "打开或关闭无感记账（支付通知自动入账）。用户说「打开自动记账/无感记账」时调用，然后 navigate 到无感记账页去授权。",
+            parameters = mapOf(
+                "enabled" to ("boolean" to "true 打开，false 关闭"),
+            ),
+            required = listOf("enabled"),
         ),
         AgentToolSpec(
             name = "update_transaction_category",
@@ -112,7 +133,7 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "navigate",
-            description = "跳转到 App 的任意页面。screen 可用中文名或路由：首页/账本/统计/AI管家/设置/记一笔/导入账单/AI设置/分类管理/商家归类管理/数据管理/日志/无感记账。用户说「打开xx」「带我去xx」时调用。",
+            description = "跳转到 App 的任意页面。screen 可用中文名或路由：首页/账本/统计/AI管家/设置/记一笔/导入账单/AI设置/分类管理/商家归类管理/数据管理/日志/无感记账/管家记忆/日期与时间选择器。用户说「打开xx」「带我去xx」时调用。",
             parameters = mapOf(
                 "screen" to ("string" to "目标页面（中文名或路由）"),
             ),
@@ -198,10 +219,40 @@ class AgentTools @Inject constructor(
             ),
             required = listOf("mappings"),
         ),
+        AgentToolSpec(
+            name = "memory_get",
+            description = "检索长期记忆。keywords 空格分隔，全部词都要命中。scope=daily 只每日日志，all 含 GLOBAL。",
+            parameters = mapOf(
+                "keywords" to ("string" to "关键词，空格分隔"),
+                "scope" to ("string" to "daily 或 all，默认 daily"),
+            ),
+            required = listOf("keywords"),
+        ),
+        AgentToolSpec(
+            name = "memory_write",
+            description = "写入记忆。scope=daily 写今日日志；global 仅当用户明确说「记住这个（全局）」。禁止写密码/Key。",
+            parameters = mapOf(
+                "title" to ("string" to "条目标题"),
+                "body" to ("string" to "内容"),
+                "scope" to ("string" to "daily 或 global"),
+            ),
+            required = listOf("title", "body"),
+        ),
+        AgentToolSpec(
+            name = "get_insights",
+            description = "生成本月（或指定月）花销体检：环比、分类排行、异常日。不要谈「固定支出」口径。用户问「体检」「花哪了」时优先调用。",
+            parameters = mapOf(
+                "month" to ("string" to "月份 yyyy-MM，空则本月"),
+            ),
+            required = emptyList(),
+        ),
     )
 
-    /** 依据模型给出的工具调用执行，返回结果文本 */
-    suspend fun execute(call: AgentToolCall): AgentToolResult {
+    /** 依据模型给出的工具调用执行。破坏性操作未确认时返回 [NEED_CONFIRM] 前缀。 */
+    suspend fun execute(call: AgentToolCall, confirmed: Boolean = false): AgentToolResult {
+        if (call.name in DESTRUCTIVE && !confirmed) {
+            return AgentToolResult(call.id, call.name, NEED_CONFIRM_PREFIX + previewDestructive(call))
+        }
         val result = try {
             when (call.name) {
                 "query_transactions" -> queryTransactions(call.arguments)
@@ -221,14 +272,52 @@ class AgentTools @Inject constructor(
                 "set_merchant_category" -> setMerchantCategory(call.arguments)
                 "set_monthly_budget" -> setMonthlyBudget(call.arguments)
                 "set_theme" -> setTheme(call.arguments)
+                "set_auto_record" -> setAutoRecord(call.arguments)
                 "list_merchants" -> listMerchants(call.arguments)
                 "classify_merchants" -> classifyMerchants(call.arguments)
+                "get_insights" -> getInsights(call.arguments)
+                "memory_get" -> {
+                    val a = parseArgs(call.arguments)
+                    memoryStore.search(a.optString("keywords"), a.optString("scope").ifBlank { "daily" })
+                }
+                "memory_write" -> {
+                    val a = parseArgs(call.arguments)
+                    val title = a.optString("title")
+                    val body = a.optString("body")
+                    val scope = a.optString("scope").ifBlank { "daily" }
+                    if (memoryStore.looksSecret(title + body)) "拒绝：疑似密钥，未写入。"
+                    else if (scope == "global") {
+                        if (memoryStore.appendGlobal("$title：$body")) "已写入 GLOBAL.md"
+                        else "GLOBAL 写入失败"
+                    } else {
+                        memoryStore.appendDaily(title, body)
+                        "已写入今日日志"
+                    }
+                }
                 else -> "错误：未知工具 ${call.name}"
             }
         } catch (e: Exception) {
             "工具执行出错：${e.message}"
         }
         return AgentToolResult(call.id, call.name, result)
+    }
+
+    suspend fun previewDestructive(call: AgentToolCall): String {
+        val a = parseArgs(call.arguments)
+        return when (call.name) {
+            "delete_transaction", "withdraw_transaction" -> {
+                val id = a.optLong("transaction_id", -1L)
+                val t = accountRepository.getById(id)
+                if (t == null) "流水号 $id 不存在，无需删除。"
+                else {
+                    val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+                    "将删除流水号 $id：$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.product.ifBlank { t.category } }} · ${t.date}"
+                }
+            }
+            "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
+            "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
+            else -> "将执行 ${call.name}"
+        }
     }
 
     // ---------------- 各工具实现 ----------------
@@ -244,6 +333,8 @@ class AgentTools @Inject constructor(
     private fun normalizeMonth(v: String): String? {
         val t = v.trim()
         if (t.isEmpty()) return null
+        com.simpleaccount.app.util.DateResolver.resolveMonth(t)?.let { return it }
+        com.simpleaccount.app.util.DateResolver.resolveFlexible(t)?.let { return it.take(7) }
         // 标准 yyyy-MM / yyyy-MM-dd
         Regex("^(\\d{4})[-/.年](\\d{1,2})").find(t)?.let {
             val y = it.groupValues[1].toInt()
@@ -257,6 +348,13 @@ class AgentTools @Inject constructor(
             if (m in 1..12) return "%04d-%02d".format(y, m)
         }
         return null
+    }
+
+    /** 工具层再解析一次相对日期，模型传「昨天」也能用 */
+    private fun normalizeDate(v: String): String? {
+        val t = v.trim()
+        if (t.isEmpty()) return null
+        return com.simpleaccount.app.util.DateResolver.resolveFlexible(t)
     }
 
     /**
@@ -273,6 +371,7 @@ class AgentTools @Inject constructor(
 
     private suspend fun queryTransactions(args: String): String {
         val a = parseArgs(args)
+        val date = normalizeDate(a.optString("date").trim()) ?: ""
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val type = a.optString("type").trim().lowercase()
         val category = a.optString("category").trim()
@@ -286,7 +385,8 @@ class AgentTools @Inject constructor(
         }
 
         val matched = accountRepository.getAll().asSequence()
-            .filter { month.isEmpty() || it.date.startsWith(month) }
+            .filter { date.isEmpty() || it.date == date }
+            .filter { date.isNotEmpty() || month.isEmpty() || it.date.startsWith(month) }
             .filter { typeFilter == null || it.type == typeFilter }
             .filter { category.isEmpty() || it.category == category }
             .filter {
@@ -378,9 +478,13 @@ class AgentTools @Inject constructor(
     /** 记一笔：用户口语记账入口，落 transactions 主表（source=manual），返回流水号 */
     private suspend fun addTransaction(args: String): String {
         val a = parseArgs(args)
-        val amountYuan = a.optDouble("amount")
-        if (amountYuan.isNaN() || amountYuan <= 0) return "参数错误：amount 必须是大于 0 的金额（元）。"
-        val amountFen = Math.round(amountYuan * 100)
+        val amountFen = MoneyUtil.parseToFen(
+            a.optString("amount").ifBlank {
+                val d = a.optDouble("amount")
+                if (d.isNaN()) "" else d.toString()
+            }
+        )
+        if (amountFen == null || amountFen <= 0) return "参数错误：amount 必须是大于 0 的金额（元）。"
         val merchant = a.optString("merchant").trim()
         val product = a.optString("product").trim()
         val type = when (a.optString("type").trim().lowercase()) {
@@ -389,19 +493,24 @@ class AgentTools @Inject constructor(
         }
         val date = a.optString("date").trim().ifBlank {
             java.time.LocalDate.now().toString()
-        }.let { Regex("(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})").find(it)?.let { mm ->
-            "%04d-%02d-%02d".format(mm.groupValues[1].toInt(), mm.groupValues[2].toInt(), mm.groupValues[3].toInt())
-        } ?: java.time.LocalDate.now().toString() }
+        }.let { raw ->
+            normalizeDate(raw)
+                ?: Regex("(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})").find(raw)?.let { mm ->
+                    "%04d-%02d-%02d".format(mm.groupValues[1].toInt(), mm.groupValues[2].toInt(), mm.groupValues[3].toInt())
+                }
+                ?: java.time.LocalDate.now().toString()
+        }
         // 时间（HH:mm，从参数或"今天 HH:mm"类文本里提取）
         val timeRaw = a.optString("time").trim()
+        val nowTime = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) }
         val time = if (timeRaw.isNotBlank()) {
             Regex("(\\d{1,2}):(\\d{2})").find(timeRaw)?.let { tm ->
                 "%02d:%02d".format(
                     tm.groupValues[1].toInt().coerceIn(0, 23),
                     tm.groupValues[2].toInt().coerceIn(0, 59)
                 )
-            } ?: ""
-        } else ""
+            } ?: nowTime
+        } else nowTime
 
         // 分类：显式指定且合法 → 直接用；否则 商家映射表 → 关键词规则 → 兜底（与导入同优先级）
         val valid = categoryRepository.getAll().map { it.name }.toSet()
@@ -440,16 +549,33 @@ class AgentTools @Inject constructor(
             listOf(merchant, product, category, date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
-    /** 撤回一笔账：按 add_transaction 返回的流水号删除 */
+    /** 撤回一笔账：有流水号按号删，否则删最新一笔。不二次确认。 */
     private suspend fun withdrawTransaction(args: String): String {
         val a = parseArgs(args)
         val id = a.optLong("transaction_id", -1L)
-        if (id <= 0) return "参数错误：transaction_id 必须是有效的流水号。"
-        val t = accountRepository.getById(id) ?: return "没有找到流水号 $id 的记录（可能已删除）。"
-        accountRepository.delete(id)
+        val t = if (id > 0) {
+            accountRepository.getById(id)
+        } else {
+            accountRepository.getAll().maxByOrNull { it.id }
+        } ?: return if (id > 0) "没有找到流水号 $id 的记录（可能已删除）。" else "账本是空的，没有可撤回的。"
+        accountRepository.delete(t.id)
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已撤回流水号 $id：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
+        return "已撤回流水号 ${t.id}：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
             listOf(t.merchant, t.product, t.category, t.date).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
+    private suspend fun setAutoRecord(args: String): String {
+        val a = parseArgs(args)
+        val enabled = when {
+            a.has("enabled") -> a.optBoolean("enabled")
+            else -> true
+        }
+        settingsRepository.setAutoRecordEnabled(enabled)
+        autoRecordRuntime.setEnabled(enabled)
+        appControl.navigate("无感记账")
+        return if (enabled)
+            "已打开自动记账，并带到「无感记账」页。还差通知使用权的话，在该页点「去授权」。"
+        else "已关闭自动记账。"
     }
 
     /** 只改某一笔的分类（不动商家映射、不影响同商家其他账单） */
@@ -530,7 +656,7 @@ class AgentTools @Inject constructor(
                 type = type,
                 sortOrder = 99,
                 isPreset = false,
-                iconName = "more_horiz",
+                iconName = com.simpleaccount.app.util.IconMapper.allChoices(type).firstOrNull { it.name != "more_horiz" }?.name ?: "category",
                 colorHex = "#7A9AE3",
             )
         )
@@ -629,7 +755,9 @@ class AgentTools @Inject constructor(
     private suspend fun getDailyTotals(args: String): String {
         val a = parseArgs(args)
         val month = normalizeMonth(a.optString("month").trim())
-            ?: return "参数错误：month 必须是月份（yyyy-MM，如 2026-08；也接受 2026年8月 这类写法）。"
+            ?: normalizeDate(a.optString("month").trim())?.take(7)
+            ?: normalizeDate(a.optString("date").trim())?.take(7)
+            ?: return "参数错误：month 必须是月份（yyyy-MM，如 2026-08；也接受 本月/上个月/昨天）。"
         val all = accountRepository.getAll().filter { it.date.startsWith(month) }
         if (all.isEmpty()) return "$month 没有记账记录。"
         val byDay = sortedMapOf<String, LongArray>()
@@ -696,5 +824,16 @@ class AgentTools @Inject constructor(
             updated++
         }
         return "已归类 $updated 个商家，$skipped 个因分类名无效跳过。"
+    }
+
+    private suspend fun getInsights(args: String): String {
+        val a = parseArgs(args)
+        val month = normalizeMonth(a.optString("month").trim()) ?: DateUtil.thisMonth()
+        val health = InsightsEngine.compute(
+            accountRepository.getAll(),
+            settingsRepository.monthlyBudget(),
+            month,
+        )
+        return InsightsEngine.toMarkdown(health)
     }
 }

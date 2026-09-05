@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,33 +25,36 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
-/** 统一的卡片样式：白底 + 发丝边框 + 20dp 圆角 + 轻投影（扁平而有层次） */
+/** 统一卡片：令牌圆角 + 轻投影（左上光源）+ 发丝描边。全 App 只用这一张。 */
 @Composable
 fun SoftCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(t.radiusXl),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        elevation = CardDefaults.cardElevation(defaultElevation = t.elevRaised),
+        border = BorderStroke(t.hairline, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
     ) {
         Column(content = content)
     }
 }
 
-/** 分类彩色圆底 + 图标（柔和色调：浅色底 + 彩色图标，比纯色底更精致） */
+/** 分类彩色圆底 + 图标 */
 @Composable
 fun CategoryIconCircle(
     category: Category?,
@@ -64,19 +66,19 @@ fun CategoryIconCircle(
         modifier = modifier
             .size(size.dp)
             .clip(CircleShape)
-            .background(color.copy(alpha = 0.16f)),
+            .background(color.copy(alpha = 0.14f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = IconMapper.map(category?.iconName ?: "more_horiz"),
             contentDescription = category?.name,
             tint = color,
-            modifier = Modifier.size((size * 0.55).dp)
+            modifier = Modifier.size((size * 0.52).dp)
         )
     }
 }
 
-/** 单条流水行：圆形图标 + 分类·商家(左侧)，日期+金额(右侧) */
+/** 单条流水行 */
 @Composable
 fun TransactionRow(
     transaction: Transaction,
@@ -86,11 +88,11 @@ fun TransactionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 11.dp)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CategoryIconCircle(category, size = 40)
+        CategoryIconCircle(category, size = 42)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -120,7 +122,7 @@ fun TransactionRow(
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (transaction.type == Transaction.TYPE_INCOME)
-                    Color(0xFF2ECC71) else MaterialTheme.colorScheme.onSurface
+                    LocalAppPalette.current.income else MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = transaction.date + (if (transaction.time.isNotBlank()) " " + transaction.time else ""),
@@ -148,8 +150,33 @@ fun parseColor(hex: String): Color {
 }
 
 @Composable
-fun EmptyState(text: String) {
-    Box(Modifier.fillMaxSize().padding(48.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+fun EmptyState(text: String, caption: String? = null, modifier: Modifier = Modifier) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    Box(modifier.fillMaxWidth().padding(t.space32), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            if (!caption.isNullOrBlank()) {
+                Spacer(Modifier.size(t.space8))
+                Text(caption, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun PageEnter(content: @Composable () -> Unit) {
+    val reduce = com.simpleaccount.app.ui.motion.LocalReduceMotion.current
+    val appear = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(if (reduce) 0f else 12f) }
+    val alpha = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(if (reduce) 1f else 0f) }
+    androidx.compose.runtime.LaunchedEffect(reduce) {
+        if (reduce) {
+            appear.snapTo(0f); alpha.snapTo(1f)
+        } else {
+            appear.animateTo(0f, com.simpleaccount.app.ui.motion.Motion.softSpring)
+            alpha.animateTo(1f, com.simpleaccount.app.ui.motion.Motion.tweenOrSnap(false, com.simpleaccount.app.ui.motion.Motion.PAGE_MS))
+        }
+    }
+    Box(Modifier.graphicsLayer { translationY = appear.value; this.alpha = alpha.value }) {
+        content()
     }
 }

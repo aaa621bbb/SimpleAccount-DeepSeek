@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -52,11 +54,7 @@ import com.simpleaccount.app.ui.components.parseColor
 import com.simpleaccount.app.util.IconMapper
 import kotlinx.coroutines.launch
 
-/** 可选图标库（预置图标名 → 显示用 ImageVector） */
-private val iconLibrary = listOf(
-    "restaurant", "directions_car", "shopping_cart", "movie", "local_hospital",
-    "school", "home", "phone", "attach_money", "card_giftcard", "trending_up", "work", "more_horiz"
-)
+
 
 /** 可选颜色库 */
 private val colorLibrary = listOf(
@@ -72,6 +70,7 @@ fun CategoryManageScreen(
     val state by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     var showAddDialog by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Category?>(null) }
     var pendingDelete by remember { mutableStateOf<Category?>(null) }
     var confirmDeleteEmpty by remember { mutableStateOf<Category?>(null) }
 
@@ -102,6 +101,7 @@ fun CategoryManageScreen(
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .clickable { editing = cat }
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -109,13 +109,11 @@ fun CategoryManageScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(cat.name, style = MaterialTheme.typography.bodyLarge)
-                            if (cat.isPreset) {
-                                Text(
-                                    "预置分类",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                if (cat.isPreset) "预置 · 点按可改图标颜色" else "点按可改名称、图标、颜色",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         if (!cat.isPreset) {
                             IconButton(onClick = {
@@ -136,13 +134,26 @@ fun CategoryManageScreen(
         }
     }
 
-    // 新增分类对话框
     if (showAddDialog) {
-        AddCategoryDialog(
+        CategoryEditorDialog(
+            type = state.type,
+            initial = null,
             onDismiss = { showAddDialog = false },
             onConfirm = { name, icon, color ->
                 showAddDialog = false
                 scope.launch { viewModel.add(name, icon, color) }
+            }
+        )
+    }
+    editing?.let { cat ->
+        CategoryEditorDialog(
+            type = cat.type,
+            initial = cat,
+            onDismiss = { editing = null },
+            onConfirm = { name, icon, color ->
+                val target = cat
+                editing = null
+                scope.launch { viewModel.updateStyle(target, icon, color, name) }
             }
         )
     }
@@ -170,47 +181,58 @@ fun CategoryManageScreen(
 }
 
 @Composable
-private fun AddCategoryDialog(
+private fun CategoryEditorDialog(
+    type: String,
+    initial: Category?,
     onDismiss: () -> Unit,
     onConfirm: (String, String, String) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
-    var icon by remember { mutableStateOf("more_horiz") }
-    var color by remember { mutableStateOf("#BDC3C7") }
+    val icons = com.simpleaccount.app.util.IconMapper.allChoices(type)
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var icon by remember { mutableStateOf(initial?.iconName ?: icons.firstOrNull()?.name ?: "more_horiz") }
+    var color by remember { mutableStateOf(initial?.colorHex ?: "#BDC3C7") }
+    val nameLocked = initial?.isPreset == true
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新增分类") },
+        title = { Text(if (initial == null) "新增分类" else "修改「${initial.name}」") },
         text = {
             Column {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
-                    label = { Text("分类名称") },
+                    onValueChange = { if (!nameLocked) name = it },
+                    label = { Text(if (nameLocked) "分类名称（预置不可改名）" else "分类名称") },
+                    enabled = !nameLocked,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                Text("选择图标", style = MaterialTheme.typography.titleSmall)
-                Row {
-                    iconLibrary.forEach { ic ->
-                        val selected = ic == icon
-                        Box(
-                            Modifier
-                                .padding(4.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(if (selected) MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { icon = ic },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                IconMapper.map(ic),
-                                contentDescription = ic,
-                                tint = if (selected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
+                Text("选择图标（支出/收入各 30+，互不重复）", style = MaterialTheme.typography.titleSmall)
+                Column(Modifier.height(220.dp).verticalScroll(rememberScrollState())) {
+                    icons.chunked(6).forEach { row ->
+                        Row(Modifier.fillMaxWidth()) {
+                            row.forEach { ic ->
+                                val selected = ic.name == icon
+                                Box(
+                                    Modifier
+                                        .padding(4.dp)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                        .clickable { icon = ic.name },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        IconMapper.map(ic.name),
+                                        contentDescription = ic.label,
+                                        tint = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
                         }
                     }
                 }
