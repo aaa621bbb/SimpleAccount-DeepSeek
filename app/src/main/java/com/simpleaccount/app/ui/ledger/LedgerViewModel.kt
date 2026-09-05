@@ -63,7 +63,7 @@ class LedgerViewModel @Inject constructor(
         .distinctUntilChanged()
         .flatMapLatest { f ->
             if (f.query.isNotBlank()) {
-                accountRepository.observeSearch(f.query)
+                accountRepository.observeSearch(f.query, f.month, f.category)
             } else {
                 accountRepository.observeFiltered(f.month, f.category)
             }

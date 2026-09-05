@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileUpload
@@ -56,6 +58,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var showBudgetDialog by remember { mutableStateOf(false) }
+    var showInsight by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -75,6 +78,36 @@ fun HomeScreen(
 
             // 本月支出卡：固定在顶部，不随列表滚动消失
             SummaryCards(state, onSetBudget = { showBudgetDialog = true })
+
+            if (state.insightReport.isNotBlank()) {
+                com.simpleaccount.app.ui.components.SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .clickable { showInsight = true }
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Text(
+                            "本月体检",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            state.insightHeadline,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (state.insightSub.isNotBlank()) {
+                            Text(
+                                state.insightSub,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
 
             // 最近记录标题 + 排序切换
             Row(
@@ -145,6 +178,21 @@ fun HomeScreen(
         ) {
             Icon(Icons.Filled.Add, contentDescription = "记一笔")
         }
+    }
+
+    if (showInsight) {
+        AlertDialog(
+            onDismissRequest = { showInsight = false },
+            title = { Text("本月体检") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showInsight = false }) { Text("好的") }
+            }
+        )
     }
 
     // 每月预算设置对话框（点主卡上的"本月预算"格）

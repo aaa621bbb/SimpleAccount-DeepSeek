@@ -31,12 +31,20 @@ data class AiUiState(
     val typing: Boolean = false,
     /** Agent 过程状态（"正在思考…"/"正在查询账本…"） */
     val phase: String? = null,
+    val streamingText: String? = null,
     val input: String = "",
     val error: String? = null,
     val pendingCount: Int = 0,
     val enabled: Boolean = false,
     /** 截图记账：识别结果待确认（用户勾选后才入账） */
     val screenshotPending: ScreenshotPendingUi? = null,
+    val pendingConfirm: PendingConfirmUi? = null,
+)
+
+data class PendingConfirmUi(
+    val tool: String,
+    val args: String,
+    val summary: String,
 )
 
 /** 截图识别出的单笔（预览/勾选用） */
@@ -69,6 +77,8 @@ class AiViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val aiService: AiService,
     private val agentLoop: AgentLoop,
+    private val agentTools: com.simpleaccount.app.data.agent.AgentTools,
+    private val localAccountant: com.simpleaccount.app.data.agent.LocalAccountant,
     private val classificationService: com.simpleaccount.app.data.service.ClassificationService,
 ) : ViewModel() {
 
@@ -82,7 +92,7 @@ class AiViewModel @Inject constructor(
     private var agentJob: Job? = null
 
     private val welcomeText =
-        "你好，我是 AI 记账管家 🧾 会先查你的真实账本再回答，可以直接问：这个月花了多少？哪类支出最多？"
+        "你好，我是 AI 记账管家 🧾 会先查你的真实账本再回答。直接问「昨天花了多少」「本月体检」，本地立刻出数；复杂的再交给模型。"
 
     init {
         viewModelScope.launch {
@@ -204,10 +214,19 @@ class AiViewModel @Inject constructor(
     /** 重新生成最后一条回复：删掉最后的 assistant 消息后按最后一条用户消息重跑 */
     /** 停止当前回合：掐断进行中的网络请求 + 取消任务，输入栏立即可用 */
     fun stopAgent() {
+        val partial = _state.value.streamingText
+        val convId = _state.value.currentConversationId
         aiService.cancelAllActive()
         agentJob?.cancel()
         agentJob = null
-        _state.value = _state.value.copy(typing = false, phase = null)
+        _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+        if (!partial.isNullOrBlank() && partial.length > 8 && convId.isNotEmpty()) {
+            viewModelScope.launch {
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT, partial.trim() + "\n\n（已停止）"
+                )
+            }
+        }
     }
 
     fun regenerate() {
@@ -229,12 +248,6 @@ class AiViewModel @Inject constructor(
     fun sendMessage(content: String) {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return
-        val enabled = settingsRepository.isAiEnabled()
-        if (!enabled) {
-            _state.value = _state.value.copy(error = "AI 功能未开启，请到设置中开启并配置")
-            return
-        }
-        // 正在回复时发新消息 = 打断当前回合（OpenMinis 风格），立刻开始新回合
         if (_state.value.typing) {
             stopAgent()
         }
@@ -242,14 +255,29 @@ class AiViewModel @Inject constructor(
             val convId = _state.value.currentConversationId.ifEmpty {
                 conversationManager.ensureCurrentConversation().id
             }
-            // 首条用户消息自动命名会话
             if (_state.value.currentTitle == "新对话") {
                 conversationManager.renameConversation(convId, trimmed.take(16))
             }
             conversationManager.addMessage(convId, AiMessage.ROLE_USER, trimmed)
             _state.value = _state.value.copy(
-                input = "", typing = true, phase = "正在思考…", error = null
+                input = "", typing = true, phase = "正在思考…", error = null,
+                streamingText = null, pendingConfirm = null
             )
+            val local = runCatching { localAccountant.tryAnswer(trimmed) }.getOrNull()
+            if (local != null) {
+                conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, local)
+                _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+                return@launch
+            }
+            if (!settingsRepository.isAiEnabled()) {
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT,
+                    "AI 功能未开启，请到设置中开启并配置。常见问题（昨天花了多少、本月体检）即使不开 AI 也能直接答。",
+                    status = AiMessage.STATUS_ERROR
+                )
+                _state.value = _state.value.copy(typing = false, phase = null)
+                return@launch
+            }
             val apiKey = settingsRepository.apiKey()
             if (apiKey.isBlank()) {
                 conversationManager.addMessage(
@@ -260,6 +288,28 @@ class AiViewModel @Inject constructor(
                 return@launch
             }
             runAgentTurn(convId, trimmed)
+        }
+    }
+
+    fun confirmPending() {
+        val p = _state.value.pendingConfirm ?: return
+        val convId = _state.value.currentConversationId
+        viewModelScope.launch {
+            _state.value = _state.value.copy(pendingConfirm = null, typing = true, phase = "正在执行…")
+            val result = agentTools.execute(
+                com.simpleaccount.app.data.agent.AgentToolCall("confirm-1", p.tool, p.args),
+                confirmed = true,
+            )
+            conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, result.content)
+            _state.value = _state.value.copy(typing = false, phase = null)
+        }
+    }
+
+    fun dismissPending() {
+        val convId = _state.value.currentConversationId
+        _state.value = _state.value.copy(pendingConfirm = null)
+        viewModelScope.launch {
+            conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, "已取消这次操作，账本没有改动。")
         }
     }
 
@@ -292,6 +342,10 @@ class AiViewModel @Inject constructor(
                     phaseBase = p
                     val sec = (System.currentTimeMillis() - startedAt) / 1000
                     _state.value = _state.value.copy(phase = if (sec >= 2) p + "（" + sec + "s）" else p)
+                },
+                onDelta = { d ->
+                    val cur = _state.value.streamingText.orEmpty() + d
+                    _state.value = _state.value.copy(streamingText = cur, phase = null)
                 }
             )
             ticker.cancel()
@@ -301,17 +355,26 @@ class AiViewModel @Inject constructor(
             "AI-Agent: 完成 toolRounds=" + result.toolRounds + " " +
                 (if (result.error != null) "error=" + result.error else "reply=" + result.reply.take(60))
         )
+        if (result.error == "已停止") {
+            _state.value = _state.value.copy(typing = false, phase = null)
+            return
+        }
         if (result.error != null) {
             conversationManager.addMessage(
                 conversationId, AiMessage.ROLE_ASSISTANT, result.error,
                 status = AiMessage.STATUS_ERROR
             )
-            _state.value = _state.value.copy(typing = false, phase = null, error = result.error)
+            _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, error = result.error)
         } else {
             conversationManager.addMessage(
                 conversationId, AiMessage.ROLE_ASSISTANT, result.reply.ifBlank { "（模型未返回内容）" }
             )
-            _state.value = _state.value.copy(typing = false, phase = null, error = null)
+            _state.value = _state.value.copy(
+                typing = false, phase = null, streamingText = null, error = null,
+                pendingConfirm = result.pending?.let {
+                    PendingConfirmUi(it.tool, it.args, it.summary)
+                }
+            )
         }
     }
 

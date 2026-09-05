@@ -1,10 +1,12 @@
 package com.simpleaccount.app.data.agent
 
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.data.insights.InsightsEngine
 import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.MerchantRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.entity.Merchant
+import com.simpleaccount.app.util.DateUtil
 import com.simpleaccount.app.util.MoneyUtil
 import org.json.JSONObject
 import javax.inject.Inject
@@ -22,6 +24,16 @@ class AgentTools @Inject constructor(
     private val appControl: AppControlCenter,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) {
+
+    companion object {
+        const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
+        val DESTRUCTIVE = setOf(
+            "delete_transaction",
+            "withdraw_transaction",
+            "delete_category",
+            "classify_merchants",
+        )
+    }
 
     /** 全部工具定义（提供给模型） */
     val specs: List<AgentToolSpec> = listOf(
@@ -199,10 +211,21 @@ class AgentTools @Inject constructor(
             ),
             required = listOf("mappings"),
         ),
+        AgentToolSpec(
+            name = "get_insights",
+            description = "生成本月（或指定月）花销体检：环比、分类排行、异常日、订阅/固定支出雷达。用户问「体检」「花哪了」「有没有订阅」时优先调用。",
+            parameters = mapOf(
+                "month" to ("string" to "月份 yyyy-MM，空则本月"),
+            ),
+            required = emptyList(),
+        ),
     )
 
-    /** 依据模型给出的工具调用执行，返回结果文本 */
-    suspend fun execute(call: AgentToolCall): AgentToolResult {
+    /** 依据模型给出的工具调用执行。破坏性操作未确认时返回 [NEED_CONFIRM] 前缀。 */
+    suspend fun execute(call: AgentToolCall, confirmed: Boolean = false): AgentToolResult {
+        if (call.name in DESTRUCTIVE && !confirmed) {
+            return AgentToolResult(call.id, call.name, NEED_CONFIRM_PREFIX + previewDestructive(call))
+        }
         val result = try {
             when (call.name) {
                 "query_transactions" -> queryTransactions(call.arguments)
@@ -224,12 +247,31 @@ class AgentTools @Inject constructor(
                 "set_theme" -> setTheme(call.arguments)
                 "list_merchants" -> listMerchants(call.arguments)
                 "classify_merchants" -> classifyMerchants(call.arguments)
+                "get_insights" -> getInsights(call.arguments)
                 else -> "错误：未知工具 ${call.name}"
             }
         } catch (e: Exception) {
             "工具执行出错：${e.message}"
         }
         return AgentToolResult(call.id, call.name, result)
+    }
+
+    suspend fun previewDestructive(call: AgentToolCall): String {
+        val a = parseArgs(call.arguments)
+        return when (call.name) {
+            "delete_transaction", "withdraw_transaction" -> {
+                val id = a.optLong("transaction_id", -1L)
+                val t = accountRepository.getById(id)
+                if (t == null) "流水号 $id 不存在，无需删除。"
+                else {
+                    val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+                    "将删除流水号 $id：$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.product.ifBlank { t.category } }} · ${t.date}"
+                }
+            }
+            "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
+            "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
+            else -> "将执行 ${call.name}"
+        }
     }
 
     // ---------------- 各工具实现 ----------------
@@ -390,9 +432,13 @@ class AgentTools @Inject constructor(
     /** 记一笔：用户口语记账入口，落 transactions 主表（source=manual），返回流水号 */
     private suspend fun addTransaction(args: String): String {
         val a = parseArgs(args)
-        val amountYuan = a.optDouble("amount")
-        if (amountYuan.isNaN() || amountYuan <= 0) return "参数错误：amount 必须是大于 0 的金额（元）。"
-        val amountFen = Math.round(amountYuan * 100)
+        val amountFen = MoneyUtil.parseToFen(
+            a.optString("amount").ifBlank {
+                val d = a.optDouble("amount")
+                if (d.isNaN()) "" else d.toString()
+            }
+        )
+        if (amountFen == null || amountFen <= 0) return "参数错误：amount 必须是大于 0 的金额（元）。"
         val merchant = a.optString("merchant").trim()
         val product = a.optString("product").trim()
         val type = when (a.optString("type").trim().lowercase()) {
@@ -410,14 +456,15 @@ class AgentTools @Inject constructor(
         }
         // 时间（HH:mm，从参数或"今天 HH:mm"类文本里提取）
         val timeRaw = a.optString("time").trim()
+        val nowTime = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) }
         val time = if (timeRaw.isNotBlank()) {
             Regex("(\\d{1,2}):(\\d{2})").find(timeRaw)?.let { tm ->
                 "%02d:%02d".format(
                     tm.groupValues[1].toInt().coerceIn(0, 23),
                     tm.groupValues[2].toInt().coerceIn(0, 59)
                 )
-            } ?: ""
-        } else ""
+            } ?: nowTime
+        } else nowTime
 
         // 分类：显式指定且合法 → 直接用；否则 商家映射表 → 关键词规则 → 兜底（与导入同优先级）
         val valid = categoryRepository.getAll().map { it.name }.toSet()
@@ -714,5 +761,16 @@ class AgentTools @Inject constructor(
             updated++
         }
         return "已归类 $updated 个商家，$skipped 个因分类名无效跳过。"
+    }
+
+    private suspend fun getInsights(args: String): String {
+        val a = parseArgs(args)
+        val month = normalizeMonth(a.optString("month").trim()) ?: DateUtil.thisMonth()
+        val health = InsightsEngine.compute(
+            accountRepository.getAll(),
+            settingsRepository.monthlyBudget(),
+            month,
+        )
+        return InsightsEngine.toMarkdown(health)
     }
 }

@@ -110,9 +110,9 @@ fun AiScreen(
 
     LaunchedEffect(Unit) { viewModel.refreshEnabled() }
 
-    // 新消息/输入状态变化时自动滚到底部
-    LaunchedEffect(state.messages.size, state.typing) {
-        if (state.messages.isNotEmpty()) {
+    // 新消息/输入状态/流式增量变化时自动滚到底部
+    LaunchedEffect(state.messages.size, state.typing, state.streamingText?.length?.div(40)) {
+        if (state.messages.isNotEmpty() || state.typing) {
             listState.animateScrollToItem(state.messages.size - 1 + if (state.typing) 1 else 0)
         }
     }
@@ -204,9 +204,35 @@ fun AiScreen(
                     )
                 }
                 if (state.typing) {
-                    item { TypingBubble(state.phase) }
+                    item {
+                        val stream = state.streamingText
+                        if (!stream.isNullOrEmpty()) StreamingBubble(stream)
+                        else TypingBubble(state.phase)
+                    }
                 }
                 item { Spacer(Modifier.height(8.dp)) }
+            }
+
+            state.pendingConfirm?.let { pending ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Text(
+                            pending.summary,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { viewModel.dismissPending() }) { Text("取消") }
+                            TextButton(onClick = { viewModel.confirmPending() }) { Text("确认执行") }
+                        }
+                    }
+                }
             }
 
             // 错误横幅 + 重试

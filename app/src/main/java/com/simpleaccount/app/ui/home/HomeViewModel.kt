@@ -2,8 +2,8 @@ package com.simpleaccount.app.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.data.insights.InsightsEngine
 import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
@@ -30,6 +30,9 @@ data class HomeUiState(
     val budgetFen: Long = 0L,
     val recent: List<RowUi> = emptyList(),
     val sortByAmount: Boolean = false,
+    val insightHeadline: String = "",
+    val insightSub: String = "",
+    val insightReport: String = "",
 )
 
 @HiltViewModel
@@ -68,11 +71,13 @@ class HomeViewModel @Inject constructor(
     /** 当月流水 + 分类 + 排序 + 条数，合并为 UI 状态 */
     val uiState: StateFlow<HomeUiState> =
         combine(
-            accountRepository.observeMonth(DateUtil.monthPrefix(DateUtil.thisMonth())),
+            accountRepository.observeAll(),
             categoriesFlow,
             budgetFlow,
             combine(recentCountFlow, sortFlow) { count, sort -> count to sort }
-        ) { transactions, categories, budget, (count, sort) ->
+        ) { all, categories, budget, (count, sort) ->
+            val month = DateUtil.thisMonth()
+            val transactions = all.filter { it.date.startsWith(month) }
             val catMap = categories.associateBy { it.name }
             var expense = 0L
             var income = 0L
@@ -98,14 +103,18 @@ class HomeViewModel @Inject constructor(
                         .thenByDescending { it.id }
                 )
             }
+            val health = InsightsEngine.compute(all, budget, month)
             HomeUiState(
-                month = DateUtil.thisMonth(),
+                month = month,
                 expense = expense,
                 income = income,
                 balance = income - expense,
                 budgetFen = budget,
                 sortByAmount = sort == HomeSort.AMOUNT,
-                recent = sorted.take(count).map { RowUi(it, catMap[it.category]) }
+                recent = sorted.take(count).map { RowUi(it, catMap[it.category]) },
+                insightHeadline = health.headline,
+                insightSub = health.subline,
+                insightReport = if (all.isEmpty()) "" else InsightsEngine.toMarkdown(health),
             )
         }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
