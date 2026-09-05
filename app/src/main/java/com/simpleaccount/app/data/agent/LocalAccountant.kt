@@ -13,11 +13,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 本地会计：常见问题不经过大模型，直接查库用中文答。
+ * 本地会计：只拦截「查实数 / 记一笔」这类题。
  *
- * 为什么「无论接什么模型都显得蠢」——小模型 function calling 不稳，
- * 「昨天花了多少」这种题要 2～3 轮工具才答得上，还经常日期未知。
- * 快路径在设备上 10ms 内给真实数字，弱模型也立刻聪明。
+ * 判定标准（宁可漏给模型，也不截胡分析题）：
+ * 1. 含判断/建议词（分析、怎么办、值不值、怎么样……）→ 一律交给模型。
+ * 2. 体检 / 月报 / 花哪了：模型可用时交给模型（数字已在快照里，模型负责写观察）；
+ *    没配 Key 才本地出 Markdown，保证「不开 AI 也能看账」。
+ * 3. 其余必须整句匹配「某天/某月/某类/某商家花了多少」或「帮我记 X 元」，
+ *    模糊包含不算。质量不会因为走本地而下降——这类题模型反而常把日期搞错。
  */
 @Singleton
 class LocalAccountant @Inject constructor(
@@ -27,66 +30,69 @@ class LocalAccountant @Inject constructor(
     private val classificationService: ClassificationService,
 ) {
 
-    /**
-     * 能本地答就返回 Markdown；答不了返回 null，交给 AgentLoop。
-     */
-    suspend fun tryAnswer(userMessage: String): String? {
-        val s = userMessage.trim()
-        if (s.isEmpty() || s.length > 80) return null
-        // 明确要模型发挥的，不截胡
-        if (s.contains("分析") || s.contains("建议我") || s.contains("规划") || s.contains("对比这")) return null
+    suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
+        val s = userMessage.trim().trim('？', '?', '。', '！', '!')
+        if (s.isEmpty() || s.length > 48) return null
+        if (isJudgment(s)) return null
 
-        if (Regex("体检|月报|花哪了|本月怎么样|这个月怎么样|消费报告|花钱体检").containsMatchIn(s)) {
-            val all = accountRepository.getAll()
-            return InsightsEngine.toMarkdown(InsightsEngine.compute(all, settingsRepository.monthlyBudget()))
-        }
-        if (Regex("订阅|固定支出|每月固定|自动扣").containsMatchIn(s)) {
-            val subs = InsightsEngine.detectSubscriptions(accountRepository.getAll())
-            if (subs.isEmpty()) return "还没发现明显的订阅/固定支出。连续三个月金额接近的商家会出现在这里。"
-            val h = InsightsEngine.compute(accountRepository.getAll(), settingsRepository.monthlyBudget())
-            return InsightsEngine.toMarkdown(h)
-        }
-
+        // 口语记账：有明确金额才本地落账（比模型调工具稳）
         parseAdd(s)?.let { return it }
 
-        daySpend(s)?.let { return it }
-        monthSpend(s)?.let { return it }
-        categorySpend(s)?.let { return it }
-        topCategory(s)?.let { return it }
-        merchantSpend(s)?.let { return it }
+        val all = accountRepository.getAll()
 
+        daySpend(s, all)?.let { return it }
+        monthSpend(s, all)?.let { return it }
+        categorySpend(s, all)?.let { return it }
+        topCategory(s, all)?.let { return it }
+        merchantSpend(s, all)?.let { return it }
+
+        // 体检类：没模型才本地出；有模型让它基于快照写建议
+        if (!modelAvailable && isHealthAsk(s)) {
+            return InsightsEngine.toMarkdown(
+                InsightsEngine.compute(all, settingsRepository.monthlyBudget())
+            )
+        }
         return null
     }
 
-    private suspend fun daySpend(s: String): String? {
-        val m = Regex("^(?:请问|帮我看|查一下)?(大前天|前天|昨天|昨日|今天|今日)(?:一共|总共)?(?:花了|支出|用了|消费)多少").find(s)
-            ?: Regex("^(大前天|前天|昨天|昨日|今天|今日)(?:的)?(?:账|花销|支出)$").find(s)
-            ?: return null
+    /** 要观点、对比、规划 → 模型。数字题即使带「多少」只要夹了这些词也不截。 */
+    private fun isJudgment(s: String): Boolean {
+        val keys = listOf(
+            "分析", "建议", "规划", "对比", "比较", "为什么", "怎么办", "怎么省",
+            "该不该", "要不要", "值不值", "划不划算", "划算", "能不能", "好不好",
+            "怎么样", "如何", "评价", "点评", "解读", "总结", "有没有必要",
+            "省钱", "超了吗", "正常吗", "合理吗", "太多了", "会不会",
+        )
+        return keys.any { s.contains(it) }
+    }
+
+    private fun isHealthAsk(s: String): Boolean =
+        Regex("体检|月报|花哪了|消费报告|花钱体检|订阅|固定支出").containsMatchIn(s)
+
+    private fun daySpend(s: String, all: List<Transaction>): String? {
+        val m = Regex(
+            "^(?:请问|帮我看|查一下)?(大前天|前天|昨天|昨日|今天|今日)(?:一共|总共)?(?:花了|支出|用了|消费)多少(?:钱|元)?(?:啊|呢|呀)?$"
+        ).find(s) ?: return null
         val date = DateResolver.resolveFlexible(m.groupValues[1]) ?: return null
-        val txs = accountRepository.getAll().filter { it.date == date }
-        return formatDay(date, txs)
+        return formatDay(date, all.filter { it.date == date })
     }
 
-    private suspend fun monthSpend(s: String): String? {
-        if (!Regex("(?:这个月|本月|上个月|上月)(?:一共|总共)?(?:花了|支出|用了)多少").containsMatchIn(s)
-            && s !in listOf("这个月花了多少", "本月花了多少", "上个月花了多少")
-        ) {
-            if (!Regex("^(?:这个月|本月|上个月)(?:支出|花销)?$").matches(s)) return null
-        }
+    private fun monthSpend(s: String, all: List<Transaction>): String? {
+        if (!Regex("^(?:请问|帮我看|查一下)?(这个月|本月|上个月|上月)(?:一共|总共)?(?:花了|支出|用了)多少(?:钱|元)?(?:啊|呢|呀)?$")
+                .matches(s)
+        ) return null
         val month = DateResolver.resolveMonth(s) ?: DateUtil.thisMonth()
-        val txs = accountRepository.getAll().filter { it.date.startsWith(month) }
-        return formatMonth(month, txs)
+        return formatMonth(month, all.filter { it.date.startsWith(month) })
     }
 
-    private suspend fun categorySpend(s: String): String? {
-        val cats = categoryRepository.getAll().map { it.name }.filter { it.isNotBlank() }
-        val hit = cats.firstOrNull { s.contains(it) } ?: return null
-        if (!Regex("花了多少|支出|用了多少|一共").containsMatchIn(s) && !s.endsWith(hit)) {
-            if (!s.contains("多少")) return null
-        }
+    private suspend fun categorySpend(s: String, all: List<Transaction>): String? {
+        val cats = categoryRepository.getAll().map { it.name }.filter { it.length >= 2 }.sortedByDescending { it.length }
+        val hit = cats.firstOrNull { cat ->
+            Regex("^(?:请问|帮我看)?(?:这个月|本月|上个月|上月)?${Regex.escape(cat)}(?:一共|总共)?(?:花了|支出了|用了)多少(?:钱|元)?(?:啊|呢|呀)?$")
+                .matches(s)
+        } ?: return null
         val month = DateResolver.resolveMonth(s)
-        val txs = accountRepository.getAll()
-            .filter { it.category == hit }
+        val txs = all.filter { it.category == hit }
             .filter { month == null || it.date.startsWith(month) }
             .filter { it.type == Transaction.TYPE_EXPENSE }
         val sum = txs.sumOf { it.amount }
@@ -98,21 +104,22 @@ class LocalAccountant @Inject constructor(
             }
     }
 
-    private suspend fun topCategory(s: String): String? {
-        if (!Regex("哪类|哪个分类|什么.*最多|花.*最多的分类").containsMatchIn(s)) return null
+    private fun topCategory(s: String, all: List<Transaction>): String? {
+        if (!Regex("^(?:这个月|本月|上个月)?(?:哪类|哪个分类|什么)(?:支出)?最多(?:啊|呢|呀)?$").matches(s)) return null
         val month = DateResolver.resolveMonth(s) ?: DateUtil.thisMonth()
-        val h = InsightsEngine.compute(accountRepository.getAll(), 0, month)
-        if (h.topCategories.isEmpty()) return "$month 还没有支出。"
-        return InsightsEngine.toMarkdown(h)
+        val h = InsightsEngine.compute(all, 0, month)
+        val top = h.topCategories.firstOrNull() ?: return "$month 还没有支出。"
+        return "$month 花得最多的是 **${top.first}**，¥${MoneyUtil.fenToYuan(top.second)}。"
     }
 
-    private suspend fun merchantSpend(s: String): String? {
-        val m = Regex("(?:在|给)?(.+?)(?:花了|用了)多少").find(s) ?: return null
-        val raw = m.groupValues[1].trim().trim('的', '了')
-        if (raw.length !in 2..16) return null
+    private fun merchantSpend(s: String, all: List<Transaction>): String? {
+        val m = Regex(
+            "^(?:请问)?(?:这个月|本月|上个月)?(?:在|给)?([\\u4e00-\\u9fa5A-Za-z0-9]{2,12})(?:一共|总共)?(?:花了|用了)多少(?:钱|元)?(?:啊|呢|呀)?$"
+        ).find(s) ?: return null
+        val raw = m.groupValues[1]
+        if (raw in listOf("这个月", "本月", "上个月", "上月", "哪里", "哪儿", "什么")) return null
         val month = DateResolver.resolveMonth(s)
-        val txs = accountRepository.getAll()
-            .filter { it.merchant.contains(raw) || it.product.contains(raw) }
+        val txs = all.filter { it.merchant.contains(raw) || it.product.contains(raw) }
             .filter { month == null || it.date.startsWith(month) }
         if (txs.isEmpty()) return "没找到和「$raw」有关的账单。"
         val exp = txs.filter { it.type == Transaction.TYPE_EXPENSE }.sumOf { it.amount }

@@ -159,6 +159,14 @@ $snapshot
                     .joinToString("、") { "${it.merchant} ¥${MoneyUtil.fenToYuan(it.typicalFen)}/月" }
             )
         }
+        if (health.projectedFen > 0) {
+            sb.appendLine("按当前速度月底预计支出 ¥${MoneyUtil.fenToYuan(health.projectedFen)}；今天已花 ¥${MoneyUtil.fenToYuan(health.todayFen)}")
+        }
+        if (health.weekdayAvgFen > 0 || health.weekendAvgFen > 0) {
+            sb.appendLine("工作日日均 ¥${MoneyUtil.fenToYuan(health.weekdayAvgFen)}，周末日均 ¥${MoneyUtil.fenToYuan(health.weekendAvgFen)}")
+        }
+        if (health.nightFen > 0) sb.appendLine("夜间（22:00–05:00）已花 ¥${MoneyUtil.fenToYuan(health.nightFen)}")
+        if (health.todayDupes.isNotEmpty()) sb.appendLine("今天可能重复记账：" + health.todayDupes.joinToString("、"))
         return sb.toString().trim()
     }
 

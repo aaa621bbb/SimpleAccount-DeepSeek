@@ -21,6 +21,14 @@ import javax.inject.Inject
 
 enum class HomeSort { TIME, AMOUNT }
 
+/** 首页「再记一笔」芯片：复用最近商家+金额+分类 */
+data class QuickRepeat(
+    val merchant: String,
+    val amount: Long,
+    val category: String,
+    val type: String,
+)
+
 data class HomeUiState(
     val month: String = DateUtil.thisMonth(),
     val expense: Long = 0L,
@@ -33,6 +41,12 @@ data class HomeUiState(
     val insightHeadline: String = "",
     val insightSub: String = "",
     val insightReport: String = "",
+    val todayFen: Long = 0L,
+    val projectedFen: Long = 0L,
+    /** 剩余预算按剩余天数摊，今天建议上限 */
+    val todayCapFen: Long = 0L,
+    val todayDupes: List<String> = emptyList(),
+    val quickRepeats: List<QuickRepeat> = emptyList(),
 )
 
 @HiltViewModel
@@ -66,6 +80,47 @@ class HomeViewModel @Inject constructor(
     /** 切换最近记录排序：时间 ↔ 金额 */
     fun toggleSort() {
         sortFlow.value = if (sortFlow.value == HomeSort.TIME) HomeSort.AMOUNT else HomeSort.TIME
+    }
+
+    private val _snack = MutableStateFlow<String?>(null)
+    val snack = _snack.asStateFlow()
+    private var lastRepeatId: Long = 0L
+
+    /** 一键再记：今天此时，同样商家/分类/金额。可立刻撤销。 */
+    fun repeatQuick(q: QuickRepeat) {
+        viewModelScope.launch {
+            val now = java.time.LocalTime.now()
+            val id = accountRepository.insert(
+                Transaction(
+                    amount = q.amount,
+                    type = q.type,
+                    category = q.category,
+                    date = DateUtil.today(),
+                    time = "%02d:%02d".format(now.hour, now.minute),
+                    merchant = q.merchant,
+                    source = Transaction.SOURCE_MANUAL,
+                )
+            )
+            lastRepeatId = id
+            _snack.value = "已再记 ${q.merchant} ¥${com.simpleaccount.app.util.MoneyUtil.fenToYuan(q.amount)}"
+        }
+    }
+
+    fun undoRepeat() {
+        val id = lastRepeatId
+        if (id <= 0) {
+            _snack.value = null
+            return
+        }
+        viewModelScope.launch {
+            accountRepository.delete(id)
+            lastRepeatId = 0L
+            _snack.value = "已撤销"
+        }
+    }
+
+    fun dismissSnack() {
+        _snack.value = null
     }
 
     /** 当月流水 + 分类 + 排序 + 条数，合并为 UI 状态 */
@@ -104,6 +159,16 @@ class HomeViewModel @Inject constructor(
                 )
             }
             val health = InsightsEngine.compute(all, budget, month)
+            val day = java.time.LocalDate.now().dayOfMonth
+            val days = java.time.YearMonth.now().lengthOfMonth()
+            val remainDays = (days - day).coerceAtLeast(1)
+            val todayCap = if (budget > 0) (budget - expense).coerceAtLeast(0L) / remainDays else 0L
+            val quick = transactions
+                .filter { it.type == Transaction.TYPE_EXPENSE && it.merchant.isNotBlank() }
+                .sortedWith(compareByDescending<Transaction> { it.date }.thenByDescending { it.time })
+                .distinctBy { it.merchant }
+                .take(6)
+                .map { QuickRepeat(it.merchant, it.amount, it.category, it.type) }
             HomeUiState(
                 month = month,
                 expense = expense,
@@ -115,6 +180,11 @@ class HomeViewModel @Inject constructor(
                 insightHeadline = health.headline,
                 insightSub = health.subline,
                 insightReport = if (all.isEmpty()) "" else InsightsEngine.toMarkdown(health),
+                todayFen = health.todayFen,
+                projectedFen = health.projectedFen,
+                todayCapFen = todayCap,
+                todayDupes = health.todayDupes,
+                quickRepeats = quick,
             )
         }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())

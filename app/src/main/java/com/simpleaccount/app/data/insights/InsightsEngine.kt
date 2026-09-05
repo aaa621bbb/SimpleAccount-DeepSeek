@@ -28,6 +28,12 @@ data class MonthHealth(
     val subscriptions: List<SubscriptionHint>,
     val budgetFen: Long,
     val tips: List<String>,
+    val weekdayAvgFen: Long = 0L,
+    val weekendAvgFen: Long = 0L,
+    val nightFen: Long = 0L,
+    val todayFen: Long = 0L,
+    val projectedFen: Long = 0L,
+    val todayDupes: List<String> = emptyList(),
 ) {
     val headline: String
         get() = when {
@@ -46,6 +52,9 @@ data class MonthHealth(
             }
             topCategories.firstOrNull()?.let {
                 bits.add("最多是${it.first} ¥${MoneyUtil.fenToYuan(it.second)}")
+            }
+            if (weekendAvgFen > 0 && weekdayAvgFen > 0 && weekendAvgFen > weekdayAvgFen * 14 / 10) {
+                bits.add("周末日均更高")
             }
             return bits.joinToString(" · ").ifBlank { "记几笔之后这里会有洞察" }
         }
@@ -85,7 +94,21 @@ object InsightsEngine {
             .take(3)
 
         val subscriptions = detectSubscriptions(all)
-        val tips = buildTips(expense, lastExpense, momPct, budgetFen, topCategories, subscriptions, unusualDays)
+        val lifestyle = lifestyle(thisTx)
+        val today = DateUtil.today()
+        val todayFen = thisTx.filter { it.date == today && it.type == Transaction.TYPE_EXPENSE }.sumOf { it.amount }
+        val dayOfMonth = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
+        val daysInMonth = ym.lengthOfMonth()
+        val projected = expense * daysInMonth / dayOfMonth
+        val todayDupes = thisTx.filter { it.date == today && it.type == Transaction.TYPE_EXPENSE }
+            .groupBy { "${it.merchant}|${it.amount}" }
+            .filter { it.value.size >= 2 && it.key.substringBefore('|').isNotBlank() }
+            .map { (k, v) -> "${k.substringBefore('|')} ¥${MoneyUtil.fenToYuan(v.first().amount)} ×${v.size}" }
+            .take(3)
+        val tips = buildTips(
+            expense, lastExpense, momPct, budgetFen, topCategories, subscriptions, unusualDays,
+            lifestyle, projected, todayDupes,
+        )
 
         return MonthHealth(
             month = month,
@@ -99,7 +122,32 @@ object InsightsEngine {
             subscriptions = subscriptions,
             budgetFen = budgetFen,
             tips = tips,
+            weekdayAvgFen = lifestyle.first,
+            weekendAvgFen = lifestyle.second,
+            nightFen = lifestyle.third,
+            todayFen = todayFen,
+            projectedFen = projected,
+            todayDupes = todayDupes,
         )
+    }
+
+    /** @return Triple(工作日日均, 周末日均, 夜间支出) 单位分 */
+    private fun lifestyle(monthTx: List<Transaction>): Triple<Long, Long, Long> {
+        val exp = monthTx.filter { it.type == Transaction.TYPE_EXPENSE }
+        var weekSum = 0L; var weekDays = 0
+        var endSum = 0L; var endDays = 0
+        exp.groupBy { it.date }.forEach { (date, txs) ->
+            val dow = runCatching { java.time.LocalDate.parse(date).dayOfWeek.value }.getOrDefault(1)
+            val sum = txs.sumOf { it.amount }
+            if (dow >= 6) { endSum += sum; endDays++ } else { weekSum += sum; weekDays++ }
+        }
+        val night = exp.filter { t ->
+            val h = t.time.substringBefore(':').toIntOrNull() ?: return@filter false
+            h >= 22 || h < 5
+        }.sumOf { it.amount }
+        val wAvg = if (weekDays > 0) weekSum / weekDays else 0L
+        val eAvg = if (endDays > 0) endSum / endDays else 0L
+        return Triple(wAvg, eAvg, night)
     }
 
     /** 连续 ≥3 个月、金额波动 ≤25% 的商家 → 订阅/固定支出 */
@@ -156,12 +204,24 @@ object InsightsEngine {
                 sb.appendLine("| ${it.merchant} | ¥${MoneyUtil.fenToYuan(it.typicalFen)} | ${it.months} 个月 |")
             }
         }
+        if (h.projectedFen > 0) {
+            sb.appendLine("- 按当前速度，月底预计支出 **¥${MoneyUtil.fenToYuan(h.projectedFen)}**")
+        }
+        if (h.weekdayAvgFen > 0 || h.weekendAvgFen > 0) {
+            sb.appendLine("- 工作日日均 ¥${MoneyUtil.fenToYuan(h.weekdayAvgFen)} · 周末日均 ¥${MoneyUtil.fenToYuan(h.weekendAvgFen)}")
+        }
+        if (h.nightFen > 0) {
+            sb.appendLine("- 夜间（22:00–05:00）已花 **¥${MoneyUtil.fenToYuan(h.nightFen)}**")
+        }
         h.biggestDay?.let {
             sb.appendLine()
             sb.appendLine("- 花钱最多的一天：**${it.first}** ¥${MoneyUtil.fenToYuan(it.second)}")
         }
         if (h.unusualDays.isNotEmpty()) {
             sb.appendLine("- 异常日：" + h.unusualDays.joinToString("、") { "${it.first} ¥${MoneyUtil.fenToYuan(it.second)}" })
+        }
+        if (h.todayDupes.isNotEmpty()) {
+            sb.appendLine("- 今天可能重复记账：" + h.todayDupes.joinToString("、"))
         }
         if (h.tips.isNotEmpty()) {
             sb.appendLine()
@@ -179,6 +239,9 @@ object InsightsEngine {
         top: List<Pair<String, Long>>,
         subs: List<SubscriptionHint>,
         unusual: List<Pair<String, Long>>,
+        lifestyle: Triple<Long, Long, Long>,
+        projected: Long,
+        todayDupes: List<String>,
     ): List<String> {
         val tips = mutableListOf<String>()
         if (budgetFen > 0 && expense > budgetFen) {
@@ -189,6 +252,9 @@ object InsightsEngine {
             val days = java.time.YearMonth.now().lengthOfMonth()
             val remainDays = (days - day).coerceAtLeast(1)
             tips.add("预算还剩 ¥${MoneyUtil.fenToYuan(left)}，按 ${remainDays} 天摊大约每天 ¥${MoneyUtil.fenToYuan(left / remainDays)}。")
+            if (projected > budgetFen) {
+                tips.add("按这速度月底会到 ¥${MoneyUtil.fenToYuan(projected)}，会超预算。")
+            }
         }
         if (momPct != null && momPct >= 20) {
             tips.add("这个月比上个月多花了两成，打开分类排行看是哪一块涨上去的。")
@@ -204,6 +270,16 @@ object InsightsEngine {
         }
         if (unusual.isNotEmpty()) {
             tips.add("${unusual.first().first} 那天花得特别猛，回头对一下是不是有大额或重复记账。")
+        }
+        val (weekAvg, endAvg, night) = lifestyle
+        if (endAvg > 0 && weekAvg > 0 && endAvg > weekAvg * 14 / 10) {
+            tips.add("周末日均 ¥${MoneyUtil.fenToYuan(endAvg)}，比工作日高，聚餐外卖可以提前定个上限。")
+        }
+        if (night > 5000) {
+            tips.add("夜间（22 点后）已经花了 ¥${MoneyUtil.fenToYuan(night)}，夜宵最容易不知不觉。")
+        }
+        if (todayDupes.isNotEmpty()) {
+            tips.add("今天「${todayDupes.first()}」记了不止一次，点进去核对一下是不是重复了。")
         }
         if (tips.isEmpty() && expense > 0) tips.add("账记得挺稳，继续保持就好。")
         return tips.take(4)

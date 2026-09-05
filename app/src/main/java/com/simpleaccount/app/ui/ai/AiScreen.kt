@@ -3,6 +3,8 @@ package com.simpleaccount.app.ui.ai
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -699,6 +701,42 @@ private fun TypingBubble(phase: String?) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp
             )
+        }
+    }
+}
+
+@Composable
+private fun StreamingBubble(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.SmartToy,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .widthIn(max = 300.dp)
+                .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            MarkdownText(text = text, baseColor = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

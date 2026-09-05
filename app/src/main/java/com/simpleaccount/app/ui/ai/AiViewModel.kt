@@ -92,7 +92,7 @@ class AiViewModel @Inject constructor(
     private var agentJob: Job? = null
 
     private val welcomeText =
-        "你好，我是 AI 记账管家 🧾 会先查你的真实账本再回答。直接问「昨天花了多少」「本月体检」，本地立刻出数；复杂的再交给模型。"
+        "你好，我是 AI 记账管家。查实数（昨天花了多少、本月花了多少、帮我记 15 元）本地秒回，数字跟账本一致；分析、建议、体检、怎么办交给模型写，不会用模板截胡。"
 
     init {
         viewModelScope.launch {
@@ -263,7 +263,8 @@ class AiViewModel @Inject constructor(
                 input = "", typing = true, phase = "正在思考…", error = null,
                 streamingText = null, pendingConfirm = null
             )
-            val local = runCatching { localAccountant.tryAnswer(trimmed) }.getOrNull()
+            val modelOn = settingsRepository.isAiEnabled() && settingsRepository.apiKey().isNotBlank()
+            val local = runCatching { localAccountant.tryAnswer(trimmed, modelOn) }.getOrNull()
             if (local != null) {
                 conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, local)
                 _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
