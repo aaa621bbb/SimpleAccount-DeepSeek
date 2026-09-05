@@ -85,7 +85,7 @@ fun AnalogClockSheet(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "选时间",
+                    "选时间 · 2.18 圆盘",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
@@ -191,7 +191,7 @@ fun AnalogClockFace(
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.size(252.dp)) {
-            val r = size.minDimension / 2f
+            val r = minOf(size.width, size.height) / 2f
             val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(color = face, radius = r)
             for (i in 0 until 60) {

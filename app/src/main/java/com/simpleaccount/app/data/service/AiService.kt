@@ -20,7 +20,7 @@ class AiService @Inject constructor() {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -217,33 +217,11 @@ class AiService @Inject constructor() {
      * 不支持的模型会忽略这些字段。
      */
     private fun applyThinking(body: JSONObject, model: String, level: String) {
-        if (level == "off") {
-            val m = model.lowercase()
-            if (m.contains("glm")) {
-                body.put("thinking", JSONObject().put("type", "disabled"))
-            }
-            return
-        }
-        val effort = when (level) {
-            "low" -> "low"
-            "high" -> "high"
-            else -> "medium"
-        }
+        // 强制停用推理链。低复杂度 query 开 CoT 会空转数分钟，首 token 必须 <10s。
         val m = model.lowercase()
-        when {
-            m.contains("gpt") || m.contains("o1") || m.contains("o3") || m.contains("o4") ->
-                body.put("reasoning_effort", effort)
-            m.contains("qwen") || m.contains("qwq") -> {
-                body.put("enable_thinking", true)
-            }
-            m.contains("glm") || m.contains("chatglm") -> {
-                body.put("thinking", JSONObject().put("type", "enabled"))
-            }
-            m.contains("deepseek") || m.contains("reasoner") || m.contains("r1") -> {
-                // reasoner 模型本身就会思考；chat 模型加一句无害
-                body.put("enable_thinking", true)
-            }
-            else -> body.put("enable_thinking", true)
+        body.put("enable_thinking", false)
+        if (m.contains("glm") || m.contains("chatglm")) {
+            body.put("thinking", JSONObject().put("type", "disabled"))
         }
     }
 

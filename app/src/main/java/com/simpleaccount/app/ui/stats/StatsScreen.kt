@@ -153,6 +153,37 @@ fun StatsScreen(viewModel: StatsViewModel) {
                     }
                     StatsModules.WEEKDAY -> if (state.weekdayTotals.any { it.second > 0 }) DimBarCard("星期分布", "按账单日期的星期几合计，不是猜测你周末更浪。", state.weekdayTotals, pal.expense)
                     StatsModules.HOURS -> if (state.hourBuckets.any { it.second > 0 }) DimBarCard("时段分布", "按账单上的时刻归入五个时段。没填时间的不算。", state.hourBuckets, pal.expense)
+                    StatsModules.FREQ -> if (state.freqPoints.size >= 2) PerspectiveCard(id = StatsModules.FREQ) {
+                        com.simpleaccount.app.ui.components.FreqCurveView(state.freqPoints, pal.expense)
+                    }
+                    StatsModules.SHARE -> if (state.shareMonths.size >= 2) PerspectiveCard(id = StatsModules.SHARE) {
+                        com.simpleaccount.app.ui.components.ShareAreaView(state.shareMonths)
+                    }
+                    StatsModules.MOM_DELTA -> if (state.momDeltas.any { it.deltaFen != 0L }) PerspectiveCard(id = StatsModules.MOM_DELTA) {
+                        com.simpleaccount.app.ui.components.MomWaterView(state.momDeltas, pal.expense, pal.income)
+                    }
+                    StatsModules.CONC -> if (state.conc.merchantCount > 0) PerspectiveCard(id = StatsModules.CONC) {
+                        com.simpleaccount.app.ui.components.ConcNumbers(state.conc)
+                        com.simpleaccount.app.ui.components.LorenzView(state.conc, pal.expense)
+                    }
+                    StatsModules.ELASTIC -> if (state.elastic.size >= 2) PerspectiveCard(id = StatsModules.ELASTIC) {
+                        com.simpleaccount.app.ui.components.ScatterElasticView(state.elastic, pal.expense)
+                    }
+                    StatsModules.PARETO -> if (state.pareto.size >= 2) PerspectiveCard(id = StatsModules.PARETO) {
+                        com.simpleaccount.app.ui.components.ParetoCurveView(state.pareto, pal.expense)
+                    }
+                    StatsModules.HEAT -> if (state.heat.isNotEmpty()) PerspectiveCard(id = StatsModules.HEAT) {
+                        com.simpleaccount.app.ui.components.HeatGridView(state.heat, pal.expense)
+                    }
+                    StatsModules.SPARK -> if (state.spark.any { it.amount > 0 }) PerspectiveCard(id = StatsModules.SPARK) {
+                        com.simpleaccount.app.ui.components.SparklineView(state.spark, pal.expense)
+                    }
+                    StatsModules.FLOW -> if (state.flowIncome.isNotEmpty() || state.flowExpense.isNotEmpty()) PerspectiveCard(id = StatsModules.FLOW) {
+                        com.simpleaccount.app.ui.components.FlowColumnsView(state.flowIncome, state.flowExpense, pal.income, pal.expense)
+                    }
+                    StatsModules.RADAR -> if (state.radar.labels.size >= 3) PerspectiveCard(id = StatsModules.RADAR) {
+                        com.simpleaccount.app.ui.components.RadarView(state.radar, pal.expense, pal.income)
+                    }
                 }
             }
         }
@@ -389,6 +420,20 @@ private fun DimBarCard(title: String, caption: String, rows: List<Pair<String, L
                     Text("¥${MoneyUtil.fenToYuan(amt)}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PerspectiveCard(id: String, content: @Composable () -> Unit) {
+    SoftCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Column(Modifier.padding(18.dp)) {
+            Text(StatsModules.title(id), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            StatsModules.caption(id).takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(8.dp))
+            content()
         }
     }
 }

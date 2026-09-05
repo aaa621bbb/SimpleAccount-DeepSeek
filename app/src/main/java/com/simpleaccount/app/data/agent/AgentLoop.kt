@@ -54,8 +54,19 @@ class AgentLoop @Inject constructor(
             "get_insights" -> "正在生成本月体检…"
             "memory_get" -> "正在检索长期记忆…"
             "memory_write" -> "正在写入记忆…"
-            else -> "正在调用工具 $toolName…"
+            "add_transaction" -> "正在记账…"
+            "withdraw_transaction" -> "正在撤回…"
+            "delete_transaction" -> "正在删除…"
+            "set_auto_record" -> "正在开关无感记账…"
+            else -> "正在办理…"
         }
+
+        val WRITE = setOf(
+            "add_transaction", "withdraw_transaction", "delete_transaction",
+            "edit_transaction", "update_transaction_category", "set_monthly_budget",
+            "set_auto_record", "set_theme", "set_merchant_category", "create_category",
+            "navigate",
+        )
 
         /** 网络类错误（可重试）；HTTP 4xx（key/参数问题）不重试 */
         private fun isRetryable(error: String): Boolean =
@@ -85,7 +96,7 @@ $dates
 $snapshot
 
 你可以调用工具获取/修改真实数据：
-- 本月体检 / 订阅雷达 / 花哪了 → get_insights（本地算环比、异常日、固定支出，优先用）
+- 本月体检 / 花哪了 → get_insights（本地算环比、异常日，优先用；不要谈「固定支出」口径）
 - 核对账本覆盖哪些月份 → list_months（查询结果为空、或不确定某月有没有数据时，先调它再下结论）
 - 查具体交易明细 / 某类花销 / 某商家消费 → query_transactions（支持 month/type/category/keyword）
 - 算某段时间收支总额 → get_summary
@@ -93,7 +104,8 @@ $snapshot
 - 哪些商家花钱最多 → get_merchant_totals
 - 某月每天花多少 / 哪天花得最多 → get_daily_totals
 - 用户说「我买了 X 花了 Y，帮我记上」→ 用 add_transaction 记账（从话里提取金额/商家/商品），记完告知流水号
-- 用户要删除/撤回刚记的账 → 用 withdraw_transaction（带之前返回的流水号）；删除会先让用户确认
+- 用户说「撤回一笔账单/撤回/撤销」→ 立刻调用 withdraw_transaction（可不带流水号，默认删最新一笔），禁止再问、禁止说无法执行
+- 用户说打开无感/自动记账 → 立刻 set_auto_record(enabled=true) 再 navigate 到无感记账页
 - 查看或排查商家归类 → list_merchants
 - 给商家批量归类 → classify_merchants
 - 跳转到任意页面（"打开统计""带我去导入"）→ navigate
@@ -114,6 +126,7 @@ $snapshot
 9. 用户要求改某一笔的分类 → 用 update_transaction_category（只改那一笔）；要改某商家所有账 → 才用 classify_merchants。不要混用。
 10. 归类必须用工具完成，不要自己口头分类。
 11. 用户闲聊或问与记账无关的问题时，礼貌回应并把话题引导回记账理财。
+12. 撤回、记账、开关无感：工具一跑完就用工具结果当最终答复，禁止再说「无法执行」「需要确认」「正在思考」。回答写成连贯段落，禁止一字一行。
 """.trimIndent()
     }
 
@@ -141,6 +154,10 @@ $snapshot
         if (s.contains("预算")) names += "set_monthly_budget"
         if (Regex("主题|深色|浅色|暗色|夜间").containsMatchIn(s)) names += "set_theme"
         if (Regex("打开|跳转|带我去").containsMatchIn(s)) names += "navigate"
+        if (Regex("无感|自动记账").containsMatchIn(s)) {
+            names += "set_auto_record"
+            names += "navigate"
+        }
         names += "memory_get"
         if (Regex("记住").containsMatchIn(s)) names += "memory_write"
         return all.filter { it.name in names }.ifEmpty { all }
@@ -188,7 +205,7 @@ $snapshot
     suspend fun run(
         userMessage: String,
         history: List<Pair<String, String>> = emptyList(),
-        maxRounds: Int = 5,
+        maxRounds: Int = 2,
         onStatus: (String) -> Unit = {},
         onDelta: (String) -> Unit = {},
     ): AgentResult {
@@ -215,17 +232,15 @@ $snapshot
         var rounds = 0
         var networkRetried = false
         val loopDetector = ToolLoopDetector()
-        val writeFast = Regex("删|撤回|帮我记|记一笔|记上|撤销").containsMatchIn(userMessage)
-        if (!writeFast) onStatus("正在思考…")
+        val writeFast = Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账").containsMatchIn(userMessage)
+        onStatus(if (writeFast) "正在办理…" else "正在查账…")
         while (rounds < maxRounds) {
             rounds++
-            val thinking = if (writeFast) SettingsRepository.THINKING_OFF
-            else settingsRepository.thinkingLevel()
             val resp = aiService.chatWithTools(
                 baseUrl, apiKey, model, messages, tools,
                 onDelta = onDelta,
-                thinkingLevel = thinking,
-                onReasoning = { r -> onStatus("思考中：${r.take(80)}") },
+                thinkingLevel = SettingsRepository.THINKING_OFF,
+                onReasoning = { },
             )
             if (resp.error != null) {
                 if (resp.error == "已停止") return AgentResult("", rounds, "已停止")
@@ -243,14 +258,15 @@ $snapshot
                 return AgentResult(resp.content, rounds)
             }
 
-            onStatus("正在查询账本（第 $rounds 轮）…")
+            onStatus("正在办理（第 $rounds 步）…")
 
             messages.add(
                 ToolChatMessage(role = "assistant", content = resp.content, toolCalls = resp.toolCalls)
             )
             var anyExecuted = false
+            val writeReplies = mutableListOf<String>()
             for (tc in resp.toolCalls) {
-                onStatus("调用 ${tc.name}（${tc.arguments.take(100)}）")
+                onStatus(toolPhaseLabel(tc.name))
                 val check = loopDetector.check(tc.name, tc.arguments)
                 val result = if (check.level == ToolLoopDetector.Level.CRITICAL) {
                     check.message ?: "拦截：检测到重复调用循环，已阻止本轮执行，请直接基于已有信息回答。"
@@ -272,10 +288,14 @@ $snapshot
                 messages.add(
                     ToolChatMessage(role = "tool", content = result, toolCallId = tc.id)
                 )
+                if (tc.name in WRITE) writeReplies += result
                 anyExecuted = true
             }
             if (!anyExecuted) {
                 return AgentResult("(工具调用异常，请重试)", rounds)
+            }
+            if (writeReplies.isNotEmpty()) {
+                return AgentResult(writeReplies.joinToString("\n\n"), rounds)
             }
         }
         messages.add(
@@ -287,7 +307,7 @@ $snapshot
         val finalResp = aiService.chatWithTools(
             baseUrl, apiKey, model, messages, emptyList(),
             onDelta = onDelta,
-            thinkingLevel = settingsRepository.thinkingLevel(),
+            thinkingLevel = SettingsRepository.THINKING_OFF,
         )
         return if (finalResp.error != null || finalResp.content.isBlank()) {
             AgentResult("（分析了 ${rounds} 轮仍不完整，请把问题拆小一点再问）", rounds)

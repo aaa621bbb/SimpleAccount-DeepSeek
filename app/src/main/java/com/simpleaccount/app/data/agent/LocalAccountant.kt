@@ -28,16 +28,18 @@ class LocalAccountant @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val settingsRepository: SettingsRepository,
     private val classificationService: ClassificationService,
+    private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
 
     suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
-        if (s.isEmpty() || s.length > 48) return null
+        if (s.isEmpty() || s.length > 80) return null
         if (isJudgment(s)) return null
 
-        // 口语记账：有明确金额才本地落账（比模型调工具稳）
+        // 口语记账 / 撤回 / 无感：本地秒回，不进模型思考
         parseAdd(s)?.let { return it }
         parseWithdraw(s)?.let { return it }
+        parseAutoRecord(s)?.let { return it }
 
         val all = accountRepository.getAll()
 
@@ -133,11 +135,13 @@ class LocalAccountant @Inject constructor(
     private suspend fun parseWithdraw(s: String): String? {
         val idMatch = Regex("^撤回\\s*(\\d+)$").find(s)
         val lastPhrases = setOf(
-            "撤回", "撤回一笔", "撤回刚才", "撤回刚才那笔", "撤回刚才那笔账", "撤回刚才那笔账单",
+            "撤回", "撤回一笔", "撤回一笔账", "撤回一笔账单", "帮我撤回一笔", "帮我撤回一笔账单",
+            "撤回刚才", "撤回刚才那笔", "撤回刚才那笔账", "撤回刚才那笔账单",
             "撤销", "撤销一笔", "删掉刚才", "删掉刚才那笔",
             "把刚才那笔撤回", "把刚才那笔删掉", "把刚才那笔账撤回", "把刚才那笔账单撤回",
         )
-        if (idMatch == null && s !in lastPhrases) return null
+        val lastish = s in lastPhrases || Regex("撤回.*一笔|撤销.*一笔|把刚才.*撤回").containsMatchIn(s)
+        if (idMatch == null && !lastish) return null
         val t = if (idMatch != null) {
             val id = idMatch.groupValues[1].toLong()
             accountRepository.getById(id) ?: return "流水号 $id 不在账本里（可能已经删了）。"
@@ -148,6 +152,18 @@ class LocalAccountant @Inject constructor(
         accountRepository.delete(t.id)
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
         return "已撤回流水号 **${t.id}**：$dir **¥${MoneyUtil.fenToYuan(t.amount)}** · ${t.merchant.ifBlank { t.category }} · ${t.date}。"
+    }
+
+    private suspend fun parseAutoRecord(s: String): String? {
+        if (!Regex("无感|自动记账").containsMatchIn(s)) return null
+        val on = Regex("打开|开启|启用|开始").containsMatchIn(s)
+        val off = Regex("关闭|关掉|停止|停用").containsMatchIn(s)
+        if (!on && !off) return null
+        settingsRepository.setAutoRecordEnabled(on)
+        autoRecordRuntime.setEnabled(on)
+        return if (on)
+            "已打开自动记账。请到「我的 → 无感记账」授权通知使用权，否则支付通知进不来。"
+        else "已关闭自动记账。"
     }
 
     private suspend fun parseAdd(s: String): String? {

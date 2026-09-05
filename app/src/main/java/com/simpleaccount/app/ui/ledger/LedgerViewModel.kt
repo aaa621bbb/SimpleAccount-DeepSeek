@@ -17,25 +17,39 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** 账本筛选状态 */
+/**
+ * 多值布尔筛选：同一维度内 OR，维度之间 AND。
+ * 例：月份={6月,8月} ∧ 分类={餐饮,交通} ∧ 类型=支出。
+ */
 data class LedgerFilter(
-    val month: String? = null,       // null = 全部
-    val category: String? = null,    // null = 全部
+    val months: Set<String> = emptySet(),
+    val categories: Set<String> = emptySet(),
     val query: String = "",
-    /** null = 全部；expense / income */
     val type: String? = null,
-)
+) {
+    val month: String? get() = months.singleOrNull()
+    val category: String? get() = categories.singleOrNull()
+    val active: Boolean get() = months.isNotEmpty() || categories.isNotEmpty() || query.isNotBlank() || type != null
 
-/** 按月分组的一段账目（分组计算在后台线程完成，避免切页卡顿） */
+    fun monthsLabel(): String = when {
+        months.isEmpty() -> "全部月份"
+        months.size == 1 -> months.first()
+        else -> "${months.size} 个月"
+    }
+
+    fun categoriesLabel(): String = when {
+        categories.isEmpty() -> "全部分类"
+        categories.size == 1 -> categories.first()
+        else -> "${categories.size} 个分类"
+    }
+}
+
 data class LedgerMonthGroup(val month: String, val rows: List<RowUi>)
 
 data class LedgerUiState(
@@ -44,7 +58,6 @@ data class LedgerUiState(
     val categories: List<Category> = emptyList(),
     val rows: List<RowUi> = emptyList(),
     val groups: List<LedgerMonthGroup> = emptyList(),
-    /** true = 按金额降序；false = 按时间降序 */
     val sortByAmount: Boolean = false,
     val loading: Boolean = true,
 )
@@ -59,26 +72,11 @@ class LedgerViewModel @Inject constructor(
     private val _filter = MutableStateFlow(LedgerFilter())
     val filter: StateFlow<LedgerFilter> = _filter.asStateFlow()
 
-    // 防抖：搜索框每个字符都触发全量查询+排序会导致输入卡顿，200ms 内的连续变更合并为一次
-    private val filteredFlow = _filter
-        .debounce(200)
-        .distinctUntilChanged()
-        .flatMapLatest { f ->
-            if (f.query.isNotBlank()) {
-                accountRepository.observeSearch(f.query, f.month, f.category, f.type)
-            } else {
-                accountRepository.observeFiltered(f.month, f.category, f.type)
-            }
-        }
-
-    // 需要 category map 供行显示
     private val categoriesFlow = categoryRepository.observeAll()
 
-    /** 全量月份列表：必须从全部交易派生 —— 若从筛选结果派生，选中某月后芯片就只剩该月 */
     private val allMonthsFlow = accountRepository.observeAll()
         .map { list -> list.map { it.date.take(7) }.distinct().sortedDescending() }
 
-    /** 排序：false=按时间降序（默认），true=按金额降序 */
     private val amountSortFlow = MutableStateFlow(false)
 
     fun toggleSort() {
@@ -86,36 +84,70 @@ class LedgerViewModel @Inject constructor(
     }
 
     val uiState: StateFlow<LedgerUiState> =
-        combine(filteredFlow, categoriesFlow, allMonthsFlow, _filter, amountSortFlow) { transactions, cats, allMonths, f, byAmount ->
-                // 重计算（排序/映射/月份归纳）放在 Default 线程，避免大账本时主线程卡顿
-                val catMap = cats.associateBy { it.name }
-                val base = if (byAmount) {
-                    transactions.sortedWith(
-                        compareByDescending<Transaction> { it.amount }.thenByDescending { it.date }.thenByDescending { it.time }
-                    )
-                } else {
-                    // 按时间排序要精确到分钟：date + time 组合排序，同一天内按时间
-                    transactions.sortedWith(
-                        compareByDescending<Transaction> { it.date }
-                            .thenByDescending { it.time }
-                            .thenByDescending { it.id }
-                    )
-                }
-                val rows = base.map { RowUi(it, catMap[it.category]) }
-                val groups = rows.groupBy { it.transaction.date.take(7) }
-                    .toSortedMap(compareByDescending { it })
-                    .map { (m, list) -> LedgerMonthGroup(m, list) }
-                LedgerUiState(filter = f, months = allMonths, categories = cats, rows = rows, groups = groups, sortByAmount = byAmount, loading = false)
+        combine(
+            accountRepository.observeAll(),
+            categoriesFlow,
+            allMonthsFlow,
+            _filter.debounce(160).distinctUntilChanged(),
+            amountSortFlow,
+        ) { all, cats, allMonths, f, byAmount ->
+            val catMap = cats.associateBy { it.name }
+            val q = f.query.trim()
+            val matched = all.filter { t ->
+                (f.type == null || t.type == f.type) &&
+                    (f.months.isEmpty() || t.date.take(7) in f.months) &&
+                    (f.categories.isEmpty() || t.category in f.categories) &&
+                    (q.isEmpty() ||
+                        t.merchant.contains(q, true) ||
+                        t.product.contains(q, true) ||
+                        t.note.contains(q, true) ||
+                        t.category.contains(q, true))
             }
+            val base = if (byAmount) {
+                matched.sortedWith(
+                    compareByDescending<Transaction> { it.amount }.thenByDescending { it.date }.thenByDescending { it.time }
+                )
+            } else {
+                matched.sortedWith(
+                    compareByDescending<Transaction> { it.date }
+                        .thenByDescending { it.time }
+                        .thenByDescending { it.id }
+                )
+            }
+            val rows = base.map { RowUi(it, catMap[it.category]) }
+            val groups = rows.groupBy { it.transaction.date.take(7) }
+                .toSortedMap(compareByDescending { it })
+                .map { (m, list) -> LedgerMonthGroup(m, list) }
+            LedgerUiState(
+                filter = f, months = allMonths, categories = cats,
+                rows = rows, groups = groups, sortByAmount = byAmount, loading = false,
+            )
+        }
             .flowOn(kotlinx.coroutines.Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LedgerUiState(filter = LedgerFilter()))
 
-    fun setMonth(m: String?) {
-        _filter.value = _filter.value.copy(month = m)
+    fun toggleMonth(m: String) {
+        val cur = _filter.value.months.toMutableSet()
+        if (!cur.add(m)) cur.remove(m)
+        _filter.value = _filter.value.copy(months = cur)
     }
 
-    fun setCategory(c: String?) {
-        _filter.value = _filter.value.copy(category = c)
+    fun clearMonths() {
+        _filter.value = _filter.value.copy(months = emptySet())
+    }
+
+    fun setMonths(ms: Set<String>) {
+        _filter.value = _filter.value.copy(months = ms)
+    }
+
+    fun toggleCategory(c: String) {
+        val cur = _filter.value.categories.toMutableSet()
+        if (!cur.add(c)) cur.remove(c)
+        _filter.value = _filter.value.copy(categories = cur)
+    }
+
+    fun setCategories(cs: Set<String>) {
+        _filter.value = _filter.value.copy(categories = cs)
     }
 
     fun setType(t: String?) {

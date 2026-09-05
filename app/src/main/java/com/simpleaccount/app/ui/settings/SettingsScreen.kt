@@ -43,19 +43,41 @@ import javax.inject.Inject
 
 data class SettingsEntry(val title: String, val icon: ImageVector, val route: String)
 
-private val entries = listOf(
-    SettingsEntry("外观与配色", Icons.Filled.Palette, Routes.APPEARANCE),
-    SettingsEntry("日期与时间选择器", Icons.Filled.Palette, Routes.PICKER_STYLE),
-    SettingsEntry("统计页图表", Icons.Filled.BarChart, Routes.STATS_LAYOUT),
-    SettingsEntry("管家记忆", Icons.Filled.SmartToy, Routes.MEMORY),
-    SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
-    SettingsEntry("账本管理", Icons.Filled.Storage, Routes.LEDGER_MANAGE),
-    SettingsEntry("无感记账（自动记账）", Icons.Filled.NotificationsActive, Routes.AUTO_RECORD),
-    SettingsEntry("分类管理", Icons.Filled.Category, Routes.CATEGORY_MANAGE),
-    SettingsEntry("商家归类管理", Icons.Filled.Store, Routes.MERCHANT_MANAGE),
-    SettingsEntry("数据管理（导出/清空）", Icons.Filled.Storage, Routes.DATA_MANAGE),
-    SettingsEntry("日志与排障", Icons.Filled.BugReport, Routes.LOGS),
-    SettingsEntry("关于", Icons.Filled.Info, Routes.ABOUT),
+private data class SettingsGroup(val title: String, val items: List<SettingsEntry>)
+
+private val groups = listOf(
+    SettingsGroup(
+        "外观",
+        listOf(
+            SettingsEntry("外观与配色", Icons.Filled.Palette, Routes.APPEARANCE),
+            SettingsEntry("日期与时间选择器", Icons.Filled.Palette, Routes.PICKER_STYLE),
+            SettingsEntry("统计页图表", Icons.Filled.BarChart, Routes.STATS_LAYOUT),
+        ),
+    ),
+    SettingsGroup(
+        "管家",
+        listOf(
+            SettingsEntry("管家记忆", Icons.Filled.SmartToy, Routes.MEMORY),
+            SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
+        ),
+    ),
+    SettingsGroup(
+        "账本",
+        listOf(
+            SettingsEntry("账本管理", Icons.Filled.Storage, Routes.LEDGER_MANAGE),
+            SettingsEntry("分类管理", Icons.Filled.Category, Routes.CATEGORY_MANAGE),
+            SettingsEntry("商家归类管理", Icons.Filled.Store, Routes.MERCHANT_MANAGE),
+            SettingsEntry("无感记账（自动记账）", Icons.Filled.NotificationsActive, Routes.AUTO_RECORD),
+        ),
+    ),
+    SettingsGroup(
+        "数据",
+        listOf(
+            SettingsEntry("数据管理（导出/清空）", Icons.Filled.Storage, Routes.DATA_MANAGE),
+            SettingsEntry("日志与排障", Icons.Filled.BugReport, Routes.LOGS),
+            SettingsEntry("关于", Icons.Filled.Info, Routes.ABOUT),
+        ),
+    ),
 )
 
 /** 外观模式的显示名 */
@@ -101,19 +123,27 @@ fun SettingsScreen(
         }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize()) {
-            items(entries.size) { i ->
-                val e = entries[i]
-                ListItem(
-                    headlineContent = { Text(e.title) },
-                    leadingContent = { Icon(e.icon, contentDescription = null) },
-                    trailingContent = {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
-                    },
-                    modifier = Modifier.clickable { navController.navigate(e.route) }
-                )
-                if (i < entries.size - 1) HorizontalDivider(
-                    modifier = Modifier.padding(start = 16.dp)
-                )
+            groups.forEach { g ->
+                item(key = "h_${g.title}") {
+                    Text(
+                        g.title,
+                        style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
+                    )
+                }
+                items(g.items.size) { i ->
+                    val e = g.items[i]
+                    ListItem(
+                        headlineContent = { Text(e.title) },
+                        leadingContent = { Icon(e.icon, contentDescription = null) },
+                        trailingContent = {
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+                        },
+                        modifier = Modifier.clickable { navController.navigate(e.route) }
+                    )
+                    if (i < g.items.lastIndex) HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                }
             }
         }
     }

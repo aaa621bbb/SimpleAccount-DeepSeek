@@ -127,21 +127,21 @@ fun LedgerScreen(
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
                 com.simpleaccount.app.ui.components.FilterChipButton(
-                    label = filter.month ?: "全部月份",
+                    label = filter.monthsLabel(),
                     onClick = { showMonth = true }
                 )
                 Spacer(Modifier.width(8.dp))
                 com.simpleaccount.app.ui.components.FilterChipButton(
-                    label = filter.category ?: "全部分类",
+                    label = filter.categoriesLabel(),
                     onClick = { showCat = true }
                 )
             }
             if (showMonth) {
-                com.simpleaccount.app.ui.components.MonthPickerSheet(
+                com.simpleaccount.app.ui.components.MultiMonthPickerSheet(
                     months = state.months,
-                    selected = filter.month,
+                    selected = filter.months,
                     onDismiss = { showMonth = false },
-                    onPick = { viewModel.setMonth(it); showMonth = false }
+                    onConfirm = { viewModel.setMonths(it) }
                 )
             }
             if (showCat) {
@@ -152,11 +152,11 @@ fun LedgerScreen(
                         state.categories.filter { it.type == com.simpleaccount.app.data.entity.Category.TYPE_INCOME }
                     else -> state.categories
                 }
-                com.simpleaccount.app.ui.components.CategoryPickerSheet(
+                com.simpleaccount.app.ui.components.MultiCategoryPickerSheet(
                     categories = cats,
-                    selected = filter.category,
+                    selected = filter.categories,
                     onDismiss = { showCat = false },
-                    onPick = { viewModel.setCategory(it); showCat = false }
+                    onConfirm = { viewModel.setCategories(it) }
                 )
             }
 
@@ -179,22 +179,19 @@ fun LedgerScreen(
                         fontSize = 13.sp
                     )
                 }
-                if (filter.month != null || filter.category != null || filter.query.isNotBlank()) {
+                if (filter.active) {
                     TextButton(onClick = viewModel::clearFilters) { Text("清除筛选") }
                 }
             }
 
             // 按金额排序 + 未选具体月份 = 全局金额排行，不再按月分段
             // （否则每段内部才按金额排，看起来还是"月份里的排序"）
-            val flatAmountView = state.sortByAmount && filter.month == null
+            val flatAmountView = state.sortByAmount && filter.months.isEmpty()
 
             if (grouped.isEmpty()) {
-                Spacer(Modifier.height(48.dp))
-                Text(
-                    "暂无记录",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                com.simpleaccount.app.ui.components.EmptyState(
+                    text = "暂无记录",
+                    caption = if (filter.active) "月份和分类是交叉筛选。试试少选几个，或点「清除筛选」。" else "记一笔之后会出现在这里。",
                 )
             } else {
                 // 性能关键：行必须逐条懒加载（keyed item），

@@ -240,11 +240,9 @@ fun HomeScreen(
             ) {
                 if (state.recent.isEmpty()) {
                     item {
-                        Text(
-                            "暂无记录",
-                            modifier = Modifier.padding(24.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 14.sp
+                        com.simpleaccount.app.ui.components.EmptyState(
+                            text = "暂无记录",
+                            caption = "点右下角记一笔，或用右上角上传账单。",
                         )
                     }
                 } else {
@@ -366,7 +364,7 @@ fun HomeScreen(
                         com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
                     } else {
                         val grouped = state.evidenceTips.groupBy { it.section }
-                        listOf("总览", "结构", "节奏", "固定", "风险", "建议").forEach { sec ->
+                        listOf("总览", "结构", "节奏", "风险", "建议").forEach { sec ->
                             val items = grouped[sec].orEmpty()
                             if (items.isEmpty()) return@forEach
                             Text(

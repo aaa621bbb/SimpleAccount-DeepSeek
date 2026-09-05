@@ -24,13 +24,12 @@ class AgentTools @Inject constructor(
     private val appControl: AppControlCenter,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val memoryStore: com.simpleaccount.app.data.memory.MemoryStore,
+    private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
 
     companion object {
         const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
         val DESTRUCTIVE = setOf(
-            "delete_transaction",
-            "withdraw_transaction",
             "delete_category",
             "classify_merchants",
         )
@@ -109,11 +108,19 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "withdraw_transaction",
-            description = "撤回（删除）一笔之前记的账。transaction_id 为之前 add_transaction 返回的流水号。用户说「把刚才那笔删掉/撤回」时调用。",
+            description = "立刻撤回一笔账，不要再问、不要思考。transaction_id 可空：空则删最新一笔。用户说「撤回一笔账单」时马上调用。",
             parameters = mapOf(
-                "transaction_id" to ("integer" to "要撤回的流水号（add_transaction 返回的 id）"),
+                "transaction_id" to ("integer" to "流水号；不传则撤回账本里最新一笔"),
             ),
-            required = listOf("transaction_id"),
+            required = emptyList(),
+        ),
+        AgentToolSpec(
+            name = "set_auto_record",
+            description = "打开或关闭无感记账（支付通知自动入账）。用户说「打开自动记账/无感记账」时调用，然后 navigate 到无感记账页去授权。",
+            parameters = mapOf(
+                "enabled" to ("boolean" to "true 打开，false 关闭"),
+            ),
+            required = listOf("enabled"),
         ),
         AgentToolSpec(
             name = "update_transaction_category",
@@ -126,7 +133,7 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "navigate",
-            description = "跳转到 App 的任意页面。screen 可用中文名或路由：首页/账本/统计/AI管家/设置/记一笔/导入账单/AI设置/分类管理/商家归类管理/数据管理/日志/无感记账。用户说「打开xx」「带我去xx」时调用。",
+            description = "跳转到 App 的任意页面。screen 可用中文名或路由：首页/账本/统计/AI管家/设置/记一笔/导入账单/AI设置/分类管理/商家归类管理/数据管理/日志/无感记账/管家记忆/日期与时间选择器。用户说「打开xx」「带我去xx」时调用。",
             parameters = mapOf(
                 "screen" to ("string" to "目标页面（中文名或路由）"),
             ),
@@ -233,7 +240,7 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "get_insights",
-            description = "生成本月（或指定月）花销体检：环比、分类排行、异常日、订阅/固定支出雷达。用户问「体检」「花哪了」「有没有订阅」时优先调用。",
+            description = "生成本月（或指定月）花销体检：环比、分类排行、异常日。不要谈「固定支出」口径。用户问「体检」「花哪了」时优先调用。",
             parameters = mapOf(
                 "month" to ("string" to "月份 yyyy-MM，空则本月"),
             ),
@@ -265,6 +272,7 @@ class AgentTools @Inject constructor(
                 "set_merchant_category" -> setMerchantCategory(call.arguments)
                 "set_monthly_budget" -> setMonthlyBudget(call.arguments)
                 "set_theme" -> setTheme(call.arguments)
+                "set_auto_record" -> setAutoRecord(call.arguments)
                 "list_merchants" -> listMerchants(call.arguments)
                 "classify_merchants" -> classifyMerchants(call.arguments)
                 "get_insights" -> getInsights(call.arguments)
@@ -541,16 +549,33 @@ class AgentTools @Inject constructor(
             listOf(merchant, product, category, date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
-    /** 撤回一笔账：按 add_transaction 返回的流水号删除 */
+    /** 撤回一笔账：有流水号按号删，否则删最新一笔。不二次确认。 */
     private suspend fun withdrawTransaction(args: String): String {
         val a = parseArgs(args)
         val id = a.optLong("transaction_id", -1L)
-        if (id <= 0) return "参数错误：transaction_id 必须是有效的流水号。"
-        val t = accountRepository.getById(id) ?: return "没有找到流水号 $id 的记录（可能已删除）。"
-        accountRepository.delete(id)
+        val t = if (id > 0) {
+            accountRepository.getById(id)
+        } else {
+            accountRepository.getAll().maxByOrNull { it.id }
+        } ?: return if (id > 0) "没有找到流水号 $id 的记录（可能已删除）。" else "账本是空的，没有可撤回的。"
+        accountRepository.delete(t.id)
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已撤回流水号 $id：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
+        return "已撤回流水号 ${t.id}：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
             listOf(t.merchant, t.product, t.category, t.date).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
+    private suspend fun setAutoRecord(args: String): String {
+        val a = parseArgs(args)
+        val enabled = when {
+            a.has("enabled") -> a.optBoolean("enabled")
+            else -> true
+        }
+        settingsRepository.setAutoRecordEnabled(enabled)
+        autoRecordRuntime.setEnabled(enabled)
+        appControl.navigate("无感记账")
+        return if (enabled)
+            "已打开自动记账，并带到「无感记账」页。还差通知使用权的话，在该页点「去授权」。"
+        else "已关闭自动记账。"
     }
 
     /** 只改某一笔的分类（不动商家映射、不影响同商家其他账单） */

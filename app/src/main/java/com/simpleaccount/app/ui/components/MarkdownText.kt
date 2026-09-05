@@ -43,7 +43,20 @@ private sealed class MdBlock {
     object Hr : MdBlock()
 }
 
-private fun parseMarkdown(src: String): List<MdBlock> {
+private fun isCjk(c: Char) = c in '\u4e00'..'\u9fff'
+
+/** 模型把「一千二百」拆成一字一行时，拼回连贯句子。 */
+private fun coalesceShards(src: String): String {
+    val lines = src.lines()
+    val nonempty = lines.filter { it.isNotBlank() }
+    if (nonempty.size >= 4 && nonempty.count { it.trim().length <= 2 } * 2 >= nonempty.size) {
+        return nonempty.joinToString("") { it.trim() }
+    }
+    return src
+}
+
+private fun parseMarkdown(raw: String): List<MdBlock> {
+    val src = coalesceShards(raw)
     val blocks = mutableListOf<MdBlock>()
     val lines = src.lines()
     var i = 0
@@ -121,7 +134,11 @@ private fun parseMarkdown(src: String): List<MdBlock> {
                         nt.startsWith("- ") || nt.startsWith("> ") || nt == "---" ||
                         Regex("^\\d+[.、)] ").containsMatchIn(nt)
                     ) break
-                    sb.append(' ').append(nt)
+                    if (sb.isNotEmpty() && isCjk(sb.last()) && nt.isNotEmpty() && isCjk(nt.first())) {
+                        sb.append(nt)
+                    } else {
+                        sb.append(' ').append(nt)
+                    }
                     i++
                 }
                 blocks.add(MdBlock.Paragraph(sb.toString()))

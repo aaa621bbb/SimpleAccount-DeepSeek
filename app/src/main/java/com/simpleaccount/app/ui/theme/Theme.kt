@@ -48,6 +48,7 @@ fun SimpleAccountTheme(
     CompositionLocalProvider(
         LocalAppPalette provides pal,
         LocalReduceMotion provides reduceMotion,
+        LocalTokens provides Tokens.Default,
     ) {
         MaterialTheme(
             colorScheme = if (darkTheme) pal.dark else pal.light,

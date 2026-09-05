@@ -57,6 +57,17 @@ data class StatsUiState(
     val lastMonthTotal: Long = 0L,
     val weekdayTotals: List<Pair<String, Long>> = emptyList(),
     val hourBuckets: List<Pair<String, Long>> = emptyList(),
+    val freqPoints: List<FreqPoint> = emptyList(),
+    val shareMonths: List<ShareMonth> = emptyList(),
+    val momDeltas: List<MomDelta> = emptyList(),
+    val conc: ConcUi = ConcUi(),
+    val elastic: List<ElasticPoint> = emptyList(),
+    val pareto: List<ParetoPoint> = emptyList(),
+    val heat: List<HeatCell> = emptyList(),
+    val spark: List<SparkPoint> = emptyList(),
+    val flowIncome: List<FlowPart> = emptyList(),
+    val flowExpense: List<FlowPart> = emptyList(),
+    val radar: RadarUi = RadarUi(),
 )
 
 @HiltViewModel
@@ -145,6 +156,8 @@ class StatsViewModel @Inject constructor(
         val calPrefix = "%04d-%02d".format(calMonth.year, calMonth.monthValue)
         val calDayTotals = mutableMapOf<Int, DayTotals>()
         val calDayTx = mutableMapOf<Int, MutableList<CalDayTx>>()
+        val extra = StatsExtra.compute(month, type, txs, filtered, trend, calPrefix)
+
         txs.filter { it.date.startsWith(calPrefix) }.forEach { t ->
             val day = t.date.substring(8, 10).toIntOrNull() ?: return@forEach
             val cur = calDayTotals.getOrPut(day) { DayTotals() }
@@ -227,6 +240,17 @@ class StatsViewModel @Inject constructor(
                 }
                 labels.mapIndexed { i, n -> n to acc[i] }
             },
+            freqPoints = extra.freqPoints,
+            shareMonths = extra.shareMonths,
+            momDeltas = extra.momDeltas,
+            conc = extra.conc,
+            elastic = extra.elastic,
+            pareto = extra.pareto,
+            heat = extra.heat,
+            spark = extra.spark,
+            flowIncome = extra.flowIncome,
+            flowExpense = extra.flowExpense,
+            radar = extra.radar,
         )
     }
 

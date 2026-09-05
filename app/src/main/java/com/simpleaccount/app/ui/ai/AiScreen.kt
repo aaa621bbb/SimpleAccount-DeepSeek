@@ -641,7 +641,7 @@ private fun MessageBubble(
         }
         Box(
             Modifier
-                .widthIn(max = 300.dp)
+                .widthIn(max = 340.dp)
                 .clip(
                     if (isUser) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
                     else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
@@ -724,7 +724,7 @@ private fun TypingBubble(phase: String?) {
             CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(7.dp))
             Text(
-                phase ?: "正在思考…",
+                phase ?: "正在办理…",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp
             )
@@ -758,7 +758,7 @@ private fun StreamingBubble(text: String) {
         Spacer(Modifier.width(8.dp))
         Box(
             Modifier
-                .widthIn(max = 300.dp)
+                .widthIn(max = 340.dp)
                 .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
                 .padding(horizontal = 12.dp, vertical = 8.dp)

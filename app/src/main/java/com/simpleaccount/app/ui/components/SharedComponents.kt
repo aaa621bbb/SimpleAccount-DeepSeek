@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,18 +36,19 @@ import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
-/** 统一卡片：暖白底 + 极淡描边 + 大圆角 + 轻投影 */
+/** 统一卡片：令牌圆角 + 轻投影（左上光源）+ 发丝描边。全 App 只用这一张。 */
 @Composable
 fun SoftCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(t.radiusXl),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
+        elevation = CardDefaults.cardElevation(defaultElevation = t.elevRaised),
+        border = BorderStroke(t.hairline, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
     ) {
         Column(content = content)
     }
@@ -148,8 +150,33 @@ fun parseColor(hex: String): Color {
 }
 
 @Composable
-fun EmptyState(text: String) {
-    Box(Modifier.fillMaxSize().padding(48.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+fun EmptyState(text: String, caption: String? = null, modifier: Modifier = Modifier) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    Box(modifier.fillMaxWidth().padding(t.space32), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            if (!caption.isNullOrBlank()) {
+                Spacer(Modifier.size(t.space8))
+                Text(caption, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun PageEnter(content: @Composable () -> Unit) {
+    val reduce = com.simpleaccount.app.ui.motion.LocalReduceMotion.current
+    val appear = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(if (reduce) 0f else 12f) }
+    val alpha = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(if (reduce) 1f else 0f) }
+    androidx.compose.runtime.LaunchedEffect(reduce) {
+        if (reduce) {
+            appear.snapTo(0f); alpha.snapTo(1f)
+        } else {
+            appear.animateTo(0f, com.simpleaccount.app.ui.motion.Motion.softSpring)
+            alpha.animateTo(1f, com.simpleaccount.app.ui.motion.Motion.tweenOrSnap(false, com.simpleaccount.app.ui.motion.Motion.PAGE_MS))
+        }
+    }
+    Box(Modifier.graphicsLayer { translationY = appear.value; this.alpha = alpha.value }) {
+        content()
     }
 }

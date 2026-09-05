@@ -23,7 +23,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -132,5 +137,84 @@ private fun CatCell(cat: Category?, label: String, selected: Boolean, onClick: (
         CategoryIconCircle(cat, size = 36)
         Spacer(Modifier.height(4.dp))
         Text(label, fontSize = 11.sp, maxLines = 1, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+/** 多选月份：同一维度 OR。空集 = 全部。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MultiMonthPickerSheet(
+    months: List<String>,
+    selected: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    var pick by remember { mutableStateOf(selected) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        androidx.compose.foundation.layout.Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("月份（可多选）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { pick = emptySet() }) { Text("全部") }
+                TextButton(onClick = { onConfirm(pick); onDismiss() }) { Text("确定") }
+            }
+            Text("点选多个月份取并集。和分类交叉时是「这些月里的这些类」。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
+            months.chunked(3).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { m ->
+                        val sel = m in pick
+                        Box(
+                            Modifier.weight(1f).height(44.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                .clickable { pick = if (sel) pick - m else pick + m },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(m, color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                        }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/** 多选分类：同一维度 OR。空集 = 全部。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MultiCategoryPickerSheet(
+    categories: List<Category>,
+    selected: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    var pick by remember { mutableStateOf(selected) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        androidx.compose.foundation.layout.Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("分类（可多选）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { pick = emptySet() }) { Text("全部") }
+                TextButton(onClick = { onConfirm(pick); onDismiss() }) { Text("确定") }
+            }
+            Spacer(Modifier.height(12.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.height(360.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(categories, key = { it.id }) { c ->
+                    CatCell(c, c.name, c.name in pick) {
+                        pick = if (c.name in pick) pick - c.name else pick + c.name
+                    }
+                }
+            }
+        }
     }
 }

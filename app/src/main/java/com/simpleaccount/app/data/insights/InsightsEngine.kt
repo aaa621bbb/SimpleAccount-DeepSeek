@@ -491,18 +491,7 @@ object InsightsEngine {
                 )
             )
         }
-        if (subs.isNotEmpty()) {
-            val sum = subs.sumOf { it.typicalFen }
-            val names = subs.map { it.merchant }.toSet()
-            tips.add(
-                InsightTip(
-                    "连续 ${subs.size} 家、金额波动不超过两成半",
-                    "规则：同一商家连续 ≥3 个月、每月金额相对中位数波动 ≤25%、单月不少于 3 元。合计约 ¥${MoneyUtil.fenToYuan(sum)}/月。这是固定支出，不是风险。",
-                    idsOf({ it.merchant.trim() in names }),
-                    section = "固定",
-                )
-            )
-        }
+        // 「固定」口径已下架：订阅雷达不再作为体检指标。
 
         // 建议：最多两条，有数字和依据
         top.firstOrNull()?.let { (cat, amt) ->

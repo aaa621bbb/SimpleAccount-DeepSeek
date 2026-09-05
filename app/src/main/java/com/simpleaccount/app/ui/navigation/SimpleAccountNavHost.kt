@@ -1,5 +1,11 @@
 package com.simpleaccount.app.ui.navigation
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -86,10 +92,27 @@ fun SimpleAccountNavHost() {
         }
     ) { innerPadding ->
         Box(Modifier.padding(innerPadding)) {
+            val reduce = com.simpleaccount.app.ui.motion.LocalReduceMotion.current
+            val enterMs = com.simpleaccount.app.ui.motion.Motion.dur(reduce, com.simpleaccount.app.ui.motion.Motion.PAGE_MS)
+            val exitMs = com.simpleaccount.app.ui.motion.Motion.dur(reduce, com.simpleaccount.app.ui.motion.Motion.PAGE_EXIT_MS)
             NavHost(
                 navController = navController,
                 startDestination = Routes.HOME,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                enterTransition = {
+                    fadeIn(tween(enterMs, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(enterMs, easing = FastOutSlowInEasing)) { it / 14 }
+                },
+                exitTransition = {
+                    fadeOut(tween(exitMs, easing = FastOutSlowInEasing))
+                },
+                popEnterTransition = {
+                    fadeIn(tween(enterMs, easing = FastOutSlowInEasing))
+                },
+                popExitTransition = {
+                    fadeOut(tween(exitMs, easing = FastOutSlowInEasing)) +
+                        slideOutHorizontally(tween(exitMs, easing = FastOutSlowInEasing)) { it / 14 }
+                },
             ) {
                 composable(Routes.HOME) {
                     val vm: HomeViewModel = hiltViewModel()
@@ -173,7 +196,7 @@ private fun SimpleBottomBar(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 8.dp,
+        shadowElevation = com.simpleaccount.app.ui.theme.LocalTokens.current.elevNav,
         tonalElevation = 0.dp,
     ) {
         NavigationBar(

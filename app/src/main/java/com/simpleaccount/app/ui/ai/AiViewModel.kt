@@ -243,7 +243,7 @@ class AiViewModel @Inject constructor(
             }
             conversationManager.messagesAfter(convId, lastUser.timestamp)
                 .forEach { conversationManager.deleteMessage(it.id) }
-            _state.value = _state.value.copy(typing = true, phase = "正在思考…", error = null)
+            _state.value = _state.value.copy(typing = true, phase = "正在办理…", error = null)
             runAgentTurn(convId, lastUser.content)
         }
     }
@@ -263,7 +263,7 @@ class AiViewModel @Inject constructor(
             }
             conversationManager.addMessage(convId, AiMessage.ROLE_USER, trimmed)
             _state.value = _state.value.copy(
-                input = "", typing = true, phase = "正在思考…", error = null,
+                input = "", typing = true, phase = "正在办理…", error = null,
                 streamingText = null, pendingConfirm = null, traces = emptyList(), reasoning = null
             )
             val modelOn = settingsRepository.isAiEnabled() && settingsRepository.apiKey().isNotBlank()
@@ -328,7 +328,7 @@ class AiViewModel @Inject constructor(
         AppLog.d("AI-Agent: 开始回合 conv=" + conversationId + " user=" + userText.take(50) + " 历史=" + history.size + "条")
         // 思考计时器：过程提示实时显示已等待秒数（结构化并发：停止/打断时一并取消）
         val startedAt = System.currentTimeMillis()
-        var phaseBase = "正在思考…"
+        var phaseBase = "正在办理…"
         val result: AgentLoop.AgentResult = kotlinx.coroutines.coroutineScope {
             val ticker = launch {
                 while (true) {

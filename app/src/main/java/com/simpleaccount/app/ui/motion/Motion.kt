@@ -68,6 +68,8 @@ object Motion {
     const val FADE_MS = 180
     const val PRESS_MS = 90
     const val SUCCESS_MS = 420
+    const val PAGE_MS = 220
+    const val PAGE_EXIT_MS = 160
 
     fun dur(reduce: Boolean, ms: Int): Int = if (reduce) 0 else ms
 

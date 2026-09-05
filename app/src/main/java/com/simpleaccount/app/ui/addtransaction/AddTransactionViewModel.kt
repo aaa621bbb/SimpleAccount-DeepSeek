@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -51,6 +52,23 @@ class AddTransactionViewModel @Inject constructor(
 
     private val _categoriesByType = MutableStateFlow<List<Category>>(emptyList())
     val categoriesByType = _categoriesByType.asStateFlow()
+
+    private val knownMerchants = accountRepository.observeAll()
+        .map { list -> list.map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 前缀优先，其次包含；不把相近店名合成一家。 */
+    val merchantHints: StateFlow<List<String>> = combine(_state, knownMerchants) { s, all ->
+        val q = s.merchant.trim()
+        if (q.isEmpty()) return@combine emptyList()
+        val prefix = all.filter { it.startsWith(q, ignoreCase = true) && !it.equals(q, ignoreCase = true) }
+        val contains = all.filter {
+            it.contains(q, ignoreCase = true) &&
+                !it.startsWith(q, ignoreCase = true) &&
+                !it.equals(q, ignoreCase = true)
+        }
+        (prefix + contains).take(8)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var editId: Long? = null
 

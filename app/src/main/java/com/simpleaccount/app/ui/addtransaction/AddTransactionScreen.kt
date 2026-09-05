@@ -68,8 +68,9 @@ fun AddTransactionScreen(
     val vm: AddTransactionViewModel = hiltViewModel()
     val state by vm.state.collectAsState()
     val categories by vm.categoriesByType.collectAsState()
-    val dateStyle by vm.dateStyle.collectAsState()
-    val timeStyle by vm.timeStyle.collectAsState()
+    val dateStyle by vm.dateStyle.collectAsState(initial = "date_wheel")
+    val timeStyle by vm.timeStyle.collectAsState(initial = "time_dial")
+    val merchantHints by vm.merchantHints.collectAsState()
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     val reduce = LocalReduceMotion.current
@@ -195,6 +196,8 @@ fun AddTransactionScreen(
                 product = state.product,
                 onMerchant = vm::onMerchantChange,
                 onProduct = vm::onProductChange,
+                merchantHints = merchantHints,
+                onPickMerchant = vm::onMerchantChange,
             )
             Spacer(Modifier.height(12.dp))
 
