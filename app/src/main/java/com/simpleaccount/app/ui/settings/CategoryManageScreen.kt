@@ -70,6 +70,7 @@ fun CategoryManageScreen(
     val state by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     var showAddDialog by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Category?>(null) }
     var pendingDelete by remember { mutableStateOf<Category?>(null) }
     var confirmDeleteEmpty by remember { mutableStateOf<Category?>(null) }
 
@@ -100,6 +101,7 @@ fun CategoryManageScreen(
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .clickable { editing = cat }
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -107,13 +109,11 @@ fun CategoryManageScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(cat.name, style = MaterialTheme.typography.bodyLarge)
-                            if (cat.isPreset) {
-                                Text(
-                                    "预置分类",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                if (cat.isPreset) "预置 · 点按可改图标颜色" else "点按可改名称、图标、颜色",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         if (!cat.isPreset) {
                             IconButton(onClick = {
@@ -134,14 +134,26 @@ fun CategoryManageScreen(
         }
     }
 
-    // 新增分类对话框
     if (showAddDialog) {
-        AddCategoryDialog(
+        CategoryEditorDialog(
             type = state.type,
+            initial = null,
             onDismiss = { showAddDialog = false },
             onConfirm = { name, icon, color ->
                 showAddDialog = false
                 scope.launch { viewModel.add(name, icon, color) }
+            }
+        )
+    }
+    editing?.let { cat ->
+        CategoryEditorDialog(
+            type = cat.type,
+            initial = cat,
+            onDismiss = { editing = null },
+            onConfirm = { name, icon, color ->
+                val target = cat
+                editing = null
+                scope.launch { viewModel.updateStyle(target, icon, color, name) }
             }
         )
     }
@@ -169,25 +181,28 @@ fun CategoryManageScreen(
 }
 
 @Composable
-private fun AddCategoryDialog(
+private fun CategoryEditorDialog(
     type: String,
+    initial: Category?,
     onDismiss: () -> Unit,
     onConfirm: (String, String, String) -> Unit,
 ) {
     val icons = com.simpleaccount.app.util.IconMapper.allChoices(type)
-    var name by remember { mutableStateOf("") }
-    var icon by remember { mutableStateOf(icons.firstOrNull()?.name ?: "more_horiz") }
-    var color by remember { mutableStateOf("#BDC3C7") }
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var icon by remember { mutableStateOf(initial?.iconName ?: icons.firstOrNull()?.name ?: "more_horiz") }
+    var color by remember { mutableStateOf(initial?.colorHex ?: "#BDC3C7") }
+    val nameLocked = initial?.isPreset == true
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新增分类") },
+        title = { Text(if (initial == null) "新增分类" else "修改「${initial.name}」") },
         text = {
             Column {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
-                    label = { Text("分类名称") },
+                    onValueChange = { if (!nameLocked) name = it },
+                    label = { Text(if (nameLocked) "分类名称（预置不可改名）" else "分类名称") },
+                    enabled = !nameLocked,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )

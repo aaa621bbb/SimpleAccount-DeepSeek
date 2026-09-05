@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
-import com.simpleaccount.app.ui.theme.AppColors
+import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
@@ -120,7 +120,7 @@ fun TransactionRow(
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (transaction.type == Transaction.TYPE_INCOME)
-                    AppColors.Income else MaterialTheme.colorScheme.onSurface
+                    LocalAppPalette.current.income else MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = transaction.date + (if (transaction.time.isNotBlank()) " " + transaction.time else ""),

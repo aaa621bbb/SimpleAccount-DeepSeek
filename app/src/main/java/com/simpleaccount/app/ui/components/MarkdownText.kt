@@ -121,7 +121,7 @@ private fun parseMarkdown(src: String): List<MdBlock> {
                         nt.startsWith("- ") || nt.startsWith("> ") || nt == "---" ||
                         Regex("^\\d+[.、)] ").containsMatchIn(nt)
                     ) break
-                    sb.append('\n').append(nt)
+                    sb.append(' ').append(nt)
                     i++
                 }
                 blocks.add(MdBlock.Paragraph(sb.toString()))

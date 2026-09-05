@@ -37,6 +37,7 @@ class LocalAccountant @Inject constructor(
 
         // 口语记账：有明确金额才本地落账（比模型调工具稳）
         parseAdd(s)?.let { return it }
+        parseWithdraw(s)?.let { return it }
 
         val all = accountRepository.getAll()
 
@@ -127,6 +128,26 @@ class LocalAccountant @Inject constructor(
             txs.sortedByDescending { it.date }.take(8).joinToString("\n") {
                 "- ${it.date} ${it.merchant.ifBlank { it.product }}  ¥${MoneyUtil.fenToYuan(it.amount)}"
             }
+    }
+
+    private suspend fun parseWithdraw(s: String): String? {
+        val idMatch = Regex("^撤回\\s*(\\d+)$").find(s)
+        val lastPhrases = setOf(
+            "撤回", "撤回一笔", "撤回刚才", "撤回刚才那笔", "撤回刚才那笔账", "撤回刚才那笔账单",
+            "撤销", "撤销一笔", "删掉刚才", "删掉刚才那笔",
+            "把刚才那笔撤回", "把刚才那笔删掉", "把刚才那笔账撤回", "把刚才那笔账单撤回",
+        )
+        if (idMatch == null && s !in lastPhrases) return null
+        val t = if (idMatch != null) {
+            val id = idMatch.groupValues[1].toLong()
+            accountRepository.getById(id) ?: return "流水号 $id 不在账本里（可能已经删了）。"
+        } else {
+            accountRepository.getAll().maxByOrNull { it.id }
+                ?: return "账本是空的，没有可撤回的。"
+        }
+        accountRepository.delete(t.id)
+        val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+        return "已撤回流水号 **${t.id}**：$dir **¥${MoneyUtil.fenToYuan(t.amount)}** · ${t.merchant.ifBlank { t.category }} · ${t.date}。"
     }
 
     private suspend fun parseAdd(s: String): String? {

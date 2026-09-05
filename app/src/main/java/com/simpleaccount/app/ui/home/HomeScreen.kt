@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
@@ -37,6 +38,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.simpleaccount.app.ui.motion.LocalReduceMotion
+import com.simpleaccount.app.ui.motion.Motion
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,9 +93,10 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Routes.IMPORT) }) {
-                        Icon(Icons.Filled.FileUpload, contentDescription = "导入账单")
+                    IconButton(onClick = { navController.navigate(Routes.AI_SHOT) }) {
+                        Icon(Icons.Filled.PhotoCamera, contentDescription = "拍账单")
                     }
+                    UploadBillButton(onClick = { navController.navigate(Routes.IMPORT) })
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -118,38 +127,63 @@ fun HomeScreen(
                 }
             }
 
-            if (state.insightReport.isNotBlank()) {
+                if (state.insightReport.isNotBlank()) {
                 com.simpleaccount.app.ui.components.SoftCard(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                         .clickable { showInsight = true }
                 ) {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(
-                            "本月体检",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            state.insightHeadline,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (state.insightSub.isNotBlank()) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    state.insightGrade.ifBlank { "—" },
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "${state.insightScore}分",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
                             Text(
-                                state.insightSub,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                "本月体检",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
                             )
+                            Text(
+                                state.insightHeadline,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (state.insightSub.isNotBlank()) {
+                                Text(
+                                    state.insightSub,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
             }
 
             if (state.quickRepeats.isNotEmpty()) {
-                Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                     Text(
                         "再记一笔",
                         style = MaterialTheme.typography.labelMedium,
@@ -183,7 +217,7 @@ fun HomeScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 0.dp),
+                    .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 0.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -319,11 +353,11 @@ fun HomeScreen(
     if (showInsight) {
         AlertDialog(
             onDismissRequest = { showInsight = false },
-            title = { Text("本月体检") },
+            title = { Text("本月体检 ${state.insightGrade} · ${state.insightScore}分") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "数字都来自当前账本「${state.currentLedgerName}」本月流水，不是模型编的。点一条建议可看对应账单。",
+                        "数字都来自当前账本「${state.currentLedgerName}」本月流水，不是模型编的。点一条可看对应账单。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -331,21 +365,33 @@ fun HomeScreen(
                     if (state.evidenceTips.isEmpty()) {
                         com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
                     } else {
-                        state.evidenceTips.forEach { tip ->
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 6.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                                    .clickable { evidenceTip = tip }
-                                    .padding(12.dp)
-                            ) {
-                                Text(tip.title, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.height(2.dp))
-                                Text(tip.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (tip.evidenceIds.isNotEmpty()) {
-                                    Text("点开看 ${tip.evidenceIds.size} 笔依据 →", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                        val grouped = state.evidenceTips.groupBy { it.section }
+                        listOf("总览", "结构", "节奏", "固定", "风险", "建议").forEach { sec ->
+                            val items = grouped[sec].orEmpty()
+                            if (items.isEmpty()) return@forEach
+                            Text(
+                                sec,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                            items.forEach { tip ->
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                        .clickable { evidenceTip = tip }
+                                        .padding(12.dp)
+                                ) {
+                                    Text(tip.title, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(tip.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (tip.evidenceIds.isNotEmpty()) {
+                                        Text("点开看 ${tip.evidenceIds.size} 笔依据 →", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                    }
                                 }
                             }
                         }
@@ -427,26 +473,19 @@ fun HomeScreen(
 
 @Composable
 private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
+    val pal = com.simpleaccount.app.ui.theme.LocalAppPalette.current
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 4.dp)
     ) {
-        // 主卡：本月支出（渐变底，与新图标蓝紫主色呼应）；点击结余格设置每月预算
+        // 主卡：本月支出（配色随外观）；点击结余格设置每月预算
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(26.dp))
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            Color(0xFF1A4A3E),
-                            Color(0xFF1F6F5B),
-                            Color(0xFF165A4A)
-                        )
-                    )
-                )
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(Brush.linearGradient(pal.cardGradient))
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Column {
                 Text(
@@ -469,7 +508,7 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
                         .clip(RoundedCornerShape(1.dp))
                         .background(Color(0xFFC2A06A))
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth()) {
                     // 结余 = 预算 − 消费（未设预算时 = 收入 − 支出）
                     val balanceText = if (state.budgetFen > 0)
@@ -505,11 +544,11 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
                     Box(
                         Modifier
                             .weight(1f)
-                            .height(52.dp)
+                            .height(44.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color.White.copy(alpha = 0.14f))
                             .clickable(onClick = onSetBudget)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Column {
                             Text(
@@ -583,25 +622,28 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
 }
 
 @Composable
-private fun SummaryCell(label: String, value: String, modifier: Modifier = Modifier) {
-    Row(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.14f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun UploadBillButton(onClick: () -> Unit) {
+    val reduce = LocalReduceMotion.current
+    val appear = remember { Animatable(if (reduce) 0f else 10f) }
+    val alpha = remember { Animatable(if (reduce) 1f else 0f) }
+    LaunchedEffect(reduce) {
+        if (reduce) {
+            appear.snapTo(0f)
+            alpha.snapTo(1f)
+        } else {
+            appear.animateTo(0f, Motion.softSpring)
+            alpha.animateTo(1f, Motion.tweenOrSnap(false, Motion.ENTER_MS))
+        }
+    }
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.graphicsLayer {
+            translationY = appear.value
+            this.alpha = alpha.value
+        }
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White.copy(alpha = 0.8f)
-        )
-        Spacer(Modifier.weight(1f))
-        Text(
-            value,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = Color.White
-        )
+        Icon(Icons.Filled.FileUpload, contentDescription = null)
+        Spacer(Modifier.width(4.dp))
+        Text("上传账单", fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { contentDescription = "上传账单" })
     }
 }

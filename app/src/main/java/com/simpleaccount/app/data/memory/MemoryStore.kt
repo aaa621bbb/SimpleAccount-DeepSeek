@@ -29,6 +29,16 @@ class MemoryStore @Inject constructor(
     fun globalFile(): File = File(dir, "GLOBAL.md")
     fun dailyFile(date: LocalDate = LocalDate.now()): File = File(dir, "$date.md")
 
+    /** 按日期倒序的每日日志，供独立入口逐条查看。 */
+    fun listDaily(): List<Pair<String, String>> {
+        ensureSeeded()
+        return dir.listFiles()
+            ?.filter { it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}\\.md")) }
+            ?.sortedByDescending { it.name }
+            ?.map { it.name.removeSuffix(".md") to it.readText().trim() }
+            .orEmpty()
+    }
+
     fun ensureSeeded() {
         val soul = soulFile()
         if (!soul.exists()) {
@@ -53,6 +63,7 @@ class MemoryStore @Inject constructor(
         ensureSeeded()
         val sb = StringBuilder()
         sb.appendLine("【长期记忆 · 只读注入】")
+        sb.appendLine("新消息改变范围/数字/目标时，以最新消息为准，不要沿用旧任务。")
         sb.appendLine(soulFile().readText().take(1200))
         val global = globalFile().readText().trim()
         if (global.lines().size > 3) {
@@ -71,7 +82,7 @@ class MemoryStore @Inject constructor(
     }
 
     /**
-     * 写入今日日志。拒绝密钥类内容。
+     * 写入今日日志。拒绝密钥类内容。同标题以最新为准（覆盖旧段）。
      */
     fun appendDaily(title: String, body: String, kind: String = "note") {
         if (looksSecret(body) || looksSecret(title)) {
@@ -92,46 +103,42 @@ class MemoryStore @Inject constructor(
             appendLine(body.trim())
             appendLine()
         }
-        // 去重：同一标题已在今日出现则覆盖该段，不扩散
         val existing = f.readText()
-        if (existing.contains("## $ts $title") || existing.contains("\n## ") && existing.contains(title) && existing.contains(body.trim().take(40))) {
-            return
-        }
-        f.appendText(entry)
+        val stripped = stripTitle(existing, title)
+        f.writeText(stripped.trimEnd() + "\n" + entry)
     }
 
     /** 用户明确「记住这个（全局）」才写 GLOBAL。只存极简规则。 */
     fun appendGlobal(rule: String): Boolean {
         if (looksSecret(rule)) return false
         ensureSeeded()
-        val line = "- ${rule.trim().take(200)}"
+        val cleaned = rule.trim().take(200)
+        if (cleaned.isBlank()) return false
+        val line = "- $cleaned"
         val f = globalFile()
         val cur = f.readText()
-        if (cur.contains(rule.trim().take(40))) return true
-        f.appendText("\n$line\n")
+        // 去重：同一规则已有则跳过；数字/范围变化时以最新为准（删旧再写）
+        val key = cleaned.take(24)
+        val lines = cur.lines().toMutableList()
+        val filtered = lines.filterNot { it.startsWith("- ") && it.contains(key) }
+        val next = filtered.joinToString("\n").trimEnd() + "\n$line\n"
+        f.writeText(next)
         return true
     }
 
     /**
      * 关键词检索。全部词都命中（contains，大小写不敏感）才算。
+     * 按条目（## 标题 或 GLOBAL 的 - 行）匹配，不整文件糊搜。
      * scope=daily 只扫每日；all 含 GLOBAL。
      */
     fun search(query: String, scope: String = "daily"): String {
         ensureSeeded()
         val words = query.split(Regex("\\s+")).map { it.trim() }.filter { it.length >= 2 }
         if (words.isEmpty()) return "请给出至少 2 个字的关键词。"
-        val files = mutableListOf<File>()
-        if (scope == "all") files += globalFile()
-        dir.listFiles()?.filter { it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}\\.md")) }
-            ?.sortedByDescending { it.name }
-            ?.take(60)
-            ?.let { files += it }
         val hits = mutableListOf<String>()
-        for (f in files) {
-            val text = runCatching { f.readText() }.getOrNull() ?: continue
-            val lower = text.lowercase()
-            if (words.all { lower.contains(it.lowercase()) }) {
-                hits.add("### ${f.name}\n" + text.take(1200))
+        for (e in collectEntries(scope)) {
+            if (words.all { e.hay.contains(it.lowercase()) }) {
+                hits.add("### ${e.file} · ${e.heading}\n${e.body.take(800)}")
             }
             if (hits.size >= 6) break
         }
@@ -150,14 +157,62 @@ class MemoryStore @Inject constructor(
         if (s.length < 6 || looksSecret(s)) return
         when {
             s.contains("记住这个（全局）") || s.contains("记住这个(全局)") ||
-                (s.contains("全局记住") ) -> {
+                s.contains("全局记住") -> {
                 val rule = s.replace(Regex("记住这个[（(]全局[)）]|全局记住|请记住"), "").trim()
                 if (rule.isNotBlank()) appendGlobal(rule)
             }
             s.contains("记住") || s.contains("以后都") || s.contains("我习惯") ||
-                s.contains("不要再") || s.contains("我喜欢") || s.contains("我偏好") -> {
-                appendDaily("用户偏好", s.take(400), kind = "pref")
+                s.contains("不要再") || s.contains("我喜欢") || s.contains("我偏好") ||
+                s.contains("踩坑") || s.contains("下次别") || s.contains("我一般") ||
+                s.contains("约定") -> {
+                val kind = when {
+                    s.contains("踩坑") || s.contains("下次别") -> "pitfall"
+                    s.contains("习惯") || s.contains("一般") -> "pref"
+                    else -> "pref"
+                }
+                appendDaily("用户偏好", s.take(400), kind = kind)
             }
         }
+    }
+
+    private data class Entry(val file: String, val heading: String, val body: String) {
+        val hay: String get() = "$heading\n$body".lowercase()
+    }
+
+    private fun collectEntries(scope: String): List<Entry> {
+        val out = mutableListOf<Entry>()
+        if (scope == "all") {
+            val f = globalFile()
+            if (f.exists()) {
+                f.readText().lines().filter { it.startsWith("- ") }.forEach { line ->
+                    out.add(Entry("GLOBAL.md", "规则", line.removePrefix("- ").trim()))
+                }
+            }
+        }
+        dir.listFiles()
+            ?.filter { it.name.matches(Regex("\\d{4}-\\d{2}-\\d{2}\\.md")) }
+            ?.sortedByDescending { it.name }
+            ?.take(60)
+            ?.forEach { f ->
+                val text = runCatching { f.readText() }.getOrNull() ?: return@forEach
+                val blocks = text.split(Regex("(?m)^## ")).drop(1)
+                if (blocks.isEmpty()) {
+                    out.add(Entry(f.name, f.name.removeSuffix(".md"), text))
+                } else {
+                    blocks.forEach { b ->
+                        val nl = b.indexOf('\n')
+                        val title = if (nl < 0) b.trim() else b.substring(0, nl).trim()
+                        val body = if (nl < 0) "" else b.substring(nl + 1).trim()
+                        out.add(Entry(f.name, title, body))
+                    }
+                }
+            }
+        return out
+    }
+
+    private fun stripTitle(text: String, title: String): String {
+        val escaped = Regex.escape(title)
+        val regex = Regex("(?ms)^<!-- .*? -->\\n## \\d{2}:\\d{2} $escaped\\n.*?(?=^<!-- |\\z)")
+        return regex.replace(text, "").replace(Regex("\n{3,}"), "\n\n")
     }
 }

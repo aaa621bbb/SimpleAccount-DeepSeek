@@ -4,6 +4,7 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import dagger.hilt.android.AndroidEntryPoint
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,12 +14,9 @@ import javax.inject.Inject
 
 /**
  * 通知监听：抓取支付类通知 → 解析 → 自动入账。
- * 需要用户授予「通知使用权」。
  *
- * 真机常见坑：
- * - 正文在 EXTRA_BIG_TEXT / TEXT_LINES / ticker，不只在 EXTRA_TEXT；
- * - 分组摘要通知没有金额，要跳过；
- * - 服务被系统解绑后要能重新绑定。
+ * Hilt 注入可能晚于首条通知；一律走 [resolveDeps] 兜底 EntryPoint，避免丢单。
+ * 绑定/解绑上报 [AutoRecordRuntime]，由保活服务周期 requestRebind。
  */
 @AndroidEntryPoint
 class PaymentNotificationListenerService : NotificationListenerService() {
@@ -26,15 +24,18 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     @Inject
     lateinit var autoRecordManager: AutoRecordManager
 
+    @Inject
+    lateinit var runtime: AutoRecordRuntime
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        com.simpleaccount.app.util.AppLog.i("无感记账: 通知监听已连接")
+        resolveRuntime().markListenerBound(true)
     }
 
     override fun onListenerDisconnected() {
-        com.simpleaccount.app.util.AppLog.w("无感记账: 通知监听被断开，请求重新绑定")
+        resolveRuntime().markListenerBound(false)
         runCatching { requestRebind(android.content.ComponentName(this, javaClass)) }
         super.onListenerDisconnected()
     }
@@ -42,17 +43,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val n = sbn ?: return
         val pkg = n.packageName ?: return
-        if (!::autoRecordManager.isInitialized) return
 
-        // 分组摘要通常没有单笔金额
         if ((n.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
         if (n.isOngoing) return
 
         val (title, text) = extractBody(n.notification)
-        com.simpleaccount.app.util.AppLog.d(
-            "无感记账: onNotificationPosted pkg=${pkg.substringAfterLast('.')} title=${title.take(20)}"
-        )
-
         val pkgLower = pkg.lowercase()
         val interesting = pkgLower.contains("tencent.mm") ||
             pkgLower.contains("alipay") ||
@@ -66,22 +61,35 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         if (!interesting) return
         if (title.isBlank() && text.isBlank()) return
 
+        val manager = resolveManager()
+        val rt = resolveRuntime()
         scope.launch {
             val parsed = runCatching { NotificationParser.parse(pkg, title, text) }.getOrNull()
             com.simpleaccount.app.util.AppLog.d(
                 "无感记账: 收到通知 pkg=${pkg.substringAfterLast('.')} " +
                     "title=${title.take(24)} text=${text.take(64)} → " +
                     (parsed?.let { "解析成功 ${it.type} ${it.amountFen / 100.0}元 ${it.merchant}" }
-                        ?: "忽略（未匹配到支付金额/模式）")
+                        ?: "忽略（未匹配到支付金额/模式）"),
             )
-            if (parsed != null) {
-                runCatching { autoRecordManager.onPaymentParsed(parsed) }
-                    .onFailure { android.util.Log.w("SimpleAccount", "auto record failed", it) }
+            if (parsed == null) {
+                rt.markSkipped("未解析 ${pkg.substringAfterLast('.')} ${title.take(16)}")
+                return@launch
             }
+            runCatching { manager.onPaymentParsed(parsed) }
+                .onSuccess { ok ->
+                    if (ok) {
+                        rt.markRecorded("${parsed.merchant} ${parsed.amountFen / 100.0}元")
+                    } else {
+                        rt.markSkipped("未入账 ${parsed.merchant}")
+                    }
+                }
+                .onFailure {
+                    android.util.Log.w("SimpleAccount", "auto record failed", it)
+                    rt.markError(it.message ?: "入账失败")
+                }
         }
     }
 
-    /** 把通知里所有可能承载正文的字段拼起来，避免只读 EXTRA_TEXT 漏掉真机支付通知 */
     private fun extractBody(notification: Notification): Pair<String, String> {
         val extras = notification.extras
         val title = listOf(
@@ -107,7 +115,22 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         return title to parts.joinToString("\n")
     }
 
+    private fun resolveManager(): AutoRecordManager {
+        if (::autoRecordManager.isInitialized) return autoRecordManager
+        return entryPoint().manager()
+    }
+
+    private fun resolveRuntime(): AutoRecordRuntime {
+        if (::runtime.isInitialized) return runtime
+        return entryPoint().runtime()
+    }
+
+    private fun entryPoint(): AutoRecordEntryPoint {
+        return EntryPointAccessors.fromApplication(applicationContext, AutoRecordEntryPoint::class.java)
+    }
+
     override fun onDestroy() {
+        if (::runtime.isInitialized) runtime.markListenerBound(false)
         scope.cancel()
         super.onDestroy()
     }

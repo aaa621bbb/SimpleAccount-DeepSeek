@@ -459,7 +459,7 @@ class AiViewModel @Inject constructor(
 [{"date":"日期列原文","time":"HH:mm","merchant":"商家或交易对象","product":"商品说明，可省略","amount":6.5,"type":"expense"}]
 识别规则：
 1. date 字段**照抄截图日期列里写的东西**即可（"今天"就写"今天"，"昨天"就写"昨天"，或 2026-08-30/2026/8/30/08-30/8月30日 等原文），程序会自动换算成标准日期。绝对不要自己推算或编造年份。
-2. 时刻单独放 time，24 小时制："下午8:15"要换算成"20:15"。日期和时刻在同一格（如"昨天 20:15"）时：日期词放 date，时刻放 time。
+2. 时刻单独放 time，24 小时制："下午8:15"要换算成"20:15"。日期和时刻在同一格（如"昨天 20:15"）时：日期词放 date，时刻放 time。截图只写「上午/下午/晚上/早上」没有钟点时：date 写「今天」（或截图里的昨天），time 写 09:00/15:00/20:00/08:00，禁止输出「未知」。
 3. 商家名必须完整抄写，不要截断，不要加省略号。被截图裁掉的尾字（如「有限…」）按能看见的部分抄，不要自己补「公司」。
 4. amount 按截图原值（元，保留小数）；type：支出 expense、收入 income。
 5. 多张切片可能有重叠行，同一笔只输出一次。不要编造截图里没有的字段；识别不出的行跳过。没有账单则输出 []。
@@ -471,31 +471,39 @@ class AiViewModel @Inject constructor(
             )
 
             // 所有切片一次请求发给模型（省 token、也更快）。最多 2 次：主模型失败才回退识图配置。
-            suspend fun visionCall(base: String, key: String, model: String): String? = runCatching {
-                aiService.chatWithImage(
-                    baseUrl = base, apiKey = key, model = model,
-                    prompt = prompt, imageBase64List = base64List,
-                ).content
-            }.getOrNull()
+            suspend fun visionCall(base: String, key: String, model: String): Pair<String, String?> = try {
+                kotlinx.coroutines.withTimeout(45_000) {
+                    val r = aiService.chatWithImage(
+                        baseUrl = base, apiKey = key, model = model,
+                        prompt = prompt, imageBase64List = base64List,
+                    )
+                    r.content to r.error
+                }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                "" to "识图超时（45秒）。网络较慢或图片太大，请裁切后重试——不是「图里没有账单」。"
+            } catch (e: Exception) {
+                "" to (e.message ?: "识图失败")
+            }
 
-            var items = parseExtracted(
-                visionCall(
-                    if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
-                    if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
-                    if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
-                ) ?: ""
+            var lastVisionError: String? = null
+            val first = visionCall(
+                if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
+                if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
+                if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
             )
+            lastVisionError = first.second
+            var items = parseExtracted(first.first)
 
             if (items.isEmpty() && useMain && settingsRepository.visionApiKey().isNotBlank()) {
                 AppLog.d("AI识图: 主模型识别为空，回退独立识图配置（不再第三次重试）")
                 _state.value = _state.value.copy(phase = "主模型识别失败，改用识图模型…")
-                items = parseExtracted(
-                    visionCall(
-                        settingsRepository.visionBaseUrl(),
-                        settingsRepository.visionApiKey(),
-                        settingsRepository.visionModel(),
-                    ) ?: ""
+                val second = visionCall(
+                    settingsRepository.visionBaseUrl(),
+                    settingsRepository.visionApiKey(),
+                    settingsRepository.visionModel(),
                 )
+                lastVisionError = second.second ?: lastVisionError
+                items = parseExtracted(second.first)
             }
             val mergedItems = mergeExtracted(items)
             _state.value = _state.value.copy(
@@ -504,11 +512,16 @@ class AiViewModel @Inject constructor(
 
             // 识别完成 → 批内去重（切片重叠会把同一笔识别两次）+ 与账本比对 → 挂起待用户勾选确认
             if (mergedItems.isEmpty()) {
-                conversationManager.addMessage(
-                    convId, AiMessage.ROLE_ASSISTANT,
+                val msg = if (!lastVisionError.isNullOrBlank()) {
+                    "识图没有完成：$lastVisionError"
+                } else {
                     "没从截图里识别出账单记录。如果截图里有明细，麻烦拍清楚一点再试。"
+                }
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT, msg,
+                    status = if (!lastVisionError.isNullOrBlank()) AiMessage.STATUS_ERROR else AiMessage.STATUS_DONE
                 )
-                _state.value = _state.value.copy(typing = false, phase = null)
+                _state.value = _state.value.copy(typing = false, phase = null, error = lastVisionError)
                 return@launch
             }
             val todayStr = java.time.LocalDate.now().toString()
@@ -704,23 +717,9 @@ class AiViewModel @Inject constructor(
         }
     }
 
-    /** "20:15"/"下午8:15"/"昨天 20:15" → "20:15"（24 小时制）；解析失败返回 null */
-    private fun parseTimeText(raw: String?): String? {
-        val s = raw?.trim() ?: return null
-        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: return null
-        val min = m.groupValues[2].toInt()
-        if (min > 59) return null
-        var h = m.groupValues[1].toInt()
-        if (h > 23) return null
-        // 中文 12 小时制习惯：下午/晚上/傍晚/夜里 8:15 = 20:15；凌晨/午夜 12:05 = 00:05
-        val ctx = s.substring(0, m.range.first)
-        if (h < 12 && (ctx.contains("下午") || ctx.contains("晚上") || ctx.contains("傍晚") ||
-                ctx.contains("夜里") || ctx.contains("夜间"))) {
-            h += 12
-        }
-        if (h == 12 && (ctx.contains("凌晨") || ctx.contains("午夜"))) h = 0
-        return "%02d:%02d".format(h.coerceIn(0, 23), min)
-    }
+    /** "20:15"/"下午8:15"/"昨天 20:15"/"晚上" → "20:15"；解析失败返回 null */
+    private fun parseTimeText(raw: String?): String? =
+        com.simpleaccount.app.util.DateResolver.parseTimeText(raw)
 
     /**
      * 判断模型是否纯文本（不认图片）：命中已知纯文本家族就直接用识图配置，
@@ -818,7 +817,7 @@ class AiViewModel @Inject constructor(
             val slices = mutableListOf<String>()
             fun encode(bmp: android.graphics.Bitmap): String {
                 val out = java.io.ByteArrayOutputStream()
-                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 78, out)
                 return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
             }
 

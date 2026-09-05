@@ -81,4 +81,7 @@ class AutoRecordManager @Inject constructor(
         AppLog.i("无感记账: 已入账 #$id $dir ${parsed.amountFen / 100.0} 元 · $merchant · $category（${parsed.source}）")
         return true
     }
+
+    /** 观测用：开关当前是否开。 */
+    suspend fun isEnabled(): Boolean = settingsRepository.isAutoRecordEnabled()
 }

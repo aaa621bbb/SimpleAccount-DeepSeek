@@ -24,6 +24,13 @@ class AiService @Inject constructor() {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    /** 识图单独超时：卡住很久后必须报超时，不能静默当成「图里没有账单」 */
+    private val visionClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     /** 进行中的 HTTP 调用（支持用户点"停止"时真正掐断网络请求，而不是等它超时） */
     private val activeCalls = java.util.Collections.newSetFromMap(
         java.util.concurrent.ConcurrentHashMap<okhttp3.Call, Boolean>()
@@ -190,7 +197,7 @@ class AiService @Inject constructor() {
             put("temperature", 0.1)
             put("max_tokens", 4000)
         }
-        val resp = execute(baseUrl, apiKey, body)
+        val resp = execute(baseUrl, apiKey, body, http = visionClient, vision = true)
         if (resp.error != null) return@withContextIo ChatResult("", resp.error)
         ChatResult(resp.content)
     }
@@ -426,7 +433,13 @@ class AiService @Inject constructor() {
 
     private data class HttpResp(val content: String, val error: String?, val rawJson: JSONObject?)
 
-    private fun execute(baseUrl: String, apiKey: String, body: JSONObject): HttpResp {
+    private fun execute(
+        baseUrl: String,
+        apiKey: String,
+        body: JSONObject,
+        http: OkHttpClient = client,
+        vision: Boolean = false,
+    ): HttpResp {
         return try {
             val url = buildChatUrl(baseUrl)
             val request = Request.Builder()
@@ -435,7 +448,7 @@ class AiService @Inject constructor() {
                 .header("Content-Type", "application/json")
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-            val call = client.newCall(request)
+            val call = http.newCall(request)
             activeCalls.add(call)
             runCatching {
                 call.execute().use { resp ->
@@ -452,7 +465,13 @@ class AiService @Inject constructor() {
                     HttpResp(content, null, json)
                 }
             }.getOrElse { e ->
-                HttpResp("", e.message ?: "网络错误", null)
+                val timeout = e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException
+                val msg = when {
+                    timeout && vision -> "识图超时，请裁切图片后重试——不是「图里没有账单」。"
+                    timeout -> "请求超时"
+                    else -> e.message ?: "网络错误"
+                }
+                HttpResp("", msg, null)
             }.also { activeCalls.remove(call) }
         } catch (e: Exception) {
             HttpResp("", e.message ?: "网络错误", null)

@@ -1,55 +1,37 @@
 package com.simpleaccount.app.ui.addtransaction
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backspace
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,17 +41,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
-import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
-import com.simpleaccount.app.ui.components.CategoryIconCircle
+import com.simpleaccount.app.ui.components.CategoryCarousel
+import com.simpleaccount.app.ui.components.DatePickerByStyle
+import com.simpleaccount.app.ui.components.TimePickerByStyle
+import com.simpleaccount.app.ui.components.DualFocusFields
+import com.simpleaccount.app.ui.components.PressSaveBar
+import com.simpleaccount.app.ui.motion.LocalReduceMotion
+import com.simpleaccount.app.ui.motion.Motion
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,14 +68,17 @@ fun AddTransactionScreen(
     val vm: AddTransactionViewModel = hiltViewModel()
     val state by vm.state.collectAsState()
     val categories by vm.categoriesByType.collectAsState()
+    val dateStyle by vm.dateStyle.collectAsState()
+    val timeStyle by vm.timeStyle.collectAsState()
     val scope = rememberCoroutineScope()
-    val sheetState = rememberModalBottomSheetState()
+    val focus = LocalFocusManager.current
+    val reduce = LocalReduceMotion.current
 
     var showDateSheet by remember { mutableStateOf(false) }
     var showTimeSheet by remember { mutableStateOf(false) }
-    var showMerchantSheet by remember { mutableStateOf(false) }
-    var showProductSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var success by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -99,125 +89,112 @@ fun AddTransactionScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
-        }
+        },
+        bottomBar = {
+            PressSaveBar(
+                enabled = !state.loading && !saving,
+                success = success,
+                onClick = {
+                    if (saving || success) return@PressSaveBar
+                    saving = true
+                    scope.launch {
+                        val ok = vm.save()
+                        saving = false
+                        if (ok) {
+                            success = true
+                            delay(Motion.dur(reduce, Motion.SUCCESS_MS).toLong().coerceAtLeast(80L))
+                            navController.popBackStack()
+                        }
+                    }
+                },
+            )
+        },
     ) { padding ->
         Column(
             Modifier
                 .padding(padding)
                 .fillMaxSize()
                 .imePadding()
-                // 键盘弹出时页面可上下滚动，保存键不会被顶出屏幕
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .pointerInput(showKeypad) {
-                    detectTapGestures { showKeypad = false }
-                }
+                    detectTapGestures {
+                        showKeypad = false
+                        focus.clearFocus()
+                    }
+                },
         ) {
             com.simpleaccount.app.ui.components.SegmentedThree(
                 options = listOf("支出", "收入"),
                 selected = if (state.type == Transaction.TYPE_EXPENSE) 0 else 1,
                 onSelect = {
                     vm.onTypeChange(if (it == 0) Transaction.TYPE_EXPENSE else Transaction.TYPE_INCOME)
-                }
+                },
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // 金额：可点击行 + 内置数字键盘（不抢焦点，无光标）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(60.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .height(56.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        RoundedCornerShape(12.dp),
+                    )
                     .clickable { showKeypad = !showKeypad }
                     .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("金额", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.weight(1f))
                 Text(
                     if (state.amountText.isEmpty()) "0.00" else state.amountText,
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
                 )
             }
             if (showKeypad) {
                 NumberKeypad(
                     value = state.amountText,
                     onKey = vm::onAmountChange,
-                    style = NumberKeypadStyle.AMOUNT
                 )
             }
             Spacer(Modifier.height(12.dp))
 
             Text("分类", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            CategoryCarousel(
+                categories = categories,
+                selected = state.selectedCategory,
+                onSelect = vm::onCategorySelect,
+            )
             Spacer(Modifier.height(8.dp))
-            val catRows = categories.chunked(4)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                catRows.forEach { row ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { cat ->
-                            val sel = state.selectedCategory?.name == cat.name
-                            Column(
-                                Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (sel) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                                    )
-                                    .clickable { vm.onCategorySelect(cat) }
-                                    .padding(vertical = 10.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                CategoryIconCircle(cat, size = 36)
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    cat.name,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
+
+            Row(Modifier.fillMaxWidth()) {
+                PickerChip(
+                    label = "日期",
+                    value = state.date,
+                    modifier = Modifier.weight(1f),
+                    onClick = { showDateSheet = true },
+                )
+                Spacer(Modifier.width(10.dp))
+                PickerChip(
+                    label = "时间",
+                    value = state.time.ifBlank { "现在" },
+                    isPlaceholder = state.time.isBlank(),
+                    modifier = Modifier.weight(1f),
+                    onClick = { showTimeSheet = true },
+                )
             }
             Spacer(Modifier.height(12.dp))
 
-            // 日期：点选 年/月/日
-            PickerRow(
-                label = "日期",
-                value = state.date,
-                onClick = { showDateSheet = true }
-            )
-            Spacer(Modifier.height(12.dp))
-
-            PickerRow(
-                label = "时间",
-                value = state.time.ifBlank { "现在" },
-                isPlaceholder = state.time.isBlank(),
-                onClick = { showTimeSheet = true }
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // 商家：点选（搜索 + 候选 + 其他）
-            PickerRow(
-                label = "商家（可选）",
-                value = state.merchant.ifEmpty { "请选择/输入" },
-                isPlaceholder = state.merchant.isEmpty(),
-                onClick = { showMerchantSheet = true }
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // 商品：点选
-            PickerRow(
-                label = "商品（可选）",
-                value = state.product.ifEmpty { "请选择/输入" },
-                isPlaceholder = state.product.isEmpty(),
-                onClick = { showProductSheet = true }
+            DualFocusFields(
+                merchant = state.merchant,
+                product = state.product,
+                onMerchant = vm::onMerchantChange,
+                onProduct = vm::onProductChange,
             )
             Spacer(Modifier.height(12.dp))
 
@@ -226,161 +203,124 @@ fun AddTransactionScreen(
                 onValueChange = vm::onNoteChange,
                 label = { Text("备注（可选）") },
                 modifier = Modifier.fillMaxWidth(),
-                minLines = 2
+                minLines = 2,
             )
 
             if (state.error != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(state.error!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
             }
-
-            Spacer(Modifier.height(20.dp))
-            Button(
-                onClick = {
-                    scope.launch {
-                        val ok = vm.save()
-                        if (ok) navController.popBackStack()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                if (state.loading) CircularProgressIndicator(Modifier.size(20.dp))
-                else Text("保存")
+            if (state.loading) {
+                Spacer(Modifier.height(8.dp))
+                CircularProgressIndicator(Modifier.size(20.dp))
             }
+            Spacer(Modifier.height(8.dp))
         }
     }
 
     if (showDateSheet) {
-        com.simpleaccount.app.ui.components.DateWheelSheet(
+        DatePickerByStyle(
+            style = dateStyle,
             initialDate = state.date,
             onDismiss = { showDateSheet = false },
             onConfirm = { y, m, d ->
-                vm.onDateSet(y, m, d); showDateSheet = false
-            }
+                vm.onDateSet(y, m, d)
+                showDateSheet = false
+            },
         )
     }
 
     if (showTimeSheet) {
-        com.simpleaccount.app.ui.components.TimePickerSheet(
+        TimePickerByStyle(
+            style = timeStyle,
             initial = state.time,
             onDismiss = { showTimeSheet = false },
             onConfirm = { hhmm ->
                 vm.onTimeChange(hhmm)
                 showTimeSheet = false
-            }
-        )
-    }
-
-    if (showMerchantSheet) {
-        TextPickerSheet(
-            title = "选择/输入商家",
-            placeholder = "搜索商家…",
-            current = state.merchant,
-            onDismiss = { showMerchantSheet = false },
-            onSelect = { vm.onMerchantChange(it); showMerchantSheet = false },
-            loadCandidates = { vm.knownMerchants() }
-        )
-    }
-
-    if (showProductSheet) {
-        TextPickerSheet(
-            title = "选择/输入商品",
-            placeholder = "搜索商品…",
-            current = state.product,
-            onDismiss = { showProductSheet = false },
-            onSelect = { vm.onProductChange(it); showProductSheet = false },
-            loadCandidates = { vm.knownProducts() }
+            },
         )
     }
 }
 
-/** 通用"点选行" */
 @Composable
-private fun PickerRow(
+private fun PickerChip(
     label: String,
     value: String,
-    isPlaceholder: Boolean = false,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isPlaceholder: Boolean = false,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier
             .height(56.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (isPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.width(4.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (isPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            )
+        }
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null)
     }
 }
 
-/** 内置键盘模式 */
-enum class NumberKeypadStyle { AMOUNT }
-
-/** 内置数字键盘：仅数字 + 小数点 + 退格 */
 @Composable
-private fun NumberKeypad(value: String, onKey: (String) -> Unit, style: NumberKeypadStyle) {
+private fun NumberKeypad(value: String, onKey: (String) -> Unit) {
     fun append(digit: Char) {
-        when (style) {
-            NumberKeypadStyle.AMOUNT -> {
-                val cur = value.replace(",", "")
-                if (digit == '.') {
-                    if (cur.contains('.')) return
-                    if (cur.isEmpty()) { onKey("0."); return }
-                } else {
-                    // 最多两位小数
-                    if (cur.contains('.')) {
-                        val dec = cur.substringAfter('.')
-                        if (dec.length >= 2) return
-                    }
-                    // 整数部分限长
-                    if (!cur.contains('.') && cur.length >= 9) return
-                }
-                onKey(cur + digit)
+        val cur = value.replace(",", "")
+        if (digit == '.') {
+            if (cur.contains('.')) return
+            if (cur.isEmpty()) {
+                onKey("0.")
+                return
             }
+        } else {
+            if (cur.contains('.')) {
+                val dec = cur.substringAfter('.')
+                if (dec.length >= 2) return
+            }
+            if (!cur.contains('.') && cur.length >= 9) return
         }
+        onKey(cur + digit)
     }
-    val keys = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0')
     Column(
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-            .padding(8.dp)
+            .padding(8.dp),
     ) {
-        // 每行显示, 布局网格
         val rows = listOf(
-            listOf('1','2','3','4'),
-            listOf('5','6','7','8'),
-            listOf('9','.','0', '#'),
+            listOf('1', '2', '3', '4'),
+            listOf('5', '6', '7', '8'),
+            listOf('9', '.', '0', '#'),
         )
         rows.forEach { rowKeys ->
             Row(Modifier.fillMaxWidth()) {
                 rowKeys.forEach { k ->
-                    val weight = 1f
                     Box(
                         Modifier
-                            .weight(weight)
+                            .weight(1f)
                             .padding(4.dp)
-                            .height(52.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .height(48.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                RoundedCornerShape(8.dp),
+                            )
                             .clickable {
                                 when (k) {
-                                    '#' -> { // 退格
-                                        if (value.isNotEmpty()) onKey(value.dropLast(1))
-                                    }
+                                    '#' -> if (value.isNotEmpty()) onKey(value.dropLast(1))
                                     else -> append(k)
                                 }
                             },
-                        contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center,
                     ) {
                         if (k == '#') {
                             Icon(Icons.Filled.Backspace, contentDescription = "删除")
@@ -393,114 +333,3 @@ private fun NumberKeypad(value: String, onKey: (String) -> Unit, style: NumberKe
         }
     }
 }
-
-/** 日期选择：Material3 日历对话框（替换旧版三段滚轮，操作更直观） */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DatePickerSheet(
-    initialDate: String,
-    onDismiss: () -> Unit,
-    onConfirm: (Int, Int, Int) -> Unit,
-) {
-    val initialMillis = remember(initialDate) {
-        val parts = initialDate.split("-").mapNotNull { it.toIntOrNull() }
-        java.time.LocalDate.of(
-            parts.getOrElse(0) { 2026 },
-            parts.getOrElse(1) { 1 },
-            parts.getOrElse(2) { 1 }
-        ).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
-    }
-    val pickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
-
-    DatePickerDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                val ms = pickerState.selectedDateMillis ?: initialMillis
-                val d = java.time.Instant.ofEpochMilli(ms)
-                    .atZone(java.time.ZoneOffset.UTC).toLocalDate()
-                onConfirm(d.year, d.monthValue, d.dayOfMonth)
-            }) { Text("确定") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    ) {
-        DatePicker(
-            state = pickerState,
-            title = null,
-            headline = null,
-            showModeToggle = false
-        )
-    }
-}
-
-/** 文本选择器（商家/商品）：搜索 + 候选 + "其他" */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TextPickerSheet(
-    title: String,
-    placeholder: String,
-    current: String,
-    onDismiss: () -> Unit,
-    onSelect: (String) -> Unit,
-    loadCandidates: suspend () -> List<String>,
-) {
-    val scope = rememberCoroutineScope()
-    var query by remember { mutableStateOf(current) }
-    var candidates by remember { mutableStateOf(mutableListOf<String>()) }
-
-    LaunchedEffect(Unit) {
-        candidates = loadCandidates().toMutableList()
-    }
-
-    val filtered = candidates.filter { it.contains(query.trim(), ignoreCase = true) || query.isBlank() }
-
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp).fillMaxHeight(0.8f)) {
-            Text(title, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text(placeholder) },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-            )
-
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                // "其他" 选项：始终可搜可选
-                item {
-                    CandidateRow("其他", query.isNotBlank() && "其他".contains(query, true)) {
-                        onSelect("其他")
-                    }
-                }
-                // 精确匹配当前输入 -> 允许直接使用输入内容
-                if (query.isNotBlank()) {
-                    item {
-                        CandidateRow("使用「$query」", false) { onSelect(query.trim()) }
-                    }
-                }
-                items(filtered, key = { it }) { cand ->
-                    CandidateRow(cand, cand == query.trim()) { onSelect(cand) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CandidateRow(text: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(text, style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.weight(1f))
-        if (selected) Icon(Icons.Filled.Check, contentDescription = "已选择", tint = MaterialTheme.colorScheme.primary)
-    }
-}
-

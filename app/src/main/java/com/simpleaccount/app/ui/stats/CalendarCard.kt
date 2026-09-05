@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.ui.components.SoftCard
 import com.simpleaccount.app.ui.components.parseColor
-import com.simpleaccount.app.ui.theme.AppColors
+import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.MoneyUtil
 
 /**
@@ -52,6 +52,7 @@ import com.simpleaccount.app.util.MoneyUtil
 fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
     var selectedDay by remember { mutableStateOf<Int?>(null) }
     val sheetState = rememberModalBottomSheetState()
+    val pal = LocalAppPalette.current
 
     SoftCard(
         Modifier
@@ -90,7 +91,7 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                         w,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (i >= 5) AppColors.Champagne
+                        color = if (i >= 5) pal.accent
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -108,7 +109,7 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                 if (state.type == Transaction.TYPE_EXPENSE) it.expense else it.income
             }?.coerceAtLeast(1L) ?: 1L
         }
-        val heat = if (state.type == Transaction.TYPE_EXPENSE) AppColors.Expense else AppColors.Income
+        val heat = if (state.type == Transaction.TYPE_EXPENSE) pal.expense else pal.income
         val today = java.time.LocalDate.now()
 
         padded.chunked(7).forEach { week ->
@@ -140,7 +141,7 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                             .then(
                                 if (isToday) Modifier.border(
                                     1.5.dp,
-                                    AppColors.Champagne,
+                                    pal.accent,
                                     RoundedCornerShape(10.dp)
                                 ) else Modifier
                             )
@@ -259,7 +260,7 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                                         "¥" + MoneyUtil.fenToYuan(t.amount),
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp,
-                                    color = if (t.type == Transaction.TYPE_INCOME) AppColors.Income
+                                    color = if (t.type == Transaction.TYPE_INCOME) pal.income
                                     else MaterialTheme.colorScheme.onSurface
                                 )
                             }

@@ -78,7 +78,8 @@ class AgentLoop @Inject constructor(
 当前账本：「$ledgerName」。所有工具只返回这一本的流水，禁止把别的账本当成数据。
 $dates
 账本数据覆盖：$monthsDesc。金额单位是元。
-用户说「记住这个（全局）」时调用 memory_write(scope=global)；发现偏好可记住今日日志。禁止写入密码/API Key。
+用户说「记住这个（全局）」时才调用 memory_write(scope=global)；发现偏好/事实/踩坑写今日日志。禁止写入密码/API Key/token。
+新消息改变范围、数字、目标时，以最新消息为准，不要沿用旧任务。
 用户说「昨天/前天/今天/本月/上个月」时，必须用上面的时间锚点换成 yyyy-MM-dd 或 yyyy-MM 再调工具，绝对不要回答「日期未知」。
 
 $snapshot
@@ -214,10 +215,12 @@ $snapshot
         var rounds = 0
         var networkRetried = false
         val loopDetector = ToolLoopDetector()
-        onStatus("正在思考…")
+        val writeFast = Regex("删|撤回|帮我记|记一笔|记上|撤销").containsMatchIn(userMessage)
+        if (!writeFast) onStatus("正在思考…")
         while (rounds < maxRounds) {
             rounds++
-            val thinking = settingsRepository.thinkingLevel()
+            val thinking = if (writeFast) SettingsRepository.THINKING_OFF
+            else settingsRepository.thinkingLevel()
             val resp = aiService.chatWithTools(
                 baseUrl, apiKey, model, messages, tools,
                 onDelta = onDelta,

@@ -39,8 +39,12 @@ data class AddUiState(
 class AddTransactionViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    val dateStyle = settingsRepository.datePickerFlow
+    val timeStyle = settingsRepository.timePickerFlow
 
     private val _state = MutableStateFlow(AddUiState())
     val state: StateFlow<AddUiState> = _state.asStateFlow()

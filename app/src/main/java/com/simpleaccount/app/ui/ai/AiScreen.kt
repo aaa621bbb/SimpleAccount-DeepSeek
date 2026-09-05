@@ -90,6 +90,7 @@ private data class MessageActions(val msg: AiMessage, val isLastAssistant: Boole
 fun AiScreen(
     viewModel: AiViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     navController: NavHostController? = null,
+    autoPickImage: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val listState = rememberLazyListState()
@@ -111,6 +112,20 @@ fun AiScreen(
     val screenshotSheetState = androidx.compose.material3.rememberModalBottomSheetState()
 
     LaunchedEffect(Unit) { viewModel.refreshEnabled() }
+
+    var autoPicked by remember { mutableStateOf(false) }
+    LaunchedEffect(autoPickImage) {
+        if (autoPickImage && !autoPicked) {
+            autoPicked = true
+            runCatching {
+                imagePicker.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                    )
+                )
+            }
+        }
+    }
 
     // 新消息/输入状态/流式增量变化时自动滚到底部
     LaunchedEffect(state.messages.size, state.typing, state.streamingText?.length?.div(40)) {
@@ -485,7 +500,7 @@ fun AiScreen(
                                 )
                                 Text(
                                     (it0.date ?: "日期未知（确认后将记入今天）") +
-                                        (it0.time?.let { tm -> " $tm" } ?: "") +
+                                        (it0.time?.let { tm -> " $tm" } ?: " 时间未知") +
                                         if (it0.duplicate) " · 账本已有（跳过）" else "",
                                     fontSize = 11.sp,
                                     color = if (it0.duplicate) MaterialTheme.colorScheme.error

@@ -21,6 +21,7 @@ data class InsightTip(
     val title: String,
     val body: String,
     val evidenceIds: List<Long> = emptyList(),
+    val section: String = "建议",
 )
 
 data class MonthHealth(
@@ -42,24 +43,27 @@ data class MonthHealth(
     val todayFen: Long = 0L,
     val projectedFen: Long = 0L,
     val todayDupes: List<String> = emptyList(),
+    val score: Int = 70,
+    val grade: String = "B",
 ) {
     val headline: String
-        get() = when {
-            momPct == null -> "本月已支出 ¥${MoneyUtil.fenToYuan(expense)}"
-            momPct <= -10 -> "比上月少花 ${"%.0f".format(-momPct)}%"
-            momPct >= 15 -> "比上月多花 ${"%.0f".format(momPct)}%"
-            else -> "本月支出与上月持平"
-        }
+        get() = "本月体检 $grade · ${score}分"
 
     val subline: String
         get() {
             val bits = mutableListOf<String>()
-            if (subscriptions.isNotEmpty()) {
-                val sum = subscriptions.sumOf { it.typicalFen }
-                bits.add("订阅 ${subscriptions.size} 笔 · ¥${MoneyUtil.fenToYuan(sum)}/月")
+            momPct?.let {
+                bits.add(
+                    when {
+                        it <= -10 -> "比上月少花 ${"%.0f".format(-momPct)}%"
+                        it >= 15 -> "比上月多花 ${"%.0f".format(momPct)}%"
+                        else -> "支出与上月持平"
+                    }
+                )
             }
             topCategories.firstOrNull()?.let {
-                bits.add("最多是${it.first} ¥${MoneyUtil.fenToYuan(it.second)}")
+                val p = if (expense > 0) it.second * 100 / expense else 0
+                bits.add("${it.first}占 ${p}%")
             }
             if (weekendAvgFen > 0 && weekdayAvgFen > 0 && weekendAvgFen > weekdayAvgFen * 14 / 10) {
                 bits.add("周末日均更高")
@@ -96,7 +100,7 @@ object InsightsEngine {
             .mapValues { it.value.sumOf { t -> t.amount } }
         val biggestDay = byDay.maxByOrNull { it.value }?.toPair()
         val dayAvg = if (byDay.isNotEmpty()) byDay.values.average() else 0.0
-        val unusualDays = byDay.filter { it.value > dayAvg * 2.2 && it.value > 5000 }
+        val unusualDays = byDay.filter { it.value > dayAvg * 2.2 && it.value > 8_000 }
             .toList()
             .sortedByDescending { it.second }
             .take(3)
@@ -113,11 +117,15 @@ object InsightsEngine {
             .filter { it.value.size >= 2 && it.key.substringBefore('|').isNotBlank() }
             .map { (k, v) -> "${k.substringBefore('|')} ¥${MoneyUtil.fenToYuan(v.first().amount)} ×${v.size}" }
             .take(3)
+        val lastCats = lastTx.filter { it.type == Transaction.TYPE_EXPENSE }
+            .groupBy { it.category }
+            .mapValues { it.value.sumOf { t -> t.amount } }
         val evidenceTips = buildEvidenceTips(
-            thisTx, expense, lastExpense, momPct, budgetFen, topCategories, subscriptions,
-            unusualDays, lifestyle, projected, todayDupes, biggestDay,
+            thisTx, expense, income, lastExpense, momPct, budgetFen, topCategories, lastCats,
+            subscriptions, unusualDays, lifestyle, projected, todayDupes, biggestDay,
         )
         val tips = evidenceTips.map { "${it.title}：${it.body}" }
+        val scored = scoreOf(expense, income, momPct, budgetFen, topCategories, todayDupes, lifestyle)
 
         return MonthHealth(
             month = month,
@@ -138,7 +146,52 @@ object InsightsEngine {
             todayFen = todayFen,
             projectedFen = projected,
             todayDupes = todayDupes,
+            score = scored.first,
+            grade = scored.second,
         )
+    }
+
+    private fun scoreOf(
+        expense: Long,
+        income: Long,
+        momPct: Double?,
+        budgetFen: Long,
+        top: List<Pair<String, Long>>,
+        dupes: List<String>,
+        lifestyle: Triple<Long, Long, Long>,
+    ): Pair<Int, String> {
+        var s = 72
+        if (income > 0) {
+            val save = (income - expense).toDouble() / income
+            s += (save * 18).toInt().coerceIn(-12, 16)
+        }
+        momPct?.let {
+            s += when {
+                it <= -15 -> 8
+                it <= -8 -> 4
+                it >= 25 -> -12
+                it >= 15 -> -6
+                else -> 0
+            }
+        }
+        if (budgetFen > 0) {
+            s += if (expense > budgetFen) -14 else if (expense < budgetFen * 8 / 10) 5 else 0
+        }
+        top.firstOrNull()?.let { (_, amt) ->
+            if (expense > 0 && amt * 100 / expense >= 55) s -= 8
+            else if (expense > 0 && amt * 100 / expense >= 40) s -= 3
+        }
+        if (dupes.isNotEmpty()) s -= 8
+        val night = lifestyle.third
+        if (expense > 0 && night > expense * 15 / 100) s -= 5
+        s = s.coerceIn(35, 98)
+        val grade = when {
+            s >= 85 -> "A"
+            s >= 70 -> "B"
+            s >= 55 -> "C"
+            else -> "D"
+        }
+        return s to grade
     }
 
     /** @return Triple(工作日日均, 周末日均, 夜间支出) 单位分 */
@@ -182,7 +235,7 @@ object InsightsEngine {
 
     fun toMarkdown(h: MonthHealth): String {
         val sb = StringBuilder()
-        sb.appendLine("### ${h.month} 花销体检")
+        sb.appendLine("### ${h.month} 花销体检  ${h.grade} · ${h.score}分")
         sb.appendLine()
         sb.appendLine("- 本月支出 **¥${MoneyUtil.fenToYuan(h.expense)}**，收入 **¥${MoneyUtil.fenToYuan(h.income)}**")
         h.momPct?.let {
@@ -298,10 +351,12 @@ object InsightsEngine {
     private fun buildEvidenceTips(
         thisTx: List<Transaction>,
         expense: Long,
+        income: Long,
         lastExpense: Long,
         momPct: Double?,
         budgetFen: Long,
         top: List<Pair<String, Long>>,
+        lastCats: Map<String, Long>,
         subs: List<SubscriptionHint>,
         unusual: List<Pair<String, Long>>,
         lifestyle: Triple<Long, Long, Long>,
@@ -314,130 +369,157 @@ object InsightsEngine {
         fun idsOf(pred: (Transaction) -> Boolean, limit: Int = 12) =
             exp.filter(pred).sortedByDescending { it.amount }.take(limit).map { it.id }
 
-        if (budgetFen > 0 && expense > budgetFen) {
-            tips.add(
-                InsightTip(
-                    "已经超预算 ¥${MoneyUtil.fenToYuan(expense - budgetFen)}",
-                    "本月支出 ¥${MoneyUtil.fenToYuan(expense)}，预算 ¥${MoneyUtil.fenToYuan(budgetFen)}。点开看金额最大的几笔。",
-                    idsOf({ true }, 10)
-                )
+        // 总览
+        val saveFen = income - expense
+        tips.add(
+            InsightTip(
+                title = "本月支出 ¥${MoneyUtil.fenToYuan(expense)}",
+                body = buildString {
+                    append("收入 ¥${MoneyUtil.fenToYuan(income)}")
+                    if (income > 0) append("，结余 ¥${MoneyUtil.fenToYuan(saveFen)}")
+                    momPct?.let {
+                        val dir = if (it >= 0) "多花" else "少花"
+                        append("。较上月（¥${MoneyUtil.fenToYuan(lastExpense)}）$dir ${"%.1f".format(kotlin.math.abs(it))}%")
+                    }
+                    if (projected > 0) append("。按当前速度月底约 ¥${MoneyUtil.fenToYuan(projected)}")
+                },
+                evidenceIds = idsOf({ true }, 8),
+                section = "总览",
             )
-        } else if (budgetFen > 0) {
-            val left = budgetFen - expense
-            val day = java.time.LocalDate.now().dayOfMonth
-            val days = java.time.YearMonth.now().lengthOfMonth()
-            val remainDays = (days - day).coerceAtLeast(1)
-            tips.add(
-                InsightTip(
-                    "预算还剩 ¥${MoneyUtil.fenToYuan(left)}",
-                    "按 $remainDays 天摊大约每天 ¥${MoneyUtil.fenToYuan(left / remainDays)}。" +
-                        if (projected > budgetFen) " 按这速度月底约 ¥${MoneyUtil.fenToYuan(projected)}，会超。" else "",
-                    idsOf({ true }, 8)
-                )
-            )
-        }
-        if (momPct != null && momPct >= 20) {
-            val momPctLabel = "%.0f".format(momPct)
-            tips.add(
-                InsightTip(
-                    "比上个月多花了 $momPctLabel%",
-                    "上月 ¥${MoneyUtil.fenToYuan(lastExpense)}，本月 ¥${MoneyUtil.fenToYuan(expense)}。分类排行能看出涨在哪。",
-                    idsOf({ true }, 8)
-                )
-            )
-        }
-        top.firstOrNull()?.let { (cat, amt) ->
-            if (expense > 0 && amt * 100 / expense >= 30) {
-                val catPctLabel = "%.0f".format(amt * 100.0 / expense)
-                tips.add(
-                    InsightTip(
-                        "${cat}占了支出 $catPctLabel%",
-                        "共 ¥${MoneyUtil.fenToYuan(amt)}。想省钱从这里下手最快。",
-                        idsOf({ it.category == cat })
-                    )
-                )
+        )
+
+        // 结构：分类占比 + 环比涨跌，不灌水商家条
+        top.take(3).forEach { (cat, amt) ->
+            val pct = if (expense > 0) amt * 100.0 / expense else 0.0
+            val prev = lastCats[cat] ?: 0L
+            val delta = when {
+                prev <= 0 -> "上月几乎没有这类"
+                amt > prev -> "比上月多 ¥${MoneyUtil.fenToYuan(amt - prev)}"
+                else -> "比上月少 ¥${MoneyUtil.fenToYuan(prev - amt)}"
             }
-        }
-        if (subs.isNotEmpty()) {
-            val sum = subs.sumOf { it.typicalFen }
-            val names = subs.map { it.merchant }.toSet()
             tips.add(
                 InsightTip(
-                    "订阅/固定支出 ${subs.size} 笔约 ¥${MoneyUtil.fenToYuan(sum)}/月",
-                    subs.joinToString("；") { "${it.merchant} 约 ¥${MoneyUtil.fenToYuan(it.typicalFen)}（已连续 ${it.months} 个月）" },
-                    idsOf({ it.merchant.trim() in names })
+                    "${cat} ¥${MoneyUtil.fenToYuan(amt)}（${"%.0f".format(pct)}%）",
+                    delta + "。点开看依据。",
+                    idsOf({ it.category == cat }),
+                    section = "结构",
                 )
             )
         }
-        unusual.firstOrNull()?.let { (d, amt) ->
-            tips.add(
-                InsightTip(
-                    "${d} 花得特别猛",
-                    "当天支出 ¥${MoneyUtil.fenToYuan(amt)}，明显高于日均。核对一下是不是大额或重复。",
-                    idsOf({ it.date == d })
-                )
-            )
-        }
-        biggestDay?.let { (d, amt) ->
-            if (unusual.none { it.first == d }) {
-                tips.add(
-                    InsightTip(
-                        "花钱最多的一天是 $d",
-                        "当天 ¥${MoneyUtil.fenToYuan(amt)}。",
-                        idsOf({ it.date == d })
-                    )
-                )
-            }
-        }
+
+        // 节奏
         val (weekAvg, endAvg, night) = lifestyle
+        biggestDay?.let { (d, amt) ->
+            tips.add(
+                InsightTip(
+                    "花钱最多的一天是 $d",
+                    "当天 ¥${MoneyUtil.fenToYuan(amt)}。",
+                    idsOf({ it.date == d }),
+                    section = "节奏",
+                )
+            )
+        }
         if (endAvg > 0 && weekAvg > 0 && endAvg > weekAvg * 14 / 10) {
             tips.add(
                 InsightTip(
-                    "周末日均更高",
-                    "周末日均 ¥${MoneyUtil.fenToYuan(endAvg)}，工作日 ¥${MoneyUtil.fenToYuan(weekAvg)}。聚餐外卖可以提前定上限。",
+                    "周末日均比工作日高",
+                    "周末有账日平均 ¥${MoneyUtil.fenToYuan(endAvg)}，工作日 ¥${MoneyUtil.fenToYuan(weekAvg)}（按账单日期的星期几，不是猜测）。",
                     idsOf({
                         runCatching { java.time.LocalDate.parse(it.date).dayOfWeek.value }.getOrDefault(1) >= 6
-                    })
+                    }),
+                    section = "节奏",
                 )
             )
         }
         if (night > 5000) {
             tips.add(
                 InsightTip(
-                    "夜间已花 ¥${MoneyUtil.fenToYuan(night)}",
-                    "22:00–05:00 的账单。夜宵最容易不知不觉。",
+                    "夜里（22:00–05:00）¥${MoneyUtil.fenToYuan(night)}",
+                    "按账单上的时刻统计，不是推测你在熬夜。",
                     idsOf({
                         val h = it.time.substringBefore(':').toIntOrNull() ?: return@idsOf false
                         h >= 22 || h < 5
-                    })
+                    }),
+                    section = "节奏",
                 )
             )
+        }
+
+        // 风险
+        if (budgetFen > 0 && expense > budgetFen) {
+            tips.add(
+                InsightTip(
+                    "已经超预算 ¥${MoneyUtil.fenToYuan(expense - budgetFen)}",
+                    "本月支出 ¥${MoneyUtil.fenToYuan(expense)} − 你设的预算 ¥${MoneyUtil.fenToYuan(budgetFen)}。数字来自账本合计，不是推算。",
+                    idsOf({ true }, 10),
+                    section = "风险",
+                )
+            )
+        } else if (budgetFen > 0 && projected > budgetFen) {
+            tips.add(
+                InsightTip(
+                    "按这速度会超预算",
+                    "算法：本月已花 × 本月天数 ÷ 今天是几号 = ¥${MoneyUtil.fenToYuan(projected)}，对比预算 ¥${MoneyUtil.fenToYuan(budgetFen)}。还没花的日子按前几天的平均估，不是断言。",
+                    idsOf({ true }, 8),
+                    section = "风险",
+                )
+            )
+        }
+        unusual.firstOrNull()?.let { (d, amt) ->
+            val avg = if (exp.groupBy { it.date }.isEmpty()) 0L
+            else exp.groupBy { it.date }.values.sumOf { list -> list.sumOf { t -> t.amount } } /
+                exp.groupBy { it.date }.size.coerceAtLeast(1)
+            if (biggestDay?.first != d && amt > avg * 22 / 10 && amt > 8_000) {
+                tips.add(
+                    InsightTip(
+                        "${d} 高于日均 2.2 倍",
+                        "当天 ¥${MoneyUtil.fenToYuan(amt)}，本月有账日日均 ¥${MoneyUtil.fenToYuan(avg)}。只在「当天 > 日均×2.2 且超过 80 元」时出现，不是猜测。",
+                        idsOf({ it.date == d }),
+                        section = "风险",
+                    )
+                )
+            }
         }
         if (todayDupes.isNotEmpty()) {
             val today = DateUtil.today()
             tips.add(
                 InsightTip(
-                    "今天可能记重了",
-                    todayDupes.joinToString("、"),
-                    idsOf({ it.date == today })
+                    "今天同一商家同一金额记了两次",
+                    "规则：今天、同商家、同金额 ≥2 笔。" + todayDupes.joinToString("、"),
+                    idsOf({ it.date == today }),
+                    section = "风险",
                 )
             )
         }
-        exp.groupBy { it.merchant }.filter { it.key.isNotBlank() }
-            .mapValues { it.value.sumOf { t -> t.amount } }
-            .toList().sortedByDescending { it.second }.take(3)
-            .forEach { (m, amt) ->
+        if (subs.isNotEmpty()) {
+            val sum = subs.sumOf { it.typicalFen }
+            val names = subs.map { it.merchant }.toSet()
+            tips.add(
+                InsightTip(
+                    "连续 ${subs.size} 家、金额波动不超过两成半",
+                    "规则：同一商家连续 ≥3 个月、每月金额相对中位数波动 ≤25%、单月不少于 3 元。合计约 ¥${MoneyUtil.fenToYuan(sum)}/月。这是固定支出，不是风险。",
+                    idsOf({ it.merchant.trim() in names }),
+                    section = "固定",
+                )
+            )
+        }
+
+        // 建议：最多两条，有数字和依据
+        top.firstOrNull()?.let { (cat, amt) ->
+            if (expense > 0 && amt * 100 / expense >= 30) {
                 tips.add(
                     InsightTip(
-                        "商家 $m 本月 ¥${MoneyUtil.fenToYuan(amt)}",
-                        "点开看这几笔。",
-                        idsOf({ it.merchant == m })
+                        "想省钱先看「$cat」",
+                        "占支出 ${"%.0f".format(amt * 100.0 / expense)}%，共 ¥${MoneyUtil.fenToYuan(amt)}。",
+                        idsOf({ it.category == cat }),
+                        section = "建议",
                     )
                 )
             }
-        if (tips.isEmpty() && expense > 0) {
-            tips.add(InsightTip("账记得挺稳", "继续保持就好。", idsOf({ true }, 6)))
         }
-        return tips.take(8)
+        if (tips.none { it.section == "建议" } && expense > 0) {
+            tips.add(InsightTip("账记得挺稳", "继续保持就好。", idsOf({ true }, 6), section = "建议"))
+        }
+        return tips.take(10)
     }
 }

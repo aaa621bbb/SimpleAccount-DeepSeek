@@ -104,10 +104,25 @@ fun SimpleAccountNavHost() {
                     StatsScreen(vm)
                 }
                 composable(Routes.AI) {
-                    AiScreen(navController = navController)
+                    AiScreen(navController = navController, autoPickImage = false)
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(navController)
+                }
+                composable(Routes.APPEARANCE) {
+                    com.simpleaccount.app.ui.settings.AppearanceScreen(navController)
+                }
+                composable(Routes.STATS_LAYOUT) {
+                    com.simpleaccount.app.ui.settings.StatsLayoutScreen(navController)
+                }
+                composable(Routes.PICKER_STYLE) {
+                    com.simpleaccount.app.ui.settings.PickerStyleScreen(navController)
+                }
+                composable(Routes.MEMORY) {
+                    com.simpleaccount.app.ui.settings.MemoryScreen(navController)
+                }
+                composable(Routes.AI_SHOT) {
+                    AiScreen(navController = navController, autoPickImage = true)
                 }
                 composable(Routes.ADD) {
                     AddTransactionScreen(navController, editId = null)

@@ -55,13 +55,28 @@ data class StatsUiState(
     val weekendAvgFen: Long = 0L,
     val dailyAvgFen: Long = 0L,
     val lastMonthTotal: Long = 0L,
+    val weekdayTotals: List<Pair<String, Long>> = emptyList(),
+    val hourBuckets: List<Pair<String, Long>> = emptyList(),
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) : ViewModel() {
+
+    val layout: StateFlow<StatsLayoutUi> = kotlinx.coroutines.flow.combine(
+        settingsRepository.statsOrderFlow,
+        settingsRepository.statsHiddenFlow,
+        settingsRepository.pieLegendCountFlow,
+    ) { order, hidden, count ->
+        StatsLayoutUi(
+            order = StatsModules.parseOrder(order),
+            hidden = StatsModules.parseHidden(hidden),
+            pieLegendCount = count,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsLayoutUi())
 
     private val monthFlow = kotlinx.coroutines.flow.MutableStateFlow(DateUtil.thisMonth())
     private val typeFlow = kotlinx.coroutines.flow.MutableStateFlow(Transaction.TYPE_EXPENSE)
@@ -186,7 +201,32 @@ class StatsViewModel @Inject constructor(
                 }.getOrNull()
                 if (last == null) 0L
                 else txs.filter { it.type == type && it.date.startsWith(last) }.sumOf { it.amount }
-            }
+            },
+            weekdayTotals = run {
+                val names = listOf("一", "二", "三", "四", "五", "六", "日")
+                val acc = LongArray(7)
+                filtered.forEach { t ->
+                    val i = runCatching { java.time.LocalDate.parse(t.date).dayOfWeek.value }.getOrDefault(1) - 1
+                    if (i in 0..6) acc[i] += t.amount
+                }
+                names.mapIndexed { i, n -> n to acc[i] }
+            },
+            hourBuckets = run {
+                val labels = listOf("晨 6–11", "午 11–14", "下午 14–18", "晚 18–22", "夜 22–6")
+                val acc = LongArray(5)
+                filtered.forEach { t ->
+                    val h = t.time.substringBefore(':').toIntOrNull() ?: return@forEach
+                    val i = when {
+                        h in 6..10 -> 0
+                        h in 11..13 -> 1
+                        h in 14..17 -> 2
+                        h in 18..21 -> 3
+                        else -> 4
+                    }
+                    acc[i] += t.amount
+                }
+                labels.mapIndexed { i, n -> n to acc[i] }
+            },
         )
     }
 

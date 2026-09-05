@@ -1,47 +1,33 @@
 package com.simpleaccount.app.ui.settings
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -58,6 +44,10 @@ import javax.inject.Inject
 data class SettingsEntry(val title: String, val icon: ImageVector, val route: String)
 
 private val entries = listOf(
+    SettingsEntry("外观与配色", Icons.Filled.Palette, Routes.APPEARANCE),
+    SettingsEntry("日期与时间选择器", Icons.Filled.Palette, Routes.PICKER_STYLE),
+    SettingsEntry("统计页图表", Icons.Filled.BarChart, Routes.STATS_LAYOUT),
+    SettingsEntry("管家记忆", Icons.Filled.SmartToy, Routes.MEMORY),
     SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
     SettingsEntry("账本管理", Icons.Filled.Storage, Routes.LEDGER_MANAGE),
     SettingsEntry("无感记账（自动记账）", Icons.Filled.NotificationsActive, Routes.AUTO_RECORD),
@@ -82,9 +72,17 @@ class SettingsViewModel @Inject constructor(
     private val _themeMode = MutableStateFlow(settingsRepository.themeMode())
     val themeMode = _themeMode.asStateFlow()
 
+    private val _paletteId = MutableStateFlow(settingsRepository.colorPalette())
+    val paletteId = _paletteId.asStateFlow()
+
     fun setThemeMode(mode: String) {
         _themeMode.value = mode
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }
+    }
+
+    fun setPalette(id: String) {
+        _paletteId.value = id
+        viewModelScope.launch { settingsRepository.setColorPalette(id) }
     }
 }
 
@@ -94,29 +92,15 @@ fun SettingsScreen(
     navController: NavHostController,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val themeMode by viewModel.themeMode.collectAsState()
-    var showThemeDialog by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("我的") },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface)
             )
         }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize()) {
-            // 外观（深色/浅色/跟随系统），点开弹窗选择
-            item {
-                ListItem(
-                    headlineContent = { Text("外观") },
-                    supportingContent = { Text(themeModeLabel(themeMode)) },
-                    leadingContent = { Icon(Icons.Filled.DarkMode, contentDescription = null) },
-                    trailingContent = { Text(themeModeLabel(themeMode), color = MaterialTheme.colorScheme.primary) },
-                    modifier = Modifier.clickable { showThemeDialog = true }
-                )
-                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-            }
             items(entries.size) { i ->
                 val e = entries[i]
                 ListItem(
@@ -133,44 +117,11 @@ fun SettingsScreen(
             }
         }
     }
-
-    if (showThemeDialog) {
-        AlertDialog(
-            onDismissRequest = { showThemeDialog = false },
-            title = { Text("外观") },
-            text = {
-                Column {
-                    listOf(
-                        SettingsRepository.THEME_SYSTEM,
-                        SettingsRepository.THEME_LIGHT,
-                        SettingsRepository.THEME_DARK,
-                    ).forEach { mode ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setThemeMode(mode); showThemeDialog = false }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = themeMode == mode,
-                                onClick = { viewModel.setThemeMode(mode); showThemeDialog = false }
-                            )
-                            Text(themeModeLabel(mode), style = MaterialTheme.typography.bodyLarge)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showThemeDialog = false }) { Text("取消") }
-            }
-        )
-    }
 }
 
 /** 通用子页面 Toolbar */
 @OptIn(ExperimentalMaterial3Api::class)
-@androidx.compose.runtime.Composable
+@Composable
 fun SettingsSubToolbar(title: String, onBack: () -> Unit) {
     TopAppBar(
         title = { Text(title) },
@@ -179,6 +130,6 @@ fun SettingsSubToolbar(title: String, onBack: () -> Unit) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
         },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface)
     )
 }

@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simpleaccount.app.ui.stats.PieSlice
 import com.simpleaccount.app.ui.stats.TrendPoint
-import com.simpleaccount.app.ui.theme.AppColors
+import com.simpleaccount.app.ui.theme.LocalAppPalette
 import kotlin.math.abs
 
 /**
@@ -136,8 +136,8 @@ fun PieChartView(
 @Composable
 fun LineTrendView(
     trend: List<TrendPoint>,
-    expenseColor: Color = AppColors.Expense,
-    incomeColor: Color = AppColors.Income,
+    expenseColor: Color = LocalAppPalette.current.expense,
+    incomeColor: Color = LocalAppPalette.current.income,
     onPointClick: (String) -> Unit = {},
 ) {
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
@@ -274,8 +274,8 @@ fun LineTrendView(
 @Composable
 fun BarChartView(
     trend: List<TrendPoint>,
-    expenseColor: Color = AppColors.Expense,
-    incomeColor: Color = AppColors.Income,
+    expenseColor: Color = LocalAppPalette.current.expense,
+    incomeColor: Color = LocalAppPalette.current.income,
     onBarClick: (String) -> Unit = {},
 ) {
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
