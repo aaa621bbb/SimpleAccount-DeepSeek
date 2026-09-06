@@ -22,6 +22,15 @@ class SimpleAccountApp : Application() {
     @Inject
     lateinit var dataRetentionManager: DataRetentionManager
 
+    @Inject
+    lateinit var ledgerRepository: com.simpleaccount.app.data.repository.LedgerRepository
+
+    @Inject
+    lateinit var settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository
+
+    @Inject
+    lateinit var autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -30,9 +39,14 @@ class SimpleAccountApp : Application() {
         AppLog.init(this)
         AppLog.installCrashHandler()
         AppLog.d("App onCreate")
+        runCatching { autoRecordRuntime.attach() }
         // 首次启动保证预置分类存在
         appScope.launch {
             ensurePresetCategories()
+            runCatching { ledgerRepository.ensureDefault() }
+            if (settingsRepository.isAutoRecordEnabled()) {
+                autoRecordRuntime.ensurePipeline()
+            }
         }
         // 存储防膨胀：每日启动低频自动清理（日志/失败记录/孤立商家/旧消息上限）
         appScope.launch {

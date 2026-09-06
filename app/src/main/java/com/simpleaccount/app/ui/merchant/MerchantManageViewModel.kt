@@ -57,7 +57,7 @@ class MerchantManageViewModel @Inject constructor(
                 statusFilter = _status.value,
                 query = query,
                 merchants = filtered,
-                categories = cats
+                categories = com.simpleaccount.app.util.CategoryPresets.union(cats)
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MerchantManageUiState())
 

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LooksOne
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Science
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material.icons.filled.Workspaces
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -62,8 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import com.simpleaccount.app.data.repository.SettingsRepository
 
-/** 服务商图标映射（OpenMinis 风格：每个厂商一个专属图标 + 颜色） */
+/** 服务商图标映射（每个厂商一个专属图标 + 颜色） */
 private fun providerIcon(name: String): ImageVector = when (name) {
     "Psychology" -> Icons.Filled.Psychology
     "Hub" -> Icons.Filled.Hub
@@ -81,6 +84,7 @@ private fun providerIcon(name: String): ImageVector = when (name) {
     "AccountTree" -> Icons.Filled.AccountTree
     "Science" -> Icons.Filled.Science
     "Workspaces" -> Icons.Filled.Workspaces
+    "Public" -> Icons.Filled.Public
     else -> Icons.Filled.SmartToy
 }
 
@@ -121,7 +125,7 @@ fun AiSettingsScreen(
             Text("选择服务商", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "选厂商点一下，自动填好接口地址。",
+                "点一下自动填接口。小米 MiMo 和硅基流动共用同一网关，但选中互不影响。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -136,10 +140,9 @@ fun AiSettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     rowProviders.forEach { p ->
-                        val isSelected = state.baseUrl.contains(p.baseUrl.replace("https://", "").replace("/v1", ""))
                         ProviderCard(
                             provider = p,
-                            selected = isSelected,
+                            selected = state.providerId == p.id,
                             modifier = Modifier.weight(1f),
                             onClick = { viewModel.selectProvider(p) }
                         )
@@ -224,9 +227,7 @@ fun AiSettingsScreen(
             )
             Spacer(Modifier.height(12.dp))
 
-            val provider = AI_PROVIDERS.firstOrNull {
-                state.baseUrl.contains(it.baseUrl.replace("https://", "").replace("/v1", ""))
-            } ?: AI_PROVIDERS[0]
+            val provider = AI_PROVIDERS.firstOrNull { it.id == state.providerId } ?: AI_PROVIDERS[0]
 
             // 模型 Chips：优先展示接口真实可用的模型；拉取失败回退厂商预设
             val modelChoices = state.models.ifEmpty { provider.models }
@@ -254,6 +255,44 @@ fun AiSettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            Spacer(Modifier.height(16.dp))
+            Text("思考深度", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                run {
+                    val req = com.simpleaccount.app.data.service.ThinkingPolicy.requiresThinking(state.model)
+                    val eff = com.simpleaccount.app.data.service.ThinkingPolicy.effectiveLevel(state.model, state.thinkingLevel)
+                    when {
+                        req && state.thinkingLevel == SettingsRepository.THINKING_OFF ->
+                            "当前模型把思考当刚需。关闭档会按「中」发送，不会再提示「需开启思考模式」。"
+                        eff != SettingsRepository.THINKING_OFF ->
+                            "思考已开启。请求只带 thinking.enabled，不会再提示「需开启思考模式」。"
+                        else ->
+                            "关闭则不输出推理链。GLM 4.5/4.6 等刚需模型不会发 enable_thinking=false。"
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    SettingsRepository.THINKING_OFF to "关闭",
+                    SettingsRepository.THINKING_LOW to "低",
+                    SettingsRepository.THINKING_MEDIUM to "中",
+                    SettingsRepository.THINKING_HIGH to "高",
+                ).forEach { (id, label) ->
+                    FilterChip(
+                        selected = state.thinkingLevel == id,
+                        onClick = { viewModel.setThinkingLevel(id) },
+                        label = { Text(label) }
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             // --------- 截图记账（识图）：主模型优先 + 独立配置兜底 ---------
             Row(
@@ -342,14 +381,17 @@ private fun ProviderCard(
                 color = if (selected) brandColor else MaterialTheme.colorScheme.outlineVariant,
                 shape = RoundedCornerShape(16.dp)
             )
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .background(
+                if (selected) brandColor.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface,
+                RoundedCornerShape(16.dp)
+            )
             .clickable(onClick = onClick)
-            .padding(vertical = 18.dp, horizontal = 12.dp),
+            .padding(vertical = 14.dp, horizontal = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
-                .size(52.dp)
+                .size(48.dp)
                 .background(brandColor.copy(alpha = 0.15f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
@@ -357,10 +399,26 @@ private fun ProviderCard(
                 providerIcon(provider.iconName),
                 contentDescription = provider.name,
                 tint = brandColor,
-                modifier = Modifier.size(30.dp)
+                modifier = Modifier.size(26.dp)
             )
+            if (selected) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(16.dp)
+                        .background(brandColor, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = "已选",
+                        tint = Color.White,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             provider.name,
             style = MaterialTheme.typography.bodyMedium,
@@ -368,5 +426,13 @@ private fun ProviderCard(
             color = if (selected) brandColor else MaterialTheme.colorScheme.onSurface,
             maxLines = 1
         )
+        if (provider.subtitle.isNotBlank()) {
+            Text(
+                provider.subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
     }
 }

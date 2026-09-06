@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -34,11 +34,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Merchant
 import com.simpleaccount.app.ui.components.CategoryIconCircle
-import com.simpleaccount.app.ui.components.parseColor
 import com.simpleaccount.app.ui.settings.SettingsSubToolbar
 import kotlinx.coroutines.launch
 
@@ -59,7 +60,6 @@ fun MerchantManageScreen(
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            // 状态筛选 chips（横向滚动）
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -77,7 +77,6 @@ fun MerchantManageScreen(
                 }
             }
 
-            // 搜索
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::setQuery,
@@ -88,7 +87,6 @@ fun MerchantManageScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // 列表
             if (state.merchants.isEmpty()) {
                 Spacer(Modifier.height(48.dp))
                 Text(
@@ -129,37 +127,90 @@ fun MerchantManageScreen(
         }
     }
 
-    // 分类选择 BottomSheet
     selectedMerchant?.let { merchant ->
         ModalBottomSheet(
             onDismissRequest = { selectedMerchant = null },
             sheetState = sheetState
         ) {
-            Text(
-                "为「${merchant.merchant}」选择分类",
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            state.categories.forEach { cat ->
-                Row(
-                    Modifier
+            var catQuery by remember { mutableStateOf("") }
+            val grouped = remember(state.categories, catQuery) {
+                val q = catQuery.trim()
+                val all = if (q.isEmpty()) state.categories
+                else state.categories.filter { it.name.contains(q, ignoreCase = true) }
+                listOf(
+                    "支出 · 预置" to all.filter { it.type == Category.TYPE_EXPENSE && it.isPreset },
+                    "支出 · 自建" to all.filter { it.type == Category.TYPE_EXPENSE && !it.isPreset },
+                    "收入 · 预置" to all.filter { it.type == Category.TYPE_INCOME && it.isPreset },
+                    "收入 · 自建" to all.filter { it.type == Category.TYPE_INCOME && !it.isPreset },
+                ).filter { it.second.isNotEmpty() }
+            }
+            Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                Text(
+                    "为「${merchant.merchant}」选择分类",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "候选 = 预置 ∪ 自建，共 ${state.categories.size} 项。自建分类会出现在「自建」分组。",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = catQuery,
+                    onValueChange = { catQuery = it },
+                    placeholder = { Text("筛选分类名") },
+                    singleLine = true,
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            scope.launch {
-                                viewModel.assignCategory(merchant, cat.name)
-                            }
-                            selectedMerchant = null
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                    grouped.forEach { (title, cats) ->
+                        item(key = "h_$title") {
+                            Text(
+                                title + "（${cats.size}）",
+                                modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CategoryIconCircle(cat, size = 36)
-                    Spacer(Modifier.width(12.dp))
-                    Text(cat.name, style = MaterialTheme.typography.bodyLarge)
+                        items(cats, key = { title + it.name }) { cat ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        scope.launch {
+                                            viewModel.assignCategory(merchant, cat.name)
+                                        }
+                                        selectedMerchant = null
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CategoryIconCircle(cat, size = 36)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(cat.name, style = MaterialTheme.typography.bodyLarge)
+                                    if (!cat.isPreset) {
+                                        Text("自建", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (grouped.isEmpty()) {
+                        item {
+                            Text(
+                                "没有匹配的分类。到「分类管理」新建后会立刻出现在这里。",
+                                modifier = Modifier.padding(16.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
-            Spacer(Modifier.height(24.dp))
         }
     }
 }

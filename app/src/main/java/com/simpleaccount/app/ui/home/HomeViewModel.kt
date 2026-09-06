@@ -2,10 +2,13 @@ package com.simpleaccount.app.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simpleaccount.app.data.entity.Category
 import com.simpleaccount.app.data.entity.Transaction
+import com.simpleaccount.app.data.insights.InsightTip
+import com.simpleaccount.app.data.insights.InsightsEngine
+import com.simpleaccount.app.data.entity.Ledger
 import com.simpleaccount.app.data.repository.AccountRepository
 import com.simpleaccount.app.data.repository.CategoryRepository
+import com.simpleaccount.app.data.repository.LedgerRepository
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.ui.components.RowUi
 import com.simpleaccount.app.util.DateUtil
@@ -13,8 +16,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -30,6 +33,22 @@ data class HomeUiState(
     val budgetFen: Long = 0L,
     val recent: List<RowUi> = emptyList(),
     val sortByAmount: Boolean = false,
+    val insightHeadline: String = "",
+    val insightSub: String = "",
+    val insightReport: String = "",
+    val evidenceTips: List<InsightTip> = emptyList(),
+    val insightScore: Int = 0,
+    val insightGrade: String = "",
+    val monthTx: List<Transaction> = emptyList(),
+    val ledgers: List<Ledger> = emptyList(),
+    val currentLedgerName: String = Ledger.DEFAULT_NAME,
+    val todayFen: Long = 0L,
+    val projectedFen: Long = 0L,
+    /** 剩余预算按剩余天数摊，今天建议上限 */
+    val todayCapFen: Long = 0L,
+    val todayDupes: List<String> = emptyList(),
+    val pendingMerchants: Int = 0,
+    val importFailures: Int = 0,
 )
 
 @HiltViewModel
@@ -37,6 +56,9 @@ class HomeViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
     private val settingsRepository: SettingsRepository,
+    private val ledgerRepository: LedgerRepository,
+    private val merchantRepository: com.simpleaccount.app.data.repository.MerchantRepository,
+    private val importFailureDao: com.simpleaccount.app.data.dao.ImportFailureDao,
 ) : ViewModel() {
 
     private val categoriesFlow = categoryRepository.observeAll()
@@ -65,14 +87,43 @@ class HomeViewModel @Inject constructor(
         sortFlow.value = if (sortFlow.value == HomeSort.TIME) HomeSort.AMOUNT else HomeSort.TIME
     }
 
+    private val pendingMerchantsFlow = merchantRepository
+        .observeByStatus(com.simpleaccount.app.data.entity.Merchant.STATUS_PENDING)
+        .map { it.size }
+
+    private val importFailureCountFlow = importFailureDao.observeCount()
+
     /** 当月流水 + 分类 + 排序 + 条数，合并为 UI 状态 */
+    fun switchLedger(id: Long) = ledgerRepository.switchTo(id)
+
+    private data class Extra(
+        val count: Int,
+        val sort: HomeSort,
+        val ledgers: List<Ledger>,
+        val lid: Long,
+    )
+
+    private data class Follow(
+        val pending: Int,
+        val failures: Int,
+    )
+
     val uiState: StateFlow<HomeUiState> =
         combine(
-            accountRepository.observeMonth(DateUtil.monthPrefix(DateUtil.thisMonth())),
+            accountRepository.observeAll(),
             categoriesFlow,
             budgetFlow,
-            combine(recentCountFlow, sortFlow) { count, sort -> count to sort }
-        ) { transactions, categories, budget, (count, sort) ->
+            combine(recentCountFlow, sortFlow, ledgerRepository.observeAll(), ledgerRepository.currentIdFlow) { count, sort, ledgers, lid ->
+                Extra(count, sort, ledgers, lid)
+            },
+            combine(pendingMerchantsFlow, importFailureCountFlow) { p, f -> Follow(p, f) },
+        ) { all, categories, budget, q, follow ->
+            val count = q.count
+            val sort = q.sort
+            val ledgers = q.ledgers
+            val lid = q.lid
+            val month = DateUtil.thisMonth()
+            val transactions = all.filter { it.date.startsWith(month) }
             val catMap = categories.associateBy { it.name }
             var expense = 0L
             var income = 0L
@@ -98,14 +149,34 @@ class HomeViewModel @Inject constructor(
                         .thenByDescending { it.id }
                 )
             }
+            val health = InsightsEngine.compute(all, budget, month)
+            val day = java.time.LocalDate.now().dayOfMonth
+            val days = java.time.YearMonth.now().lengthOfMonth()
+            val remainDays = (days - day).coerceAtLeast(1)
+            val todayCap = if (budget > 0) (budget - expense).coerceAtLeast(0L) / remainDays else 0L
             HomeUiState(
-                month = DateUtil.thisMonth(),
+                month = month,
                 expense = expense,
                 income = income,
                 balance = income - expense,
                 budgetFen = budget,
                 sortByAmount = sort == HomeSort.AMOUNT,
-                recent = sorted.take(count).map { RowUi(it, catMap[it.category]) }
+                recent = sorted.take(count).map { RowUi(it, catMap[it.category]) },
+                insightHeadline = health.headline,
+                insightSub = health.subline,
+                insightReport = if (transactions.isEmpty()) "" else InsightsEngine.toMarkdown(health),
+                evidenceTips = health.evidenceTips,
+                insightScore = health.score,
+                insightGrade = health.grade,
+                monthTx = transactions,
+                ledgers = ledgers,
+                currentLedgerName = ledgers.firstOrNull { it.id == lid }?.name ?: Ledger.DEFAULT_NAME,
+                todayFen = health.todayFen,
+                projectedFen = health.projectedFen,
+                todayCapFen = todayCap,
+                todayDupes = health.todayDupes,
+                pendingMerchants = follow.pending,
+                importFailures = follow.failures,
             )
         }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())

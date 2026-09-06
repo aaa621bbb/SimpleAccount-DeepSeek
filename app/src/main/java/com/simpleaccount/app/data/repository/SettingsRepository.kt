@@ -32,6 +32,7 @@ class SettingsRepository @Inject constructor(
         const val KEY_AI_BASE_URL = "ai_base_url"
         const val KEY_AI_MODEL = "ai_model"
         const val KEY_AI_KEY = "ai_api_key"
+        const val KEY_AI_PROVIDER_ID = "ai_provider_id"
 
         /** 识图 API Key（独立于主 Key，存加密 prefs） */
         const val KEY_VISION_KEY = "vision_api_key"
@@ -41,6 +42,19 @@ class SettingsRepository @Inject constructor(
         const val THEME_SYSTEM = "system"
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
+
+        /** 高级配色 id（ColorPalettes） */
+        const val KEY_COLOR_PALETTE = "color_palette"
+
+        /** 全局皮肤：default / glass / depth */
+        const val KEY_VISUAL_STYLE = "visual_style"
+
+        /** 统计页图表顺序（逗号分隔模块 id） */
+        const val KEY_STATS_ORDER = "stats_order"
+        /** 统计页隐藏的图表（逗号分隔） */
+        const val KEY_STATS_HIDDEN = "stats_hidden"
+        /** 饼图百分比预览条数：0=点击后直接看全部；3=先占 3 条位置 */
+        const val KEY_PIE_LEGEND_COUNT = "pie_legend_count"
 
         /** 每月预算（单位：分，0 = 未设置） */
         const val KEY_MONTHLY_BUDGET = "monthly_budget_fen"
@@ -69,6 +83,18 @@ class SettingsRepository @Inject constructor(
 
         const val DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
         const val DEFAULT_MODEL = "deepseek-chat"
+
+        const val KEY_CURRENT_LEDGER = "current_ledger_id"
+
+        /** 思考深度：off / low / medium / high */
+        const val KEY_DATE_PICKER = "date_picker_style"
+        const val KEY_TIME_PICKER = "time_picker_style"
+
+        const val KEY_THINKING_LEVEL = "thinking_level"
+        const val THINKING_OFF = "off"
+        const val THINKING_LOW = "low"
+        const val THINKING_MEDIUM = "medium"
+        const val THINKING_HIGH = "high"
     }
 
     private val prefs: SharedPreferences by lazy {
@@ -93,6 +119,9 @@ class SettingsRepository @Inject constructor(
     suspend fun setModel(model: String) = setSetting(KEY_AI_MODEL, model)
     fun model(): String = readSetting(KEY_AI_MODEL) ?: DEFAULT_MODEL
 
+    suspend fun setProviderId(id: String) = setSetting(KEY_AI_PROVIDER_ID, id)
+    fun providerId(): String = readSetting(KEY_AI_PROVIDER_ID).orEmpty()
+
     fun apiKey(): String = prefs.getString(KEY_AI_KEY, "") ?: ""
     fun setApiKey(key: String) {
         prefs.edit { putString(KEY_AI_KEY, key) }
@@ -112,6 +141,61 @@ class SettingsRepository @Inject constructor(
     suspend fun setThemeMode(mode: String) {
         setSetting(KEY_THEME_MODE, mode)
         _themeMode.value = mode
+    }
+
+    // ---------------- 高级配色 ----------------
+
+    private val _colorPalette = MutableStateFlow(colorPalette())
+    val colorPaletteFlow: StateFlow<String> = _colorPalette.asStateFlow()
+
+    fun colorPalette(): String = readSetting(KEY_COLOR_PALETTE) ?: "pine"
+
+    suspend fun setColorPalette(id: String) {
+        setSetting(KEY_COLOR_PALETTE, id)
+        _colorPalette.value = id
+    }
+
+    private val _visualStyle = MutableStateFlow(visualStyle())
+    val visualStyleFlow: StateFlow<String> = _visualStyle.asStateFlow()
+
+    fun visualStyle(): String = readSetting(KEY_VISUAL_STYLE) ?: "default"
+
+    suspend fun setVisualStyle(id: String) {
+        setSetting(KEY_VISUAL_STYLE, id)
+        _visualStyle.value = id
+    }
+
+    // ---------------- 统计页图表布局 ----------------
+
+    private val _statsOrder = MutableStateFlow(statsOrder())
+    val statsOrderFlow: StateFlow<String> = _statsOrder.asStateFlow()
+
+    fun statsOrder(): String = readSetting(KEY_STATS_ORDER).orEmpty()
+
+    suspend fun setStatsOrder(order: String) {
+        setSetting(KEY_STATS_ORDER, order)
+        _statsOrder.value = order
+    }
+
+    private val _statsHidden = MutableStateFlow(statsHidden())
+    val statsHiddenFlow: StateFlow<String> = _statsHidden.asStateFlow()
+
+    fun statsHidden(): String = readSetting(KEY_STATS_HIDDEN).orEmpty()
+
+    suspend fun setStatsHidden(hidden: String) {
+        setSetting(KEY_STATS_HIDDEN, hidden)
+        _statsHidden.value = hidden
+    }
+
+    private val _pieLegendCount = MutableStateFlow(pieLegendCount())
+    val pieLegendCountFlow: StateFlow<Int> = _pieLegendCount.asStateFlow()
+
+    fun pieLegendCount(): Int = readSetting(KEY_PIE_LEGEND_COUNT)?.toIntOrNull()?.coerceIn(0, 12) ?: 3
+
+    suspend fun setPieLegendCount(n: Int) {
+        val v = n.coerceIn(0, 12)
+        setSetting(KEY_PIE_LEGEND_COUNT, v.toString())
+        _pieLegendCount.value = v
     }
 
     // ---------------- 数据冲突优先级 ----------------
@@ -134,7 +218,7 @@ class SettingsRepository @Inject constructor(
     private val _recentCount = MutableStateFlow(recentCount())
     val recentCountFlow: StateFlow<Int> = _recentCount.asStateFlow()
 
-    fun recentCount(): Int = readSetting(KEY_RECENT_COUNT)?.toIntOrNull()?.coerceIn(5, 100) ?: 20
+    fun recentCount(): Int = readSetting(KEY_RECENT_COUNT)?.toIntOrNull()?.coerceIn(5, 100) ?: 30
 
     suspend fun setRecentCount(n: Int) {
         setSetting(KEY_RECENT_COUNT, n.toString())
@@ -189,6 +273,36 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseMainModelForVision(use: Boolean) {
         setSetting(KEY_VISION_USE_MAIN, use.toString())
     }
+
+    fun currentLedgerId(): Long = readSetting(KEY_CURRENT_LEDGER)?.toLongOrNull() ?: 1L
+
+    fun setCurrentLedgerId(id: Long) {
+        runBlocking { setSetting(KEY_CURRENT_LEDGER, id.toString()) }
+    }
+
+    private val _datePicker = MutableStateFlow(datePickerStyle())
+    val datePickerFlow: StateFlow<String> = _datePicker.asStateFlow()
+    fun datePickerStyle(): String = readSetting(KEY_DATE_PICKER) ?: "date_wheel"
+    suspend fun setDatePickerStyle(id: String) {
+        setSetting(KEY_DATE_PICKER, id)
+        _datePicker.value = id
+    }
+
+    private val _timePicker = MutableStateFlow(timePickerStyle())
+    val timePickerFlow: StateFlow<String> = _timePicker.asStateFlow()
+    fun timePickerStyle(): String = readSetting(KEY_TIME_PICKER) ?: "time_dial"
+    suspend fun setTimePickerStyle(id: String) {
+        setSetting(KEY_TIME_PICKER, id)
+        _timePicker.value = id
+    }
+
+    fun thinkingLevel(): String {
+        val v = readSetting(KEY_THINKING_LEVEL)
+        return if (v == THINKING_LOW || v == THINKING_MEDIUM || v == THINKING_HIGH || v == THINKING_OFF) v
+        else THINKING_OFF
+    }
+
+    suspend fun setThinkingLevel(level: String) = setSetting(KEY_THINKING_LEVEL, level)
 
     private suspend fun setSetting(key: String, value: String) = withContext(Dispatchers.IO) {
         settingDao.insert(Setting(key, value))

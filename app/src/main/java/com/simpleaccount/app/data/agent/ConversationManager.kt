@@ -134,7 +134,7 @@ class ConversationManager @Inject constructor(
         val withinWindow = prior.filter { it.timestamp >= cutoff }
         val chosen = if (withinWindow.isNotEmpty() && withinWindow.size >= CONTEXT_FALLBACK_COUNT) withinWindow
         else prior.takeLast(CONTEXT_FALLBACK_COUNT)
-        return chosen.map { it.role to it.content }
+        return chosen.map { it.role to com.simpleaccount.app.ui.components.unpackCot(it.content).first }
     }
 
     /** 某会话最后一条用户消息内容（供"重新生成"） */

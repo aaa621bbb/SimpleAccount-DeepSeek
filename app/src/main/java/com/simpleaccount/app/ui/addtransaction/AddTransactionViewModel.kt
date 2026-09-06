@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,7 +27,7 @@ data class AddUiState(
     val selectedCategory: Category? = null,
     val date: String = DateUtil.today(),
     /** 时间 HH:mm（手动记默认当前时刻，可改） */
-    val time: String = "",
+    val time: String = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) },
     val merchant: String = "",
     val product: String = "",
     val note: String = "",
@@ -39,14 +40,35 @@ data class AddUiState(
 class AddTransactionViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    val dateStyle = settingsRepository.datePickerFlow
+    val timeStyle = settingsRepository.timePickerFlow
 
     private val _state = MutableStateFlow(AddUiState())
     val state: StateFlow<AddUiState> = _state.asStateFlow()
 
     private val _categoriesByType = MutableStateFlow<List<Category>>(emptyList())
     val categoriesByType = _categoriesByType.asStateFlow()
+
+    private val knownMerchants = accountRepository.observeAll()
+        .map { list -> list.map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 前缀优先，其次包含；不把相近店名合成一家。 */
+    val merchantHints: StateFlow<List<String>> = combine(_state, knownMerchants) { s, all ->
+        val q = s.merchant.trim()
+        if (q.isEmpty()) return@combine emptyList()
+        val prefix = all.filter { it.startsWith(q, ignoreCase = true) && !it.equals(q, ignoreCase = true) }
+        val contains = all.filter {
+            it.contains(q, ignoreCase = true) &&
+                !it.startsWith(q, ignoreCase = true) &&
+                !it.equals(q, ignoreCase = true)
+        }
+        (prefix + contains).take(8)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var editId: Long? = null
 
@@ -62,7 +84,10 @@ class AddTransactionViewModel @Inject constructor(
 
     private fun reloadCategories() {
         viewModelScope.launch {
-            _categoriesByType.value = categoryRepository.getByType(_state.value.type)
+            val type = _state.value.type
+            _categoriesByType.value = com.simpleaccount.app.util.CategoryPresets.union(
+                categoryRepository.getByType(type)
+            ).filter { it.type == type }
         }
     }
 

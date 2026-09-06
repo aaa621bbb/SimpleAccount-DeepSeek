@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import com.simpleaccount.app.data.entity.ImportFailure
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ImportFailureDao {
@@ -24,6 +25,9 @@ interface ImportFailureDao {
 
     @Query("SELECT COUNT(*) FROM import_failures")
     suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM import_failures")
+    fun observeCount(): Flow<Int>
 
     /** 存量上限：只保留最近 keep 条，防止无限膨胀 */
     @Query(
