@@ -21,9 +21,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +43,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavHostController
 import com.simpleaccount.app.data.repository.SettingsRepository
+import com.simpleaccount.app.ui.components.DatePickerByStyle
 import com.simpleaccount.app.ui.components.PickerStyles
+import com.simpleaccount.app.ui.components.TimePickerByStyle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -63,6 +69,11 @@ fun PickerStyleScreen(
 ) {
     val date by viewModel.dateStyle.collectAsState()
     val time by viewModel.timeStyle.collectAsState()
+    var datePreview by remember { mutableStateOf<String?>(null) }
+    var timePreview by remember { mutableStateOf<String?>(null) }
+    val todayStr = remember { java.time.LocalDate.now().toString() }
+    val nowHm = remember { java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) } }
+
     Scaffold(topBar = { SettingsSubToolbar("日期与时间选择器", onBack = { navController.popBackStack() }) }) { padding ->
         Column(
             Modifier
@@ -72,7 +83,7 @@ fun PickerStyleScreen(
                 .padding(16.dp),
         ) {
             Text("日期", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text("11 种互不相同的手感，所见即所得。点一行立即预览形态。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("11 种互不相同的手感，所见即所得。左侧单选即时生效，右侧点「预览」看真实组件形态（非示意图标）。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             PickerStyles.DATE_ALL.forEach { id ->
                 StyleRow(
@@ -80,12 +91,13 @@ fun PickerStyleScreen(
                     hint = PickerStyles.dateHint(id),
                     selected = date == id,
                     preview = { MiniDatePreview(id, selected = date == id) },
-                    onClick = { viewModel.setDate(id) }
+                    onClick = { viewModel.setDate(id) },
+                    onPreview = { datePreview = id }
                 )
             }
             Spacer(Modifier.height(20.dp))
             Text("时间", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text("同心表盘为默认（已更名，不再以版本号命名）。11 种形态各有隐喻。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("同心表盘为默认（已更名，不再以版本号命名）。11 种形态各有隐喻，点预览看真实交互。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             PickerStyles.TIME_ALL.forEach { id ->
                 StyleRow(
@@ -93,22 +105,55 @@ fun PickerStyleScreen(
                     hint = PickerStyles.timeHint(id),
                     selected = time == id,
                     preview = { MiniTimePreview(id, selected = time == id) },
-                    onClick = { viewModel.setTime(id) }
+                    onClick = { viewModel.setTime(id) },
+                    onPreview = { timePreview = id }
                 )
             }
             Spacer(Modifier.height(16.dp))
             Text(
-                "提示：同心表盘已优化触区分隔（外环分/内盘时/中间缓冲），大幅降低误触；新样式均已做形态隔离验证。",
+                "提示：同心表盘已优化触区分隔（外环分/内盘时/中间缓冲 0.35–0.55 不触发），大幅降低误触；点击上方任意「预览」即可在真实弹窗中试拨，确认形态与渲染一致后再设为默认。",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)).padding(8.dp).fillMaxWidth()
             )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "已选：日期「${PickerStyles.dateTitle(date)}」· 时间「${PickerStyles.timeTitle(time)}」—— 去「记一笔」点日期/时间即可看到所选样式的真实渲染。",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)).padding(8.dp).fillMaxWidth()
+            )
         }
+    }
+
+    // ---- 所见即所得：真实组件预览（非图标） ----
+    datePreview?.let { id ->
+        DatePickerByStyle(
+            style = id,
+            initialDate = todayStr,
+            onDismiss = { datePreview = null },
+            onConfirm = { _, _, _ -> datePreview = null }
+        )
+    }
+    timePreview?.let { id ->
+        TimePickerByStyle(
+            style = id,
+            initial = nowHm,
+            onDismiss = { timePreview = null },
+            onConfirm = { timePreview = null }
+        )
     }
 }
 
 @Composable
-private fun StyleRow(title: String, hint: String, selected: Boolean, preview: @Composable ()->Unit, onClick: () -> Unit) {
+private fun StyleRow(
+    title: String,
+    hint: String,
+    selected: Boolean,
+    preview: @Composable ()->Unit,
+    onClick: () -> Unit,
+    onPreview: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -118,20 +163,34 @@ private fun StyleRow(title: String, hint: String, selected: Boolean, preview: @C
                 if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
             )
-            .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = onClick)
-        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
+                .clickable(onClick = onClick)
+        ) {
             Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text(hint, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 15.sp)
         }
-        Box(
-            Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(4.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            preview()
+        // 右侧：迷你形态 + 真实预览入口
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                preview()
+            }
+            Spacer(Modifier.height(4.dp))
+            Box(
+                Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)).clickable(onClick = onPreview).padding(horizontal = 10.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("预览", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

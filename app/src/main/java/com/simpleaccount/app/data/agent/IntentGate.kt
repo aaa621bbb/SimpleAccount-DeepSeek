@@ -2,6 +2,7 @@ package com.simpleaccount.app.data.agent
 
 /**
  * 管家意图门控：无关 query 不碰账本、不挂工具，避免首答被一次全表扫描拖死。
+ * 封锁级要求：无关联查询（如闲聊/天气/笑话）不得空转 DB，也不得挂 ledger 工具。
  */
 enum class QueryIntent {
     CHAT,
@@ -13,12 +14,23 @@ enum class QueryIntent {
 
 object IntentGate {
 
+    // 纯闲聊高频词：含这些且无账本关键词时直接 CHAT，避免“今天天气怎么样”误触发 LEDGER_READ
+    private val CHAT_ONLY = Regex("天气|笑话|故事|翻译|写诗|新闻|股票|八卦|怎么做|怎么办|怎么用|你是谁|你叫什么|讲个|唱|画画|游戏")
+
+    // 账本强信号：出现即视为账本意图
+    private val LEDGER_STRONG = Regex("花了|花了多少|支出|收入|账单|账本|多少钱|多少元|分类|商家|体检|预算|结余|环比|超支|消费|记账|流水|哪类|花哪|月报|对账|报销")
+
     fun classify(raw: String): QueryIntent {
         val s = raw.trim()
         if (s.isEmpty()) return QueryIntent.CHAT
 
+        // 闲聊优先：含闲聊词且无账本强信号 → CHAT（防止“今天天气”误判）
+        if (CHAT_ONLY.containsMatchIn(s) && !LEDGER_STRONG.containsMatchIn(s) && !Regex("""\d+(?:\.\d+)?\s*元|[¥￥]""").containsMatchIn(s)) {
+            return QueryIntent.CHAT
+        }
+
         if (Regex("打开|跳转|带我去").containsMatchIn(s) &&
-            Regex("统计|账本|设置|导入|无感|记一笔|管家|分类管理").containsMatchIn(s)
+            Regex("统计|账本|设置|导入|无感|记一笔|管家|分类管理|外观|主题|预算").containsMatchIn(s)
         ) return QueryIntent.NAV
 
         if (Regex("记住这个|写入记忆|记到记忆").containsMatchIn(s)) return QueryIntent.MEMORY
@@ -31,13 +43,14 @@ object IntentGate {
             ).containsMatchIn(s)
         ) return QueryIntent.LEDGER_WRITE
 
-        if (Regex(
-                "花了|花了多少|支出|收入|账单|账本|多少钱|多少元|" +
-                    "分类|商家|体检|预算|结余|环比|超支|消费|记账|流水|" +
-                    "哪类|花哪|月报",
-            ).containsMatchIn(s) ||
+        if (LEDGER_STRONG.containsMatchIn(s) ||
             Regex("""\d+(?:\.\d+)?\s*元|[¥￥]""").containsMatchIn(s)
         ) return QueryIntent.LEDGER_READ
+
+        // 仅含时间词但无账本名词/金额 → 仍为 CHAT（“今天几号”“前天天气”不查账）
+        if (Regex("今天|昨天|前天|上个月|本月|上午|下午|晚上").containsMatchIn(s) && !LEDGER_STRONG.containsMatchIn(s)) {
+            return QueryIntent.CHAT
+        }
 
         return QueryIntent.CHAT
     }
