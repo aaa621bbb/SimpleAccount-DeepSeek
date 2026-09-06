@@ -125,10 +125,11 @@ $snapshot
 7. 回答用简体中文，语气友好自然；金额用「元」，保留两位小数。关键数字后注明数据依据（如"据9月账单"）。回答时给出有价值的观察或建议（占比、环比、异常消费），但不啰嗦。
 8. 排版用 Markdown 结构化输出，重点一目了然：小节用 "### 标题"，关键数字/结论用 **加粗**，并列项用 "- " 列表，多组数据对比用 Markdown 表格（列数不超过 4 列，行数不超过 8 行）。不要用 emoji 堆砌，最多一两个。
 8. 用户明确说要记账（"帮我记上""记一笔""买了X花了Y"）时：**先调用 add_transaction 把账记上**，再确认结果；严禁只说"好的我可以记"而不真正调用工具，严禁先说"账本里没有这笔所以记不了"——没查到的该记就记。
-9. 用户要求改某一笔的分类 → update_transaction_category；改某商家下选定的若干笔 → reclassify_transactions（必须带 ids 或 merchant+from_category，禁止整商户一刀切）；要改某商家所有账和映射 → 才用 classify_merchants。不要混用。
-10. 归类必须用工具完成，不要自己口头分类。
+9. 用户要求改某一笔的分类 → update_transaction_category；改某商家下选定的若干笔（含「五十元那笔、其余」）→ 先 query_transactions 拿流水号或直接 reclassify_transactions(merchant, amount, category)。禁止整商户一刀切用 classify_merchants，除非用户明确说「全部/以后」。
+10. 归类必须用工具完成并等工具返回「账本已核验」。禁止口头说「已完成/已改好」——没调用写工具就是账本没改。能力不够就明说「无法执行」，不要编造成功。
 11. 用户闲聊或问与记账无关的问题时，礼貌回应并把话题引导回记账理财。
-12. 撤回、记账、开关无感：工具一跑完就用工具结果当最终答复，禁止再说「无法执行」「需要确认」「正在思考」。回答写成连贯段落，禁止一字一行。
+12. 撤回、记账、改分类、开关无感：工具一跑完就用工具结果当最终答复，禁止再说「无法执行」「需要确认」「正在思考」。回答写成连贯段落，禁止一字一行。
+13. 推理内容必须依据工具结果。禁止在思考里承认「刚才的话是编的」还继续对用户撒谎。
 """.trimIndent()
     }
 
@@ -250,11 +251,12 @@ $snapshot
         val model = settingsRepository.model()
         val intent = IntentGate.classify(userMessage)
         val writeFast = intent == QueryIntent.LEDGER_WRITE ||
-            Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到").containsMatchIn(userMessage)
+            Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到|归类|归入").containsMatchIn(userMessage)
         val thinkingLevel = if (writeFast) SettingsRepository.THINKING_OFF else settingsRepository.thinkingLevel()
         val tools = pickTools(userMessage, intent)
         val cap = when (intent) {
             QueryIntent.CHAT, QueryIntent.NAV -> 1
+            QueryIntent.LEDGER_WRITE -> maxOf(maxRounds, 3)
             else -> maxRounds
         }
 
@@ -367,7 +369,15 @@ $snapshot
         return if (finalResp.error != null || finalResp.content.isBlank()) {
             AgentResult("（分析了 ${rounds} 轮仍不完整，请把问题拆小一点再问）", rounds)
         } else {
-            AgentResult(finalResp.content, rounds)
+            AgentResult(groundWriteReply(intent, finalResp.content, wrote = false), rounds)
         }
+    }
+
+    /** 写意图若没真正调写工具，禁止把「已完成」交给用户。 */
+    private fun groundWriteReply(intent: QueryIntent, content: String, wrote: Boolean): String {
+        if (wrote || intent != QueryIntent.LEDGER_WRITE) return content
+        val fake = Regex("已完成|已经改|已改好|已归类|已把|改好了|搞定了|已经把").containsMatchIn(content)
+        if (!fake && content.isNotBlank()) return content
+        return "账本没有改动。我没有调用写账工具，不能说已经改好。\n\n请直接说流水号（例如「把流水号 12 改成居住」），或说「把【商家】的五十元改成居住，其余改成餐饮」。"
     }
 }

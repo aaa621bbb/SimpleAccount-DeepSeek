@@ -30,6 +30,49 @@ object MoneyUtil {
         return bd.multiply(BigDecimal(100)).setScale(0, RoundingMode.HALF_UP).toLong()
     }
 
+    /**
+     * 中文数字金额 → 分。认「五十元 / 十五块 / 二十」。
+     * 超范围或无法解析返回 null。
+     */
+    fun parseChineseToFen(input: String): Long? {
+        val t = input.trim()
+            .replace("块钱", "")
+            .replace("块", "")
+            .replace("元", "")
+            .replace("¥", "")
+            .replace("￥", "")
+            .replace(" ", "")
+        if (t.isEmpty()) return null
+        parseToFen(t)?.let { return it }
+        val n = chineseToInt(t) ?: return null
+        if (n <= 0 || n > 10_000_000) return null
+        return n * 100L
+    }
+
+    private fun chineseToInt(s: String): Int? {
+        val d = mapOf(
+            '零' to 0, '〇' to 0, '一' to 1, '二' to 2, '两' to 2, '三' to 3,
+            '四' to 4, '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9,
+        )
+        if (s == "十") return 10
+        if (s.length == 1) return d[s[0]]
+        if (s.endsWith("十") && s.length == 2) {
+            val a = d[s[0]] ?: return null
+            return a * 10
+        }
+        if (s.startsWith("十") && s.length == 2) {
+            val a = d[s[1]] ?: return null
+            return 10 + a
+        }
+        if (s.length == 3 && s[1] == '十') {
+            val a = d[s[0]] ?: return null
+            val b = d[s[2]] ?: return null
+            return a * 10 + b
+        }
+        if (s == "一百" || s == "百") return 100
+        return null
+    }
+
     /** 分 → "12.34"（两位小数，不四舍五入成整数） */
     fun fenToYuan(amount: Long): String {
         return df.format(amount / 100.0)

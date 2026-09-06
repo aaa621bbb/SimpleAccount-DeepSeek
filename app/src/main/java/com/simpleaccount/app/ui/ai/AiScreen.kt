@@ -101,6 +101,7 @@ fun AiScreen(
     var showSessions by remember { mutableStateOf(false) }
     var messageActions by remember { mutableStateOf<MessageActions?>(null) }
     var confirmDeleteConversation by remember { mutableStateOf<String?>(null) }
+    var expandedReasoningId by remember { mutableStateOf<String?>(null) }
 
     // 截图记账：从相册选 1-5 张（支持长图），发给视觉模型提取账单
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -235,6 +236,10 @@ fun AiScreen(
                     MessageBubble(
                         msg = msg,
                         isLastAssistant = isLastAssistant,
+                        reasoningExpanded = expandedReasoningId == msg.id,
+                        onToggleReasoning = {
+                            expandedReasoningId = if (expandedReasoningId == msg.id) null else msg.id
+                        },
                         onLongPress = { messageActions = MessageActions(msg, isLastAssistant) }
                     )
                 }
@@ -253,8 +258,20 @@ fun AiScreen(
                             }
                         }
                         val stream = state.streamingText
-                        if (!stream.isNullOrEmpty()) StreamingBubble(stream, state.reasoning)
-                        else TypingBubble(state.phase, state.reasoning)
+                        if (!stream.isNullOrEmpty()) StreamingBubble(
+                            stream, state.reasoning,
+                            expanded = expandedReasoningId == "_live",
+                            onToggle = {
+                                expandedReasoningId = if (expandedReasoningId == "_live") null else "_live"
+                            },
+                        )
+                        else TypingBubble(
+                            state.phase, state.reasoning,
+                            expanded = expandedReasoningId == "_live",
+                            onToggle = {
+                                expandedReasoningId = if (expandedReasoningId == "_live") null else "_live"
+                            },
+                        )
                     }
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -614,6 +631,8 @@ private fun SheetAction(icon: androidx.compose.ui.graphics.vector.ImageVector, l
 private fun MessageBubble(
     msg: AiMessage,
     isLastAssistant: Boolean,
+    reasoningExpanded: Boolean = false,
+    onToggleReasoning: () -> Unit = {},
     onLongPress: () -> Unit,
 ) {
     // 撤回的消息显示占位
@@ -681,11 +700,18 @@ private fun MessageBubble(
                     lineHeight = 21.sp
                 )
             } else {
-                MarkdownText(
-                    text = msg.content,
-                    baseColor = if (isError) MaterialTheme.colorScheme.onErrorContainer
-                    else MaterialTheme.colorScheme.onSurface
-                )
+                val (reply, cot) = com.simpleaccount.app.ui.components.unpackCot(msg.content)
+                Column {
+                    if (!cot.isNullOrBlank()) {
+                        ReasoningFold(expanded = reasoningExpanded, text = cot, onToggle = onToggleReasoning)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    MarkdownText(
+                        text = reply,
+                        baseColor = if (isError) MaterialTheme.colorScheme.onErrorContainer
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
         if (isUser) {
@@ -709,7 +735,12 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun TypingBubble(phase: String?, reasoning: String? = null) {
+private fun TypingBubble(
+    phase: String?,
+    reasoning: String? = null,
+    expanded: Boolean = false,
+    onToggle: () -> Unit = {},
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -749,12 +780,7 @@ private fun TypingBubble(phase: String?, reasoning: String? = null) {
                 )
                 if (!reasoning.isNullOrBlank()) {
                     Spacer(Modifier.height(6.dp))
-                    Text(
-                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp,
-                    )
+                    ReasoningFold(expanded = expanded, text = reasoning, onToggle = onToggle)
                 }
             }
         }
@@ -762,7 +788,12 @@ private fun TypingBubble(phase: String?, reasoning: String? = null) {
 }
 
 @Composable
-private fun StreamingBubble(text: String, reasoning: String? = null) {
+private fun StreamingBubble(
+    text: String,
+    reasoning: String? = null,
+    expanded: Boolean = false,
+    onToggle: () -> Unit = {},
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -794,18 +825,35 @@ private fun StreamingBubble(text: String, reasoning: String? = null) {
         ) {
             Column {
                 if (!reasoning.isNullOrBlank()) {
-                    Text(
-                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp,
-                    )
+                    ReasoningFold(expanded = expanded, text = reasoning, onToggle = onToggle)
                     Spacer(Modifier.height(6.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                     Spacer(Modifier.height(6.dp))
                 }
                 MarkdownText(text = text, baseColor = MaterialTheme.colorScheme.onSurface)
             }
+        }
+    }
+}
+
+@Composable
+private fun ReasoningFold(expanded: Boolean, text: String, onToggle: () -> Unit) {
+    Column {
+        Text(
+            if (expanded) "收起思考" else "思考过程（已折叠）",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clickable(onClick = onToggle)
+                .padding(vertical = 2.dp)
+        )
+        if (expanded) {
+            Text(
+                com.simpleaccount.app.ui.components.coalesceReasoning(text),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+            )
         }
     }
 }

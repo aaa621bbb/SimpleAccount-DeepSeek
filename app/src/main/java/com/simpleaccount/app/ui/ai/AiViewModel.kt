@@ -222,7 +222,7 @@ class AiViewModel @Inject constructor(
         aiService.cancelAllActive()
         agentJob?.cancel()
         agentJob = null
-        _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+        _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, reasoning = null)
         if (!partial.isNullOrBlank() && partial.length > 8 && convId.isNotEmpty()) {
             viewModelScope.launch {
                 conversationManager.addMessage(
@@ -371,7 +371,7 @@ class AiViewModel @Inject constructor(
                 (if (result.error != null) "error=" + result.error else "reply=" + result.reply.take(60))
         )
         if (result.error == "已停止") {
-            _state.value = _state.value.copy(typing = false, phase = null)
+            _state.value = _state.value.copy(typing = false, phase = null, reasoning = null)
             return
         }
         if (result.error != null) {
@@ -379,13 +379,18 @@ class AiViewModel @Inject constructor(
                 conversationId, AiMessage.ROLE_ASSISTANT, result.error,
                 status = AiMessage.STATUS_ERROR
             )
-            _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, error = result.error)
+            _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, error = result.error, reasoning = null)
         } else {
+            val packed = com.simpleaccount.app.ui.components.packCot(
+                result.reply.ifBlank { "（模型未返回内容）" },
+                _state.value.reasoning,
+            )
             conversationManager.addMessage(
-                conversationId, AiMessage.ROLE_ASSISTANT, result.reply.ifBlank { "（模型未返回内容）" }
+                conversationId, AiMessage.ROLE_ASSISTANT, packed
             )
             _state.value = _state.value.copy(
                 typing = false, phase = null, streamingText = null, error = null,
+                reasoning = null,
                 pendingConfirm = result.pending?.let {
                     PendingConfirmUi(it.tool, it.args, it.summary)
                 }
@@ -421,6 +426,7 @@ class AiViewModel @Inject constructor(
             )
             _state.value = _state.value.copy(
                 typing = true, phase = "正在读取截图…", error = null,
+                reasoning = null, streamingText = null,
                 traces = listOf("开始识图：${daoUris.size} 张")
             )
 
@@ -459,16 +465,18 @@ class AiViewModel @Inject constructor(
 
             val today = java.time.LocalDate.now()
             val prompt = """
-你是账单识别助手。请仔细逐行阅读这些支付记录截图（可能有多笔，从上到下逐行扫描，一行都不要漏），提取每一笔账单。
+你是账单识别助手。图上只要出现金额数字，就必须抽成账单，禁止因为「不够清晰」输出空数组。
+请逐行阅读支付记录截图（可能有多笔，从上到下扫描，一行都不要漏）。
 今天是 ${today}（${today.year}年${today.monthValue}月${today.dayOfMonth}日），昨天=${today.minusDays(1)}，前天=${today.minusDays(2)}。
-严格只输出 JSON 数组，不要任何解释、不要 markdown 代码块围栏：
+只输出 JSON 数组，不要解释、不要 markdown 围栏：
 [{"date":"日期列原文","time":"HH:mm","merchant":"商家或交易对象","product":"商品说明，可省略","amount":6.5,"type":"expense"}]
-识别规则：
-1. date 字段**照抄截图日期列里写的东西**即可（"今天"就写"今天"，"昨天"就写"昨天"，或 2026-08-30/2026/8/30/08-30/8月30日 等原文），程序会自动换算成标准日期。绝对不要自己推算或编造年份。
-2. 时刻单独放 time，24 小时制："下午8:15"要换算成"20:15"。日期和时刻在同一格（如"昨天 20:15"）时：日期词放 date，时刻放 time。截图只写「上午/下午/晚上/早上」没有钟点时：date 写「今天」（或截图里的昨天），time 写 09:00/15:00/20:00/08:00，禁止输出「未知」。
-3. 商家名必须完整抄写，不要截断，不要加省略号。被截图裁掉的尾字（如「有限…」）按能看见的部分抄，不要自己补「公司」。
-4. amount 按截图原值（元，保留小数）；type：支出 expense、收入 income。
-5. 多张切片可能有重叠行，同一笔只输出一次。不要编造截图里没有的字段；识别不出的行跳过。没有账单则输出 []。
+规则：
+1. date 照抄截图日期列原文（今天/昨天/2026-08-30/8月30日 等），不要自己编年份。
+2. time 用 24 小时制。下午8:15 → 20:15。没有钟点可空。
+3. 商家名完整抄写，不要截断、不要补「公司」。
+4. amount 是元（不是分）。截图写 -50.00 / ¥50 / 50元 都写成 50。type：支出 expense、收入 income。
+5. 重叠行只输出一次。看不清的字段留空，但 amount 能读就必须输出这一笔。
+6. 只有确认图上没有任何金额时才输出 []。
             """.trimIndent()
 
             _state.value = _state.value.copy(
@@ -492,12 +500,14 @@ class AiViewModel @Inject constructor(
             }
 
             var lastVisionError: String? = null
+            var lastRaw = ""
             val first = visionCall(
                 if (useMain) settingsRepository.baseUrl() else settingsRepository.visionBaseUrl(),
                 if (useMain) settingsRepository.apiKey() else settingsRepository.visionApiKey(),
                 if (useMain) settingsRepository.model() else settingsRepository.visionModel(),
             )
             lastVisionError = first.second
+            lastRaw = first.first
             var items = parseExtracted(first.first)
 
             if (items.isEmpty() && useMain && settingsRepository.visionApiKey().isNotBlank()) {
@@ -509,6 +519,7 @@ class AiViewModel @Inject constructor(
                     settingsRepository.visionModel(),
                 )
                 lastVisionError = second.second ?: lastVisionError
+                lastRaw = second.first.ifBlank { lastRaw }
                 items = parseExtracted(second.first)
             }
             val mergedItems = mergeExtracted(items)
@@ -518,16 +529,18 @@ class AiViewModel @Inject constructor(
 
             // 识别完成 → 批内去重（切片重叠会把同一笔识别两次）+ 与账本比对 → 挂起待用户勾选确认
             if (mergedItems.isEmpty()) {
-                val msg = if (!lastVisionError.isNullOrBlank()) {
-                    "识图没有完成：$lastVisionError"
-                } else {
-                    "没从截图里识别出账单记录。如果截图里有明细，麻烦拍清楚一点再试。"
+                val msg = when {
+                    !lastVisionError.isNullOrBlank() -> "识图没有完成：$lastVisionError"
+                    lastRaw.isNotBlank() ->
+                        "模型有返回，但没有解析出结构化账单。原文片段：" +
+                            lastRaw.trim().replace("\n", " ").take(180)
+                    else -> "识图接口没有返回账单字段。请确认截图识图模型和 Key 已配置，并尽量用完整明细页。"
                 }
                 conversationManager.addMessage(
                     convId, AiMessage.ROLE_ASSISTANT, msg,
                     status = if (!lastVisionError.isNullOrBlank()) AiMessage.STATUS_ERROR else AiMessage.STATUS_DONE
                 )
-                _state.value = _state.value.copy(typing = false, phase = null, error = lastVisionError)
+                _state.value = _state.value.copy(typing = false, phase = null, error = lastVisionError, reasoning = null)
                 return@launch
             }
             val todayStr = java.time.LocalDate.now().toString()
@@ -752,40 +765,72 @@ class AiViewModel @Inject constructor(
         return false
     }
 
-    /** 从视觉模型输出里抠 JSON 数组（容忍 ```json 围栏和前后杂文字） */
+    /** 从视觉模型输出里抠账单：JSON 数组/单对象/金额字符串/中文键。 */
     private fun parseExtracted(text: String): List<ExtractedTx> {
         val cleaned = text.replace("```json", "").replace("```", "").trim()
-        val start = cleaned.indexOf('[')
-        val end = cleaned.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
+        val fromJson = parseExtractedJson(cleaned)
+        if (fromJson.isNotEmpty()) return fromJson
+        return parseExtractedLoose(cleaned)
+    }
+
+    private fun parseExtractedJson(cleaned: String): List<ExtractedTx> {
+        val startArr = cleaned.indexOf('[')
+        val endArr = cleaned.lastIndexOf(']')
+        val startObj = cleaned.indexOf('{')
+        val endObj = cleaned.lastIndexOf('}')
+        val blob = when {
+            startArr >= 0 && endArr > startArr -> cleaned.substring(startArr, endArr + 1)
+            startObj >= 0 && endObj > startObj -> "[" + cleaned.substring(startObj, endObj + 1) + "]"
+            else -> return emptyList()
+        }
         return runCatching {
-            val arr = org.json.JSONArray(cleaned.substring(start, end + 1))
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                val amount = o.optDouble("amount", Double.NaN)
-                if (amount.isNaN() || amount <= 0) return@mapNotNull null
-                val dateRaw = o.optString("date", "").trim()
-                // 解析失败保留 null（预览里显示"日期未知（确认后将记入今天）"），
-                // 不悄悄默认成今天——"昨天/前天被记成今天"正是这么来的
-                val date = com.simpleaccount.app.util.DateResolver.resolveFlexible(dateRaw)
-                // 模型可能把"昨天 20:15"整格塞进 date，时刻也从这里抠
-                var timeRaw = o.optString("time", "").trim()
-                if (timeRaw.isBlank()) timeRaw = dateRaw
-                val time = parseTimeText(timeRaw)
-                ExtractedTx(
-                    date = date,
-                    merchant = com.simpleaccount.app.util.MerchantMatcher.stripEllipsis(
-                        o.optString("merchant", "").trim()
-                    ),
-                    product = o.optString("product", "").trim().ifBlank { null },
-                    amount = amount,
-                    type = if (o.optString("type") == "income")
-                        com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
-                    else com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE,
-                    time = time,
-                )
-            }
+            val arr = org.json.JSONArray(blob)
+            (0 until arr.length()).mapNotNull { i -> jsonToTx(arr.optJSONObject(i)) }
         }.getOrDefault(emptyList())
+    }
+
+    private fun jsonToTx(o: org.json.JSONObject?): ExtractedTx? {
+        if (o == null) return null
+        val amountRaw = sequenceOf("amount", "money", "金额", "price")
+            .map { o.opt(it) }
+            .firstOrNull { it != null && it != org.json.JSONObject.NULL }
+        val amount = when (amountRaw) {
+            is Number -> amountRaw.toDouble()
+            is String -> {
+                val fen = com.simpleaccount.app.util.MoneyUtil.parseToFen(amountRaw)
+                    ?: com.simpleaccount.app.util.MoneyUtil.parseChineseToFen(amountRaw)
+                fen?.div(100.0)
+            }
+            else -> null
+        } ?: return null
+        if (amount <= 0) return null
+        val dateRaw = o.optString("date").ifBlank { o.optString("日期") }.trim()
+        val date = com.simpleaccount.app.util.DateResolver.resolveFlexible(dateRaw)
+        var timeRaw = o.optString("time").ifBlank { o.optString("时间") }.trim()
+        if (timeRaw.isBlank()) timeRaw = dateRaw
+        val merchant = com.simpleaccount.app.util.MerchantMatcher.stripEllipsis(
+            o.optString("merchant").ifBlank { o.optString("商家") }.ifBlank { o.optString("商户") }.trim()
+        )
+        val product = o.optString("product").ifBlank { o.optString("商品") }.trim().ifBlank { null }
+        val typeRaw = o.optString("type").ifBlank { o.optString("类型") }
+        val type = if (typeRaw.contains("income") || typeRaw.contains("收入"))
+            com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
+        else com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE
+        return ExtractedTx(date, merchant, product, amount, type, parseTimeText(timeRaw))
+    }
+
+    private fun parseExtractedLoose(text: String): List<ExtractedTx> {
+        val out = mutableListOf<ExtractedTx>()
+        Regex("([\\u4e00-\\u9fa5A-Za-z0-9]{2,24}).{0,8}(?:¥|￥|-)?\\s*(\\d+(?:\\.\\d{1,2})?)\\s*元?")
+            .findAll(text)
+            .forEach { m ->
+                val amount = m.groupValues[2].toDoubleOrNull() ?: return@forEach
+                if (amount <= 0 || amount > 1_000_000) return@forEach
+                val merchant = com.simpleaccount.app.util.MerchantMatcher.stripEllipsis(m.groupValues[1])
+                if (merchant.length < 2) return@forEach
+                out += ExtractedTx(null, merchant, null, amount, com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE, null)
+            }
+        return out.distinctBy { it.merchant + it.amount }
     }
 
     private data class ExtractedTx(
@@ -823,7 +868,7 @@ class AiViewModel @Inject constructor(
             val slices = mutableListOf<String>()
             fun encode(bmp: android.graphics.Bitmap): String {
                 val out = java.io.ByteArrayOutputStream()
-                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 78, out)
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
                 return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
             }
 

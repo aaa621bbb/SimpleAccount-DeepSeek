@@ -452,6 +452,32 @@ class AiService @Inject constructor() {
         }
     }
 
+    /** 兼容 content 为字符串或多模态 parts 数组。 */
+    private fun extractMessageText(message: JSONObject?): String {
+        if (message == null) return ""
+        if (message.isNull("content")) return ""
+        val raw = message.opt("content") ?: return ""
+        return when (raw) {
+            is String -> raw
+            is JSONArray -> {
+                val sb = StringBuilder()
+                for (i in 0 until raw.length()) {
+                    val part = raw.opt(i)
+                    when (part) {
+                        is String -> sb.append(part)
+                        is JSONObject -> {
+                            val t = part.optString("text")
+                            if (t.isNotBlank() && t != "null") sb.append(t)
+                        }
+                    }
+                }
+                sb.toString()
+            }
+            is JSONObject -> raw.optString("text").ifBlank { raw.optString("content") }
+            else -> raw.toString()
+        }
+    }
+
     private data class HttpResp(val content: String, val error: String?, val rawJson: JSONObject?)
 
     private fun execute(
@@ -478,11 +504,10 @@ class AiService @Inject constructor() {
                         return@use HttpResp("", "HTTP ${resp.code}: ${respBody.take(200)}", null)
                     }
                     val json = JSONObject(respBody)
-                    val content = json.getJSONArray("choices")
+                    val message = json.getJSONArray("choices")
                         .optJSONObject(0)
-                        ?.getJSONObject("message")
-                        ?.optString("content")
-                        .orEmpty()
+                        ?.optJSONObject("message")
+                    val content = extractMessageText(message)
                     HttpResp(content, null, json)
                 }
             }.getOrElse { e ->

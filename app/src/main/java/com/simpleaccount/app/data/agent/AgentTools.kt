@@ -33,7 +33,6 @@ class AgentTools @Inject constructor(
         val DESTRUCTIVE = setOf(
             "delete_category",
             "classify_merchants",
-            "reclassify_transactions",
         )
     }
 
@@ -135,12 +134,13 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "reclassify_transactions",
-            description = "把选定的若干笔改到新分类（对象级/选择集）。优先传 ids（流水号，逗号分隔）。也可 merchant+from_category+month 限定一小撮，匹配超过 30 笔会拒绝——那种请先 query_transactions 拿流水号。不要用 classify_merchants（那会改该商家全部历史和映射）。",
+            description = "把选定的若干笔改到新分类（对象级/选择集），调用后立刻写库。优先传 ids。也可 merchant + amount（元）只改该商家下这一笔金额；其余用第二次调用（不带 amount）。匹配超过 30 笔且无 ids 会拒绝。不要用 classify_merchants（那会改该商家全部历史和映射）。禁止口头说已完成而不调用本工具。",
             parameters = mapOf(
                 "ids" to ("string" to "流水号，逗号或空格分隔，例如 12,15,18"),
                 "category" to ("string" to "目标分类，必须是现有分类之一"),
                 "merchant" to ("string" to "可选：只改该商家名下的匹配笔；ids 已给时忽略"),
                 "from_category" to ("string" to "可选：只改当前属于该类的笔"),
+                "amount" to ("number" to "可选：只改这一金额（元），例如 50 表示五十元那一笔"),
                 "month" to ("string" to "可选：yyyy-MM 或「本月」"),
                 "date" to ("string" to "可选：某一天 yyyy-MM-dd"),
             ),
@@ -627,22 +627,34 @@ class AgentTools @Inject constructor(
         return out.filter { it > 0 }.distinct()
     }
 
+    private fun parseAmountFen(a: JSONObject): Long? {
+        if (!a.has("amount") || a.isNull("amount")) return null
+        val raw = a.opt("amount") ?: return null
+        val s = when (raw) {
+            is Number -> raw.toString()
+            else -> raw.toString()
+        }
+        return MoneyUtil.parseToFen(s) ?: MoneyUtil.parseChineseToFen(s)
+    }
+
     private suspend fun matchReclassify(a: JSONObject): List<Transaction> {
         val ids = parseIds(a)
         val merchant = a.optString("merchant").trim()
         val fromCat = a.optString("from_category").trim()
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val date = normalizeDate(a.optString("date").trim()) ?: ""
+        val amountFen = parseAmountFen(a)
         val all = accountRepository.getAll()
         return if (ids.isNotEmpty()) {
             val set = ids.toSet()
             all.filter { it.id in set }
         } else {
             all.filter {
-                (merchant.isEmpty() || it.merchant.contains(merchant)) &&
+                (merchant.isEmpty() || it.merchant.contains(merchant) || it.product.contains(merchant)) &&
                     (fromCat.isEmpty() || it.category == fromCat) &&
                     (month.isEmpty() || it.date.startsWith(month)) &&
-                    (date.isEmpty() || it.date == date)
+                    (date.isEmpty() || it.date == date) &&
+                    (amountFen == null || it.amount == amountFen)
             }
         }
     }
@@ -689,10 +701,15 @@ class AgentTools @Inject constructor(
                 n++
             }
         }
-        val sample = targets.take(8).joinToString("\n") {
-            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} ${it.category}→$category"
+        val verified = targets.mapNotNull { accountRepository.getById(it.id) }
+        val mismatch = verified.filter { it.category != category }
+        if (mismatch.isNotEmpty()) {
+            return "写库后核验失败：${mismatch.size} 笔仍不是「$category」。账本未按口头结果改完。"
         }
-        return "已把 ${targets.size} 笔改到「$category」（实际改 $n 笔，其余本来就是这类）。未改商家映射。\n$sample"
+        val sample = verified.take(8).joinToString("\n") {
+            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} 现分类=${it.category}"
+        }
+        return "【账本已核验】已把 ${verified.size} 笔改到「$category」（实际改 $n 笔）。未改商家映射。\n$sample"
     }
 
     /** 操控：跳转页面 */

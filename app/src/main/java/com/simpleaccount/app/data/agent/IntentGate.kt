@@ -25,7 +25,7 @@ object IntentGate {
 
         if (Regex(
                 "记(?:一笔|上|账)|帮我记|入账|撤回|撤销|删掉|删除|" +
-                    "改成|改归|重分类|归类|映射|把.{0,12}改",
+                    "改成|改到|改归|重分类|归类|归入|映射|把.{0,24}改",
             ).containsMatchIn(s)
         ) return QueryIntent.LEDGER_WRITE
 
