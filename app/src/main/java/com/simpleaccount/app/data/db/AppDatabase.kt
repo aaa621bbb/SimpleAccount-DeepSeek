@@ -10,6 +10,7 @@ import com.simpleaccount.app.data.dao.ConversationDao
 import com.simpleaccount.app.data.dao.ImportFailureDao
 import com.simpleaccount.app.data.dao.ImportLogDao
 import com.simpleaccount.app.data.dao.MerchantDao
+import com.simpleaccount.app.data.dao.LedgerDao
 import com.simpleaccount.app.data.dao.SettingDao
 import com.simpleaccount.app.data.dao.TransactionDao
 import com.simpleaccount.app.data.entity.AiMessage
@@ -31,8 +32,9 @@ import com.simpleaccount.app.data.entity.Transaction
         Conversation::class,
         AiMessage::class,
         Setting::class,
+        com.simpleaccount.app.data.entity.Ledger::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -163,6 +165,26 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE transactions ADD COLUMN `time` TEXT NOT NULL DEFAULT ''")
             }
         }
+
+        /** v6 → v7：多账本。旧流水全部归入「主账本」。 */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `ledgers` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `isDefault` INTEGER NOT NULL
+                    )"""
+                )
+                val now = System.currentTimeMillis()
+                db.execSQL(
+                    "INSERT INTO ledgers (id, name, createdAt, isDefault) VALUES (1, '主账本', $now, 1)"
+                )
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `ledgerId` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_ledgerId` ON `transactions` (`ledgerId`)")
+            }
+        }
     }
 
     abstract fun transactionDao(): TransactionDao
@@ -173,4 +195,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun aiMessageDao(): AiMessageDao
     abstract fun settingDao(): SettingDao
+    abstract fun ledgerDao(): LedgerDao
 }

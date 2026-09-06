@@ -1,5 +1,11 @@
 package com.simpleaccount.app.ui.navigation
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -86,10 +92,27 @@ fun SimpleAccountNavHost() {
         }
     ) { innerPadding ->
         Box(Modifier.padding(innerPadding)) {
+            val reduce = com.simpleaccount.app.ui.motion.LocalReduceMotion.current
+            val enterMs = com.simpleaccount.app.ui.motion.Motion.dur(reduce, com.simpleaccount.app.ui.motion.Motion.PAGE_MS)
+            val exitMs = com.simpleaccount.app.ui.motion.Motion.dur(reduce, com.simpleaccount.app.ui.motion.Motion.PAGE_EXIT_MS)
             NavHost(
                 navController = navController,
                 startDestination = Routes.HOME,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                enterTransition = {
+                    fadeIn(tween(enterMs, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(enterMs, easing = FastOutSlowInEasing)) { it / 14 }
+                },
+                exitTransition = {
+                    fadeOut(tween(exitMs, easing = FastOutSlowInEasing))
+                },
+                popEnterTransition = {
+                    fadeIn(tween(enterMs, easing = FastOutSlowInEasing))
+                },
+                popExitTransition = {
+                    fadeOut(tween(exitMs, easing = FastOutSlowInEasing)) +
+                        slideOutHorizontally(tween(exitMs, easing = FastOutSlowInEasing)) { it / 14 }
+                },
             ) {
                 composable(Routes.HOME) {
                     val vm: HomeViewModel = hiltViewModel()
@@ -104,10 +127,25 @@ fun SimpleAccountNavHost() {
                     StatsScreen(vm)
                 }
                 composable(Routes.AI) {
-                    AiScreen(navController = navController)
+                    AiScreen(navController = navController, autoPickImage = false)
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(navController)
+                }
+                composable(Routes.APPEARANCE) {
+                    com.simpleaccount.app.ui.settings.AppearanceScreen(navController)
+                }
+                composable(Routes.STATS_LAYOUT) {
+                    com.simpleaccount.app.ui.settings.StatsLayoutScreen(navController)
+                }
+                composable(Routes.PICKER_STYLE) {
+                    com.simpleaccount.app.ui.settings.PickerStyleScreen(navController)
+                }
+                composable(Routes.MEMORY) {
+                    com.simpleaccount.app.ui.settings.MemoryScreen(navController)
+                }
+                composable(Routes.AI_SHOT) {
+                    AiScreen(navController = navController, autoPickImage = true)
                 }
                 composable(Routes.ADD) {
                     AddTransactionScreen(navController, editId = null)
@@ -127,6 +165,9 @@ fun SimpleAccountNavHost() {
                 }
                 composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
+                }
+                composable(Routes.LEDGER_MANAGE) {
+                    com.simpleaccount.app.ui.settings.LedgerManageScreen(navController)
                 }
                 composable(Routes.CATEGORY_MANAGE) {
                     CategoryManageScreen(navController)
@@ -153,7 +194,11 @@ private fun SimpleBottomBar(
     currentDestination: NavDestination?,
     navController: NavHostController,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = com.simpleaccount.app.ui.theme.LocalTokens.current.elevNav,
+        tonalElevation = 0.dp,
+    ) {
         NavigationBar(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             tonalElevation = 0.dp,

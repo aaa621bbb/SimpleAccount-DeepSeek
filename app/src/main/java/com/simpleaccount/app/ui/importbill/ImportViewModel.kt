@@ -48,7 +48,7 @@ class ImportViewModel @Inject constructor(
 
     /** 读取 URI 内容并导入。 */
     fun importFrom(uri: Uri) {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 resolveContent(uri)
             } catch (t: Throwable) {

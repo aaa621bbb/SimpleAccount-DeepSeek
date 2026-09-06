@@ -3,6 +3,8 @@ package com.simpleaccount.app.ui.ai
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,6 +91,7 @@ private data class MessageActions(val msg: AiMessage, val isLastAssistant: Boole
 fun AiScreen(
     viewModel: AiViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     navController: NavHostController? = null,
+    autoPickImage: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val listState = rememberLazyListState()
@@ -110,11 +114,42 @@ fun AiScreen(
 
     LaunchedEffect(Unit) { viewModel.refreshEnabled() }
 
-    // 新消息/输入状态变化时自动滚到底部
-    LaunchedEffect(state.messages.size, state.typing) {
-        if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.size - 1 + if (state.typing) 1 else 0)
+    var autoPicked by remember { mutableStateOf(false) }
+    LaunchedEffect(autoPickImage) {
+        if (autoPickImage && !autoPicked) {
+            autoPicked = true
+            runCatching {
+                imagePicker.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                    )
+                )
+            }
         }
+    }
+
+    // 贴底跟随：用户上滑下探时不再强制滚回首行
+    var stickToBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            val atEnd = last != null &&
+                last.index >= info.totalItemsCount - 1 &&
+                (last.offset + last.size) <= info.viewportEndOffset + 120
+            listState.isScrollInProgress to atEnd
+        }.collect { (scrolling, atEnd) ->
+            if (scrolling && !atEnd) stickToBottom = false
+            else if (!scrolling && atEnd) stickToBottom = true
+        }
+    }
+    LaunchedEffect(state.messages.size) {
+        if (state.messages.lastOrNull()?.role == AiMessage.ROLE_USER) stickToBottom = true
+    }
+    LaunchedEffect(stickToBottom, state.messages.size, state.typing, state.streamingText?.length?.div(80)) {
+        if (!stickToBottom) return@LaunchedEffect
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0) listState.scrollToItem(last, scrollOffset = Int.MAX_VALUE / 8)
     }
 
     Scaffold { padding ->
@@ -204,9 +239,47 @@ fun AiScreen(
                     )
                 }
                 if (state.typing) {
-                    item { TypingBubble(state.phase) }
+                    item {
+                        if (state.traces.isNotEmpty()) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                                state.traces.takeLast(8).forEach { t ->
+                                    Text(
+                                        "· $t",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2
+                                    )
+                                }
+                            }
+                        }
+                        val stream = state.streamingText
+                        if (!stream.isNullOrEmpty()) StreamingBubble(stream, state.reasoning)
+                        else TypingBubble(state.phase, state.reasoning)
+                    }
                 }
                 item { Spacer(Modifier.height(8.dp)) }
+            }
+
+            state.pendingConfirm?.let { pending ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Text(
+                            pending.summary,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { viewModel.dismissPending() }) { Text("取消") }
+                            TextButton(onClick = { viewModel.confirmPending() }) { Text("确认执行") }
+                        }
+                    }
+                }
             }
 
             // 错误横幅 + 重试
@@ -444,8 +517,8 @@ fun AiScreen(
                                     maxLines = 1
                                 )
                                 Text(
-                                    (it0.date ?: "日期未知") +
-                                        (it0.time?.let { tm -> " $tm" } ?: "") +
+                                    (it0.date ?: "日期未知（确认后将记入今天）") +
+                                        (it0.time?.let { tm -> " $tm" } ?: " 时间未知") +
                                         if (it0.duplicate) " · 账本已有（跳过）" else "",
                                     fontSize = 11.sp,
                                     color = if (it0.duplicate) MaterialTheme.colorScheme.error
@@ -586,7 +659,7 @@ private fun MessageBubble(
         }
         Box(
             Modifier
-                .widthIn(max = 300.dp)
+                .widthIn(max = 340.dp)
                 .clip(
                     if (isUser) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
                     else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
@@ -636,7 +709,7 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun TypingBubble(phase: String?) {
+private fun TypingBubble(phase: String?, reasoning: String? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -668,11 +741,71 @@ private fun TypingBubble(phase: String?) {
         ) {
             CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(7.dp))
-            Text(
-                phase ?: "正在思考…",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp
+            Column {
+                Text(
+                    phase ?: "正在办理…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp
+                )
+                if (!reasoning.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamingBubble(text: String, reasoning: String? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.SmartToy,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(16.dp)
             )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .widthIn(max = 340.dp)
+                .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Column {
+                if (!reasoning.isNullOrBlank()) {
+                    Text(
+                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                    Spacer(Modifier.height(6.dp))
+                }
+                MarkdownText(text = text, baseColor = MaterialTheme.colorScheme.onSurface)
+            }
         }
     }
 }
