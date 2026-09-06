@@ -51,7 +51,7 @@ class AgentLoop @Inject constructor(
             "list_months" -> "正在核对账本月份…"
             "list_merchants" -> "正在查看商家归类…"
             "classify_merchants" -> "正在归类商家…"
-            "reclassify_transactions" -> "正在改这些账单的分类…"
+            "reclassify_transactions", "update_transaction_category" -> "正在改这些账单的分类…"
             "get_insights" -> "正在生成本月体检…"
             "memory_get" -> "正在检索长期记忆…"
             "memory_write" -> "正在写入记忆…"
@@ -66,7 +66,7 @@ class AgentLoop @Inject constructor(
             "add_transaction", "withdraw_transaction", "delete_transaction",
             "edit_transaction", "update_transaction_category", "set_monthly_budget",
             "set_auto_record", "set_theme", "set_merchant_category", "create_category",
-            "navigate",
+            "reclassify_transactions", "navigate",
         )
 
         /** 网络类错误（可重试）；HTTP 4xx（key/参数问题）不重试 */
@@ -146,6 +146,13 @@ $snapshot
         if (intent == QueryIntent.MEMORY) {
             names += setOf("memory_get", "memory_write")
             return all.filter { it.name in names }
+        }
+        if (intent == QueryIntent.LEDGER_WRITE) {
+            names += setOf(
+                "add_transaction", "withdraw_transaction", "delete_transaction",
+                "edit_transaction", "update_transaction_category", "reclassify_transactions",
+                "query_transactions", "list_merchants", "set_merchant_category",
+            )
         }
         if (intent == QueryIntent.LEDGER_READ) {
             if (Regex("明细|哪几笔|流水|账单列表|查一下").containsMatchIn(s)) names += "query_transactions"
@@ -241,8 +248,10 @@ $snapshot
         if (apiKey.isBlank()) return AgentResult("", 0, "未配置 API Key")
         val baseUrl = settingsRepository.baseUrl()
         val model = settingsRepository.model()
-        val thinkingLevel = settingsRepository.thinkingLevel()
         val intent = IntentGate.classify(userMessage)
+        val writeFast = intent == QueryIntent.LEDGER_WRITE ||
+            Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到").containsMatchIn(userMessage)
+        val thinkingLevel = if (writeFast) SettingsRepository.THINKING_OFF else settingsRepository.thinkingLevel()
         val tools = pickTools(userMessage, intent)
         val cap = when (intent) {
             QueryIntent.CHAT, QueryIntent.NAV -> 1
@@ -272,7 +281,6 @@ $snapshot
         var rounds = 0
         var networkRetried = false
         val loopDetector = ToolLoopDetector()
-        val writeFast = Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账").containsMatchIn(userMessage)
         onStatus(
             when {
                 writeFast -> "正在办理…"

@@ -195,12 +195,30 @@ class AiService @Inject constructor() {
             put("model", model)
             put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
             put("temperature", 0.1)
-            put("max_tokens", 4000)
+            put("max_tokens", visionMaxTokens(baseUrl, model))
         }
-        val resp = execute(baseUrl, apiKey, body, http = visionClient, vision = true)
-        if (resp.error != null) return@withContextIo ChatResult("", resp.error)
+        var resp = execute(baseUrl, apiKey, body, http = visionClient, vision = true)
+        val firstErr = resp.error
+        if (firstErr != null && isMaxTokensIllegal(firstErr)) {
+            body.put("max_tokens", 1024)
+            resp = execute(baseUrl, apiKey, body, http = visionClient, vision = true)
+        }
+        val err = resp.error
+        if (err != null) return@withContextIo ChatResult("", err)
         ChatResult(resp.content)
     }
+
+    /** 智谱 GLM 识图上限 1024；超了会 HTTP 400 code 1210，整条识图不可用。 */
+    private fun visionMaxTokens(baseUrl: String, model: String): Int {
+        val h = (baseUrl + " " + model).lowercase()
+        return if (h.contains("bigmodel") || h.contains("glm") || h.contains("chatglm") || h.contains("zhipu")) 1024
+        else 1024
+    }
+
+    private fun isMaxTokensIllegal(err: String): Boolean =
+        err.contains("1210") ||
+            (err.contains("max_tokens", ignoreCase = true) &&
+                (err.contains("非法") || err.contains("invalid", ignoreCase = true) || err.contains("range", ignoreCase = true)))
 
     /** 带工具调用的响应：content 是文本回复（若有），toolCalls 是模型想调用的工具 */
     data class ToolChatResult(

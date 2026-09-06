@@ -122,7 +122,17 @@ class LedgerViewModel @Inject constructor(
             val rows = base.map { RowUi(it, catMap[it.category]) }
             val groups = rows.groupBy { it.transaction.date.take(7) }
                 .toSortedMap(compareByDescending { it })
-                .map { (m, list) -> LedgerMonthGroup(m, list) }
+                .map { (m, list) ->
+                    var exp = 0L
+                    var inc = 0L
+                    list.forEach { row ->
+                        when (row.transaction.type) {
+                            Transaction.TYPE_EXPENSE -> exp += row.transaction.amount
+                            Transaction.TYPE_INCOME -> inc += row.transaction.amount
+                        }
+                    }
+                    LedgerMonthGroup(m, list, exp, inc)
+                }
             LedgerUiState(
                 filter = f, months = allMonths, categories = cats,
                 rows = rows, groups = groups, sortByAmount = byAmount, loading = false,

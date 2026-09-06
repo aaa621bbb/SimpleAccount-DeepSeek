@@ -39,6 +39,7 @@ class LocalAccountant @Inject constructor(
         // 口语记账 / 撤回 / 无感：本地秒回，不进模型思考
         parseAdd(s)?.let { return it }
         parseWithdraw(s)?.let { return it }
+        parseRecategorize(s)?.let { return it }
         parseAutoRecord(s)?.let { return it }
 
         if (!IntentGate.needsLedger(IntentGate.classify(s))) return null
@@ -169,13 +170,19 @@ class LocalAccountant @Inject constructor(
     }
 
     private suspend fun parseAdd(s: String): String? {
-        if (!Regex("记(?:一笔|上|账)|帮我记").containsMatchIn(s)) return null
-        val amountFen = Regex("(\\d+(?:\\.\\d{1,2})?)\\s*元").find(s)?.groupValues?.get(1)
-            ?.let { MoneyUtil.parseToFen(it) } ?: return null
-        if (amountFen <= 0) return null
-        val merchant = Regex("记(?:一笔|上|账)?\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12})\\s*\\d").find(s)
-            ?.groupValues?.get(1)
-            ?.takeIf { it !in listOf("一笔", "支出", "收入") }
+        val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
+        if (!want) return null
+        if (s.contains("多少")) return null
+        val amountFen = Regex("(?:¥|￥)\\s*(\\d+(?:\\.\\d{1,2})?)|(\\d+(?:\\.\\d{1,2})?)\\s*(?:元|块钱|块)")
+            .find(s)?.let { m -> m.groupValues[1].ifBlank { m.groupValues[2] } }
+            ?.let { MoneyUtil.parseToFen(it) }
+            ?: Regex("(?:记(?:一笔|上|账|一下)|帮我记|入账)[^\\d]{0,16}(\\d+(?:\\.\\d{1,2})?)").find(s)
+                ?.groupValues?.get(1)?.let { MoneyUtil.parseToFen(it) }
+        if (amountFen == null || amountFen <= 0) return null
+        val merchant = Regex("(?:记(?:一笔|上|账|一下)|帮我记|入账)\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12})\\s*(?:¥|￥|\\d)")
+            .find(s)?.groupValues?.get(1)
+            ?.takeIf { it !in listOf("一笔", "支出", "收入", "一下") }
+            ?: Regex("(?:在|给)\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12})").find(s)?.groupValues?.get(1)
             ?: ""
         val type = if (s.contains("收入") || s.contains("工资")) Transaction.TYPE_INCOME else Transaction.TYPE_EXPENSE
         val date = DateResolver.resolveFlexible(s) ?: DateUtil.today()
@@ -195,6 +202,46 @@ class LocalAccountant @Inject constructor(
         )
         val dir = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
         return "已记账（流水号 **$id**）：$dir **¥${MoneyUtil.fenToYuan(amountFen)}** · $category · ${merchant.ifBlank { "未填商家" }} · $date $time\n\n记错了跟我说「撤回 $id」。"
+    }
+
+    /** 对象级改分类：流水号 / 刚才那笔 / 某商家这几笔。整商户「全部」才一刀切。 */
+    private suspend fun parseRecategorize(s: String): String? {
+        if (!Regex("改成|改到|归到|改归").containsMatchIn(s)) return null
+        val valid = categoryRepository.getAll().map { it.name }.sortedByDescending { it.length }
+        val category = valid.firstOrNull { s.contains(it) && Regex("(?:改成|改到|归到|改归)\\s*${Regex.escape(it)}").containsMatchIn(s) }
+            ?: return null
+        val idHit = Regex("(?:流水号|账单)\\s*(\\d+)").find(s)
+        val targets = when {
+            idHit != null -> {
+                val id = idHit.groupValues[1].toLong()
+                listOf(accountRepository.getById(id) ?: return "流水号 $id 不在账本里。")
+            }
+            Regex("刚才|最新").containsMatchIn(s) -> {
+                listOf(accountRepository.getAll().maxByOrNull { it.id } ?: return "账本是空的。")
+            }
+            else -> {
+                val merch = Regex("把\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12}?)(?:这几笔|那几笔|的账|全部|都)?").find(s)
+                    ?.groupValues?.get(1)?.takeIf { it !in listOf("刚才", "这笔", "那笔") }
+                    ?: return null
+                val all = accountRepository.getAll().filter { it.merchant.contains(merch) }
+                if (all.isEmpty()) return "没找到商家「$merch」的账单。"
+                if (!Regex("全部|都改|所有").containsMatchIn(s) && all.size > 8) {
+                    return "「$merch」有 ${all.size} 笔。请说流水号（例如「把流水号 12 改成$category」），或者说「把${merch}全部改成$category」。"
+                }
+                all
+            }
+        }
+        var n = 0
+        targets.forEach {
+            if (it.category != category) {
+                accountRepository.update(it.copy(category = category, updatedAt = System.currentTimeMillis()))
+                n++
+            }
+        }
+        val sample = targets.take(6).joinToString("\n") {
+            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)}"
+        }
+        return "已把 ${targets.size} 笔改到「$category」（实际改 $n 笔）。\n$sample"
     }
 
     private fun formatDay(date: String, txs: List<Transaction>): String {

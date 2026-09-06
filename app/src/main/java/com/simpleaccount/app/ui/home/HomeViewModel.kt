@@ -16,21 +16,13 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 enum class HomeSort { TIME, AMOUNT }
-
-/** 首页「再记一笔」芯片：复用最近商家+金额+分类 */
-data class QuickRepeat(
-    val merchant: String,
-    val amount: Long,
-    val category: String,
-    val type: String,
-)
 
 data class HomeUiState(
     val month: String = DateUtil.thisMonth(),
@@ -55,7 +47,8 @@ data class HomeUiState(
     /** 剩余预算按剩余天数摊，今天建议上限 */
     val todayCapFen: Long = 0L,
     val todayDupes: List<String> = emptyList(),
-    val quickRepeats: List<QuickRepeat> = emptyList(),
+    val pendingMerchants: Int = 0,
+    val importFailures: Int = 0,
 )
 
 @HiltViewModel
@@ -64,6 +57,8 @@ class HomeViewModel @Inject constructor(
     private val categoryRepository: CategoryRepository,
     private val settingsRepository: SettingsRepository,
     private val ledgerRepository: LedgerRepository,
+    private val merchantRepository: com.simpleaccount.app.data.repository.MerchantRepository,
+    private val importFailureDao: com.simpleaccount.app.data.dao.ImportFailureDao,
 ) : ViewModel() {
 
     private val categoriesFlow = categoryRepository.observeAll()
@@ -92,46 +87,11 @@ class HomeViewModel @Inject constructor(
         sortFlow.value = if (sortFlow.value == HomeSort.TIME) HomeSort.AMOUNT else HomeSort.TIME
     }
 
-    private val _snack = MutableStateFlow<String?>(null)
-    val snack = _snack.asStateFlow()
-    private var lastRepeatId: Long = 0L
+    private val pendingMerchantsFlow = merchantRepository
+        .observeByStatus(com.simpleaccount.app.data.entity.Merchant.STATUS_PENDING)
+        .map { it.size }
 
-    /** 一键再记：今天此时，同样商家/分类/金额。可立刻撤销。 */
-    fun repeatQuick(q: QuickRepeat) {
-        viewModelScope.launch {
-            val now = java.time.LocalTime.now()
-            val id = accountRepository.insert(
-                Transaction(
-                    amount = q.amount,
-                    type = q.type,
-                    category = q.category,
-                    date = DateUtil.today(),
-                    time = "%02d:%02d".format(now.hour, now.minute),
-                    merchant = q.merchant,
-                    source = Transaction.SOURCE_MANUAL,
-                )
-            )
-            lastRepeatId = id
-            _snack.value = "已再记 ${q.merchant} ¥${com.simpleaccount.app.util.MoneyUtil.fenToYuan(q.amount)}"
-        }
-    }
-
-    fun undoRepeat() {
-        val id = lastRepeatId
-        if (id <= 0) {
-            _snack.value = null
-            return
-        }
-        viewModelScope.launch {
-            accountRepository.delete(id)
-            lastRepeatId = 0L
-            _snack.value = "已撤销"
-        }
-    }
-
-    fun dismissSnack() {
-        _snack.value = null
-    }
+    private val importFailureCountFlow = importFailureDao.observeCount()
 
     /** 当月流水 + 分类 + 排序 + 条数，合并为 UI 状态 */
     fun switchLedger(id: Long) = ledgerRepository.switchTo(id)
@@ -143,6 +103,11 @@ class HomeViewModel @Inject constructor(
         val lid: Long,
     )
 
+    private data class Follow(
+        val pending: Int,
+        val failures: Int,
+    )
+
     val uiState: StateFlow<HomeUiState> =
         combine(
             accountRepository.observeAll(),
@@ -150,8 +115,9 @@ class HomeViewModel @Inject constructor(
             budgetFlow,
             combine(recentCountFlow, sortFlow, ledgerRepository.observeAll(), ledgerRepository.currentIdFlow) { count, sort, ledgers, lid ->
                 Extra(count, sort, ledgers, lid)
-            }
-        ) { all, categories, budget, q ->
+            },
+            combine(pendingMerchantsFlow, importFailureCountFlow) { p, f -> Follow(p, f) },
+        ) { all, categories, budget, q, follow ->
             val count = q.count
             val sort = q.sort
             val ledgers = q.ledgers
@@ -188,12 +154,6 @@ class HomeViewModel @Inject constructor(
             val days = java.time.YearMonth.now().lengthOfMonth()
             val remainDays = (days - day).coerceAtLeast(1)
             val todayCap = if (budget > 0) (budget - expense).coerceAtLeast(0L) / remainDays else 0L
-            val quick = transactions
-                .filter { it.type == Transaction.TYPE_EXPENSE && it.merchant.isNotBlank() }
-                .sortedWith(compareByDescending<Transaction> { it.date }.thenByDescending { it.time })
-                .distinctBy { it.merchant }
-                .take(6)
-                .map { QuickRepeat(it.merchant, it.amount, it.category, it.type) }
             HomeUiState(
                 month = month,
                 expense = expense,
@@ -215,7 +175,8 @@ class HomeViewModel @Inject constructor(
                 projectedFen = health.projectedFen,
                 todayCapFen = todayCap,
                 todayDupes = health.todayDupes,
-                quickRepeats = quick,
+                pendingMerchants = follow.pending,
+                importFailures = follow.failures,
             )
         }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())

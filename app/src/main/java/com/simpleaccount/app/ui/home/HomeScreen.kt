@@ -69,7 +69,6 @@ fun HomeScreen(
     navController: NavHostController,
 ) {
     val state by viewModel.uiState.collectAsState()
-    val snack by viewModel.snack.collectAsState()
     var showBudgetDialog by remember { mutableStateOf(false) }
     var showInsight by remember { mutableStateOf(false) }
     var showLedgers by remember { mutableStateOf(false) }
@@ -121,7 +120,11 @@ fun HomeScreen(
                         Text(
                             "今天 " + state.todayDupes.joinToString("、") + "。点进流水核对一下。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { navController.navigate(Routes.LEDGER) }
+                                .padding(top = 2.dp)
                         )
                     }
                 }
@@ -182,32 +185,39 @@ fun HomeScreen(
                 }
             }
 
-            if (state.quickRepeats.isNotEmpty()) {
-                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                    Text(
-                        "再记一笔",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 20.dp, bottom = 6.dp)
-                    )
-                    Row(
-                        Modifier
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        state.quickRepeats.forEach { q ->
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier.clickable { viewModel.repeatQuick(q) }
-                            ) {
-                                Text(
-                                    "${q.merchant} ¥${MoneyUtil.fenToYuan(q.amount)}",
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                                )
-                            }
+            if (state.importFailures > 0 || state.pendingMerchants > 0) {
+                com.simpleaccount.app.ui.components.SoftCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Text(
+                            "导入之后",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (state.importFailures > 0) {
+                            Text(
+                                "${state.importFailures} 条没对上，点这里核对差缺",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { navController.navigate(Routes.IMPORT) }
+                                    .padding(top = 4.dp)
+                            )
+                        }
+                        if (state.pendingMerchants > 0) {
+                            Text(
+                                "${state.pendingMerchants} 个商家还没归类，点这里纠错",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { navController.navigate(Routes.MERCHANT_MANAGE) }
+                                    .padding(top = 4.dp)
+                            )
                         }
                     }
                 }
@@ -261,39 +271,6 @@ fun HomeScreen(
                                     )
                                 }
                             }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (snack != null) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(start = 16.dp, end = 88.dp, bottom = 20.dp)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.inverseSurface,
-                shadowElevation = 6.dp
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        snack!!,
-                        color = MaterialTheme.colorScheme.inverseOnSurface,
-                        fontSize = 13.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (snack!!.startsWith("已再记")) {
-                        TextButton(onClick = { viewModel.undoRepeat() }) {
-                            Text("撤销", color = MaterialTheme.colorScheme.inverseOnSurface)
-                        }
-                    } else {
-                        TextButton(onClick = { viewModel.dismissSnack() }) {
-                            Text("好", color = MaterialTheme.colorScheme.inverseOnSurface)
                         }
                     }
                 }

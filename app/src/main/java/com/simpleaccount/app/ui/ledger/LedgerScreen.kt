@@ -57,7 +57,7 @@ fun LedgerScreen(
     navController: NavHostController,
 ) {
     val state by viewModel.uiState.collectAsState()
-    val filter = state.filter
+    val filter by viewModel.filter.collectAsState()
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
 
     // 分组由 ViewModel 在后台线程算好，UI 直接用（不再 remember 里现算导致切页卡顿）
@@ -211,9 +211,10 @@ fun LedgerScreen(
                             )
                         }
                     } else {
-                        grouped.forEach { (month, rows) ->
+                        grouped.forEach { g ->
+                            val month = g.month
+                            val rows = g.rows
                             item(key = "h_$month") {
-                                // 月份横幅
                                 Row(
                                     Modifier
                                         .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -222,7 +223,7 @@ fun LedgerScreen(
                                         .padding(horizontal = 12.dp, vertical = 5.dp)
                                 ) {
                                     Text(
-                                        "$month · ${rows.size} 笔",
+                                        "$month · ${rows.size} 笔 · 支 ¥${com.simpleaccount.app.util.MoneyUtil.fenToYuan(g.expenseFen)}",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
