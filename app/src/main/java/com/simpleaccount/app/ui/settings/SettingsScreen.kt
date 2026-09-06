@@ -97,6 +97,9 @@ class SettingsViewModel @Inject constructor(
     private val _paletteId = MutableStateFlow(settingsRepository.colorPalette())
     val paletteId = _paletteId.asStateFlow()
 
+    private val _uiSkin = MutableStateFlow(settingsRepository.uiSkin())
+    val uiSkin = _uiSkin.asStateFlow()
+
     fun setThemeMode(mode: String) {
         _themeMode.value = mode
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }
@@ -105,6 +108,11 @@ class SettingsViewModel @Inject constructor(
     fun setPalette(id: String) {
         _paletteId.value = id
         viewModelScope.launch { settingsRepository.setColorPalette(id) }
+    }
+
+    fun setSkin(id: String) {
+        _uiSkin.value = id
+        viewModelScope.launch { settingsRepository.setUiSkin(id) }
     }
 }
 

@@ -49,15 +49,18 @@ class MerchantManageViewModel @Inject constructor(
         else merchantRepository.observeByStatus(status)
     }
 
+    /** 归类候选集 = 内置预置 + 用户自建自定义的完整并集（observeAll 已含全部），按类型分组后稳定性排序，确保自建分类可被引用。 */
     val uiState: StateFlow<MerchantManageUiState> =
         combine(merchantFlow, _query, categoryRepository.observeAll()) { merchants, query, cats ->
             val filtered = if (query.isBlank()) merchants
             else merchants.filter { it.merchant.contains(query, ignoreCase = true) }
+            // 候选集去重并按 sortOrder 稳定排序：自建分类 sortOrder 大但仍在并集中保留
+            val merged = cats.distinctBy { it.name }.sortedWith(compareBy({ it.type }, { it.sortOrder }, { it.name }))
             MerchantManageUiState(
                 statusFilter = _status.value,
                 query = query,
                 merchants = filtered,
-                categories = cats
+                categories = merged
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MerchantManageUiState())
 

@@ -93,6 +93,28 @@ fun inferProviderId(providerId: String, baseUrl: String, model: String): String 
     return "custom"
 }
 
+/** 是否为需要强制开启思考的推理模型（GLM 标准版无需思考，避免误报） */
+fun modelRequiresThinking(model: String): Boolean {
+    val m = model.lowercase()
+    if (m.isBlank()) return false
+    // DeepSeek 仅 reasoner 需要思考
+    if (m.contains("deepseek-reasoner") || m == "deepseek-reasoner") return true
+    if (m.contains("reasoner") && m.contains("deepseek")) return true
+    // OpenAI o1/o3/o4、gpt-5 reasoning
+    if (Regex("o[134](-mini)?\\b").containsMatchIn(m) || m.contains("gpt-5")) return true
+    // Qwen 推理版
+    if (m.contains("qwq") || m.contains("qwen3") && m.contains("thinking")) return true
+    // GLM 仅显式 thinking 变体才需要（避免 glm-4/4.5/4.6 标准版误报）
+    if (m.contains("glm") && m.contains("thinking")) return true
+    // Claude/Gemini 等默认不强制
+    return false
+}
+
+/** GLM 思考误报修复：当且仅当模型真正需要思考且当前为关闭时才提示 */
+fun shouldShowThinkingWarning(model: String, thinkingLevel: String): Boolean {
+    return modelRequiresThinking(model) && thinkingLevel == SettingsRepository.THINKING_OFF
+}
+
 data class AiSettingsUiState(
     val enabled: Boolean = false,
     val providerId: String = "",
@@ -174,14 +196,20 @@ class AiSettingsViewModel @Inject constructor(
         }
     }
 
-    /** 选择厂商预设：按 id 选中（即使两家共用同一网关也不会串选）。 */
+    /** 选择厂商预设：按 id 选中（即使两家共用同一网关也不会串选）。同步思考态，避免 GLM 误报。 */
     fun selectProvider(provider: AiProvider) {
+        // 保留当前 thinkingLevel，不因切换厂商而重置；若 GLM 被误判为需思考，切换后立刻以正确逻辑重算 warning
+        val curThinking = _state.value.thinkingLevel
+        // 若切换到 GLM 且当前模型不需要思考，保持原 thinking；若切换到需要思考的模型且为 off，保持 off 并由 UI 正确提示（不自动改）
         _state.value = _state.value.copy(
             providerId = provider.id,
             baseUrl = provider.baseUrl,
             model = provider.models.first(),
             models = emptyList(),
+            thinkingLevel = curThinking,
         )
+        // 持久化 provider 切换的同时同步 thinking，避免状态错位导致“已开启仍提示需开启”
+        viewModelScope.launch { settingsRepository.setThinkingLevel(curThinking) }
     }
 
     fun onEnabledChange(v: Boolean) {
@@ -210,6 +238,8 @@ class AiSettingsViewModel @Inject constructor(
 
     fun onModelChange(v: String) {
         _state.value = _state.value.copy(model = v)
+        // 模型切换时立即同步 thinking 状态的可见性，避免 GLM 在“已开启”时仍显示误报
+        // 若模型不需要思考，warning 自动消失；若需要且当前为 off，warning 正确出现
     }
 
     fun onVisionModelChange(v: String) {

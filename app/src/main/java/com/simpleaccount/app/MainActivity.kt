@@ -33,12 +33,13 @@ class MainActivity : ComponentActivity() {
             // 外观模式：跟随系统 / 浅色 / 深色（设置里可切换，即时生效）
             val themeMode by settingsRepository.themeModeFlow.collectAsState()
             val paletteId by settingsRepository.colorPaletteFlow.collectAsState()
+            val uiSkin by settingsRepository.uiSkinFlow.collectAsState()
             val darkTheme = when (themeMode) {
                 SettingsRepository.THEME_LIGHT -> false
                 SettingsRepository.THEME_DARK -> true
                 else -> isSystemInDarkTheme()
             }
-            SimpleAccountTheme(darkTheme = darkTheme, paletteId = paletteId) {
+            SimpleAccountTheme(darkTheme = darkTheme, paletteId = paletteId, uiSkinId = uiSkin) {
                 SimpleAccountNavHost()
             }
         }

@@ -83,6 +83,12 @@ class SettingsRepository @Inject constructor(
 
         const val KEY_CURRENT_LEDGER = "current_ledger_id"
 
+        /** 顶级 UI 视觉方案：default / glass(液态玻璃) / depth(3D景深) */
+        const val KEY_UI_SKIN = "ui_skin"
+        const val SKIN_DEFAULT = "default"
+        const val SKIN_GLASS = "glass"
+        const val SKIN_DEPTH = "depth"
+
         /** 思考深度：off / low / medium / high */
         const val KEY_DATE_PICKER = "date_picker_style"
         const val KEY_TIME_PICKER = "time_picker_style"
@@ -290,6 +296,29 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun setThinkingLevel(level: String) = setSetting(KEY_THINKING_LEVEL, level)
+
+    // ---------------- 顶级 UI 视觉方案 ----------------
+
+    private val _uiSkin = MutableStateFlow(uiSkin())
+    val uiSkinFlow: StateFlow<String> = _uiSkin.asStateFlow()
+
+    fun uiSkin(): String {
+        val v = readSetting(KEY_UI_SKIN)
+        return when (v) {
+            SKIN_GLASS -> SKIN_GLASS
+            SKIN_DEPTH -> SKIN_DEPTH
+            else -> SKIN_DEFAULT
+        }
+    }
+
+    suspend fun setUiSkin(skin: String) {
+        val norm = when (skin) {
+            SKIN_GLASS, SKIN_DEPTH -> skin
+            else -> SKIN_DEFAULT
+        }
+        setSetting(KEY_UI_SKIN, norm)
+        _uiSkin.value = norm
+    }
 
     private suspend fun setSetting(key: String, value: String) = withContext(Dispatchers.IO) {
         settingDao.insert(Setting(key, value))

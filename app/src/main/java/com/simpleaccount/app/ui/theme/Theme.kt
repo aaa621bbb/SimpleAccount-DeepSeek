@@ -29,7 +29,7 @@ object AppColors {
     val Cream = Color(0xFFFFFFFF)
 }
 
-private val AppShapes = Shapes(
+private val DefaultShapes = Shapes(
     extraSmall = RoundedCornerShape(10.dp),
     small = RoundedCornerShape(14.dp),
     medium = RoundedCornerShape(18.dp),
@@ -37,22 +37,58 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
+private val GlassShapes = Shapes(
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(16.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(28.dp),
+    extraLarge = RoundedCornerShape(36.dp),
+)
+
+private val DepthShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(24.dp),
+)
+
 @Composable
 fun SimpleAccountTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     paletteId: String = ColorPalettes.DEFAULT_ID,
+    uiSkinId: String = UiSkin.DEFAULT.id,
     content: @Composable () -> Unit,
 ) {
     val pal = ColorPalettes.byId(paletteId)
+    val skin = UiSkin.from(uiSkinId)
+    val tokens = UiTokens.tokensFor(skin)
+    val shapes = when (skin) {
+        UiSkin.GLASS -> GlassShapes
+        UiSkin.DEPTH -> DepthShapes
+        else -> DefaultShapes
+    }
     val reduceMotion = rememberReduceMotion()
+    // 针对玻璃拟态：surface 适度透一点，深色下更通透；并非仅表皮，按钮、卡片、输入框都会读取 LocalUiSkin
+    val scheme = if (darkTheme) pal.dark else pal.light
+    val skinnedScheme = when (skin) {
+        UiSkin.GLASS -> scheme.copy(
+            surface = scheme.surface.copy(alpha = if (darkTheme) 0.82f else 0.92f),
+            surfaceVariant = scheme.surfaceVariant.copy(alpha = if (darkTheme) 0.78f else 0.88f),
+            background = scheme.background.copy(alpha = 1f)
+        )
+        UiSkin.DEPTH -> scheme // 保持实色，靠阴影表达层次
+        else -> scheme
+    }
     CompositionLocalProvider(
         LocalAppPalette provides pal,
         LocalReduceMotion provides reduceMotion,
-        LocalTokens provides Tokens.Default,
+        LocalTokens provides tokens,
+        LocalUiSkin provides skin,
     ) {
         MaterialTheme(
-            colorScheme = if (darkTheme) pal.dark else pal.light,
-            shapes = AppShapes,
+            colorScheme = skinnedScheme,
+            shapes = shapes,
             typography = AppTypography,
             content = content,
         )

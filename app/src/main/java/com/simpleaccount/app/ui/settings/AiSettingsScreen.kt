@@ -282,6 +282,40 @@ fun AiSettingsScreen(
                     )
                 }
             }
+            // GLM 思考态误报修复：仅当模型真正需要思考且当前为关闭时才提示；GLM 标准版不误报
+            val showWarning = shouldShowThinkingWarning(state.model, state.thinkingLevel)
+            if (showWarning) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("该模型建议开启思考", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Text("检测到 ${state.model} 需要思考才能稳定调用工具，请将思考切到 低/中/高。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+                        }
+                    }
+                }
+            } else {
+                // 已开启或无需思考的正向反馈，消除“已开启仍提示”的误导
+                Spacer(Modifier.height(8.dp))
+                val msg = when {
+                    state.thinkingLevel != SettingsRepository.THINKING_OFF && modelRequiresThinking(state.model) ->
+                        "✓ 已开启思考（${state.thinkingLevel}），${state.model} 将携带思考参数"
+                    state.providerId == "glm" && state.thinkingLevel == SettingsRepository.THINKING_OFF ->
+                        "GLM 标准模型无需强制思考，当前关闭为正常（非误报）"
+                    state.thinkingLevel != SettingsRepository.THINKING_OFF ->
+                        "已开启思考，模型将输出推理过程"
+                    else -> null
+                }
+                if (msg != null) {
+                    Text(msg, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp)).padding(8.dp))
+                }
+            }
             Spacer(Modifier.height(12.dp))
             // --------- 截图记账（识图）：主模型优先 + 独立配置兜底 ---------
             Row(

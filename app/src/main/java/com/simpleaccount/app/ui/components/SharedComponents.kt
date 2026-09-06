@@ -2,6 +2,7 @@ package com.simpleaccount.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,22 +38,49 @@ import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.IconMapper
 import com.simpleaccount.app.util.MoneyUtil
 
-/** 统一卡片：令牌圆角 + 轻投影（左上光源）+ 发丝描边。全 App 只用这一张。 */
+/** 统一卡片：令牌圆角 + 轻投影（左上光源）+ 发丝描边。全 App 只用这一张。已下沉皮肤：玻璃/立体分别呈现通透与压差。 */
 @Composable
 fun SoftCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    val skin = com.simpleaccount.app.ui.theme.LocalUiSkin.current
+    val isGlass = skin == com.simpleaccount.app.ui.theme.UiSkin.GLASS
+    val isDepth = skin == com.simpleaccount.app.ui.theme.UiSkin.DEPTH
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(t.radiusXl),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = t.elevRaised),
-        border = BorderStroke(t.hairline, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+        colors = CardDefaults.cardColors(
+            containerColor = when (skin) {
+                com.simpleaccount.app.ui.theme.UiSkin.GLASS -> MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                else -> MaterialTheme.colorScheme.surface
+            }
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = when (skin) {
+                com.simpleaccount.app.ui.theme.UiSkin.GLASS -> 0.dp
+                com.simpleaccount.app.ui.theme.UiSkin.DEPTH -> t.elevRaised + 4.dp
+                else -> t.elevRaised
+            }
+        ),
+        border = BorderStroke(
+            t.hairline,
+            when (skin) {
+                com.simpleaccount.app.ui.theme.UiSkin.GLASS -> com.simpleaccount.app.ui.theme.UiTokens.glassBorderColor(
+                    MaterialTheme.colorScheme.surface == androidx.compose.ui.graphics.Color.White || MaterialTheme.colorScheme.surface.luminance() > 0.5f
+                )
+                com.simpleaccount.app.ui.theme.UiSkin.DEPTH -> MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+            }
+        )
     ) {
         Column(content = content)
     }
+}
+
+private fun androidx.compose.ui.graphics.Color.luminance(): Float {
+    return (0.299f * red + 0.587f * green + 0.114f * blue)
 }
 
 /** 分类彩色圆底 + 图标 */
@@ -79,7 +107,7 @@ fun CategoryIconCircle(
     }
 }
 
-/** 单条流水行：商家主标题、分类次级、金额强调，与首页卡片同一信息层级。 */
+/** 单条流水行：商家主标题、分类次级、金额强调，与首页卡片同一信息层级。皮肤下沉：玻璃为羽化描边，立体为压差阴影。 */
 @Composable
 fun TransactionRow(
     transaction: Transaction,
@@ -88,6 +116,7 @@ fun TransactionRow(
     showDate: Boolean = true,
 ) {
     val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    val skin = com.simpleaccount.app.ui.theme.LocalUiSkin.current
     val accent = parseColor(category?.colorHex ?: "#BDC3C7")
     val title = transaction.merchant.ifBlank { category?.name ?: "未分类" }
     val secondary = buildList {
@@ -95,9 +124,19 @@ fun TransactionRow(
         if (catName.isNotBlank() && catName != title) add(catName)
         if (transaction.product.isNotBlank()) add(transaction.product)
     }.joinToString(" · ")
+    val rowBg = when (skin) {
+        com.simpleaccount.app.ui.theme.UiSkin.GLASS -> Modifier.background(
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.55f), RoundedCornerShape(t.radiusMd)
+        ).border(0.5.dp, com.simpleaccount.app.ui.theme.UiTokens.glassBorderColor(true), RoundedCornerShape(t.radiusMd))
+        com.simpleaccount.app.ui.theme.UiSkin.DEPTH -> Modifier
+            .clip(RoundedCornerShape(t.radiusMd))
+            .background(MaterialTheme.colorScheme.surface)
+        else -> Modifier
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(rowBg)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = t.space16, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically

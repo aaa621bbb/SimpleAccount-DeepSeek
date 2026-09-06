@@ -58,6 +58,7 @@ import kotlin.math.sin
 /**
  * 经典表盘时钟：指针跟手旋转，松手后吸附到整分并带轻微阻尼回弹。
  * 指针用 [graphicsLayer] 旋转，表盘静态 Canvas，不改 layout。
+ * 已修复误触：分钟在外环(>55%半径)，小时在内盘(<35%半径)，中间38-52%为缓冲不触发，避免拨分针时误跳时针。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,7 +86,7 @@ fun AnalogClockSheet(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "选时间 · 2.18 圆盘",
+                    "选时间 · 同心表盘",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
@@ -103,6 +104,12 @@ fun AnalogClockSheet(
                 modifier = Modifier.semantics {
                     contentDescription = "当前时间 %02d点%02d分".format(hour, minute)
                 },
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "外环拨分 · 内盘调时 · 中间缓冲不触发",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(4.dp))
             AnalogClockFace(
@@ -163,7 +170,6 @@ fun AnalogClockFace(
     var dragging by remember { mutableStateOf<ClockHand?>(null) }
     var lastMinute by remember { mutableIntStateOf(minute) }
 
-    // 外部（「现在」按钮）改值时，非拖动状态下弹簧跟上
     androidx.compose.runtime.LaunchedEffect(hour, minute, dragging) {
         if (dragging != null) return@LaunchedEffect
         val targetM = minute * 6f
@@ -186,14 +192,17 @@ fun AnalogClockFace(
 
     Box(
         modifier
-            .size(252.dp)
-            .semantics { contentDescription = "表盘时钟，拖动指针设置时间" },
+            .size(260.dp)
+            .semantics { contentDescription = "表盘时钟，外环拨分内盘调时，减少误触" },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(252.dp)) {
+        Canvas(Modifier.size(260.dp)) {
             val r = minOf(size.width, size.height) / 2f
             val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(color = face, radius = r)
+            // 分区间视觉：内盘小时区（淡）、外环分钟区（更明显刻度）
+            drawCircle(color = tickMuted.copy(alpha = 0.12f), radius = r * 0.38f, center = c)
+            drawCircle(color = tickMuted.copy(alpha = 0.08f), radius = r * 0.55f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f))
             for (i in 0 until 60) {
                 val a = Math.toRadians(i * 6.0 - 90.0)
                 val major = i % 5 == 0
@@ -208,9 +217,10 @@ fun AnalogClockFace(
                     cap = StrokeCap.Round,
                 )
             }
+            // 中心与分区提示
+            drawCircle(color = accent.copy(alpha = 0.12f), radius = 4.dp.toPx(), center = c)
         }
 
-        // 时针：graphicsLayer 旋转，合成器线程
         ClockHandView(
             lengthFraction = 0.48f,
             widthDp = 6f,
@@ -242,18 +252,25 @@ fun AnalogClockFace(
                         val dist = hypot(dx, dy)
                         val r = minOf(size.width, size.height) / 2f
                         val angle = angleFrom12(dx, dy)
-                        if (dist > r * 0.28f) {
-                            val m = ((angle / 6f).roundToInt() + 60) % 60
-                            onChangeRef.value(hourRef.value, m)
-                        } else {
-                            val h12 = ((angle / 30f).roundToInt() + 12) % 12
-                            val curH = hourRef.value
-                            val h = if (curH >= 12) {
-                                if (h12 == 0) 12 else h12 + 12
-                            } else {
-                                if (h12 == 0) 0 else h12
-                            }.coerceIn(0, 23)
-                            onChangeRef.value(h, minuteRef.value)
+                        // 分区判定：外环>55%为分钟，内盘<35%为小时，中间缓冲不触发
+                        when {
+                            dist > r * 0.55f -> {
+                                val m = ((angle / 6f).roundToInt() + 60) % 60
+                                onChangeRef.value(hourRef.value, m)
+                            }
+                            dist < r * 0.35f -> {
+                                val h12 = ((angle / 30f).roundToInt() + 12) % 12
+                                val curH = hourRef.value
+                                val h = if (curH >= 12) {
+                                    if (h12 == 0) 12 else h12 + 12
+                                } else {
+                                    if (h12 == 0) 0 else h12
+                                }.coerceIn(0, 23)
+                                onChangeRef.value(h, minuteRef.value)
+                            }
+                            else -> {
+                                // 缓冲区：不处理，避免误触
+                            }
                         }
                     }
                 }
@@ -266,8 +283,11 @@ fun AnalogClockFace(
                             val dy = offset.y - cy
                             val dist = hypot(dx, dy)
                             val r = minOf(size.width, size.height) / 2f
-                            // 外圈更大：半径 28% 以外都算分针，点到即命中
-                            dragging = if (dist > r * 0.28f) ClockHand.Minute else ClockHand.Hour
+                            dragging = when {
+                                dist > r * 0.55f -> ClockHand.Minute
+                                dist < r * 0.35f -> ClockHand.Hour
+                                else -> null // 缓冲区不开始拖动
+                            }
                             lastMinute = minuteRef.value
                         },
                         onDragEnd = {
@@ -343,23 +363,21 @@ private fun ClockHandView(
 ) {
     Box(
         Modifier
-            .size(252.dp)
+            .size(260.dp)
             .graphicsLayer { rotationZ = rotation },
         contentAlignment = Alignment.TopCenter,
     ) {
-        // 从圆心向上伸出。pivot 默认中心，rotationZ 走 compositor。
-        Spacer(Modifier.height((252.dp * (1f - lengthFraction) / 2f)))
+        Spacer(Modifier.height((260.dp * (1f - lengthFraction) / 2f)))
         Box(
             Modifier
                 .width(widthDp.dp)
-                .height(252.dp * lengthFraction / 2f)
+                .height(260.dp * lengthFraction / 2f)
                 .clip(RoundedCornerShape(50))
                 .background(color),
         )
     }
 }
 
-/** 12 点为 0°，顺时针为正。 */
 private fun angleFrom12(dx: Float, dy: Float): Float {
     val deg = Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())).toFloat()
     return (deg + 360f) % 360f

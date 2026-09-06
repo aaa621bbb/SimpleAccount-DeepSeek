@@ -283,8 +283,12 @@ fun TimeOrbitSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -
                             val r = kotlin.math.hypot(dx, dy)
                             val ang = ((Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360) % 360).toFloat()
                             val maxR = minOf(size.width, size.height) / 2f
-                            if (r > maxR * 0.62f) minute = ((ang / 6f).roundToInt() + 60) % 60
-                            else hour = ((ang / 15f).roundToInt() + 24) % 24
+                            // 修复误触：外环>55%为分，内环<35%为时，中间缓冲不触发
+                            when {
+                                r > maxR * 0.55f -> minute = ((ang / 6f).roundToInt() + 60) % 60
+                                r < maxR * 0.35f -> hour = ((ang / 15f).roundToInt() + 24) % 24
+                                else -> Unit
+                            }
                         }
                     }
                     .pointerInput(Unit) {
@@ -296,8 +300,11 @@ fun TimeOrbitSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -
                             val r = kotlin.math.hypot(dx, dy)
                             val ang = ((Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360) % 360).toFloat()
                             val maxR = minOf(size.width, size.height) / 2f
-                            if (r > maxR * 0.62f) minute = ((ang / 6f).roundToInt() + 60) % 60
-                            else hour = ((ang / 15f).roundToInt() + 24) % 24
+                            when {
+                                r > maxR * 0.55f -> minute = ((ang / 6f).roundToInt() + 60) % 60
+                                r < maxR * 0.35f -> hour = ((ang / 15f).roundToInt() + 24) % 24
+                                else -> Unit
+                            }
                         }
                     },
                 contentAlignment = Alignment.Center,
