@@ -15,27 +15,39 @@ object DateResolver {
     fun today(): LocalDate = LocalDate.now()
 
     /**
-     * 「上午/下午/晚上/8点」→ HH:mm。没有钟点时给该时段的默认时刻，避免「时间未知」。
+     * 「上午/下午/晚上/8点/昨天」→ HH:mm。
+     * 没有钟点时给该时段默认时刻；今天/昨天/前天且无钟点 → 12:00。
+     * 禁止把相对词当成「时间未知」。
      */
     fun parseTimeText(raw: String?): String? {
         val s = raw?.trim() ?: return null
-        if (s.isEmpty() || s == "未知" || s == "时间未知" || s.equals("null", true)) return null
+        if (s.isEmpty() || s.equals("null", true) || s == "-" || s == "无" || s == "none") return null
+        val cleaned = s.replace("未知", "").replace("时间未知", "").replace("日期未知", "").trim()
+        if (cleaned.isEmpty()) return null
 
-        Regex("""(\d{1,2})[:：点时](\d{1,2})?""").find(s)?.let { m ->
+        Regex("""(\d{1,2})[:：点时](\d{1,2})?""").find(cleaned)?.let { m ->
             var h = m.groupValues[1].toIntOrNull() ?: return@let
             val min = m.groupValues[2].toIntOrNull() ?: 0
             if (h > 23 || min > 59) return@let
-            val ctx = s.substring(0, m.range.first)
-            if (h < 12 && (ctx.contains("下午") || ctx.contains("晚上") || ctx.contains("傍晚") ||
-                    ctx.contains("夜里") || ctx.contains("夜间") || ctx.contains("今晚"))) {
-                h += 12
-            }
-            if (h == 12 && (ctx.contains("凌晨") || ctx.contains("午夜"))) h = 0
+            val pm = cleaned.contains("下午") || cleaned.contains("晚上") || cleaned.contains("傍晚") ||
+                cleaned.contains("夜里") || cleaned.contains("夜间") || cleaned.contains("今晚")
+            if (h < 12 && pm) h += 12
+            if (h == 12 && (cleaned.contains("凌晨") || cleaned.contains("午夜"))) h = 0
             return "%02d:%02d".format(h.coerceIn(0, 23), min)
         }
 
-        parseChineseHour(s)?.let { return it }
-        return periodDefault(s)
+        parseChineseHour(cleaned)?.let { return it }
+        periodDefault(cleaned)?.let { return it }
+        if (Regex("今天|今日|昨天|昨日|前天|大前天").containsMatchIn(cleaned)) return "12:00"
+        return null
+    }
+
+    /** 识图专用：多个字段拼起来解析，最终总能给出 HH:mm，不再回「时间未知」。 */
+    fun resolveTimeOrPeriod(vararg parts: String?): String {
+        val joined = parts.mapNotNull { it?.trim()?.takeIf { t -> t.isNotEmpty() } }.joinToString(" ")
+        parseTimeText(joined)?.let { return it }
+        periodDefault(joined)?.let { return it }
+        return "12:00"
     }
 
     fun periodDefault(s: String): String? = when {
@@ -62,7 +74,7 @@ object DateResolver {
             m.groupValues[3].isNotBlank() -> m.groupValues[3].toIntOrNull() ?: 0
             else -> 0
         }
-        if (h < 12 && (s.contains("下午") || s.contains("晚上") || s.contains("傍晚") || s.contains("夜里"))) h += 12
+        if (h < 12 && (s.contains("下午") || s.contains("晚上") || s.contains("傍晚") || s.contains("夜里") || s.contains("夜间") || s.contains("今晚"))) h += 12
         if (h == 12 && (s.contains("凌晨") || s.contains("午夜"))) h = 0
         return "%02d:%02d".format(h.coerceIn(0, 23), min.coerceIn(0, 59))
     }

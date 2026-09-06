@@ -472,7 +472,7 @@ class AiViewModel @Inject constructor(
 [{"date":"日期列原文","time":"HH:mm","merchant":"商家或交易对象","product":"商品说明，可省略","amount":6.5,"type":"expense"}]
 规则：
 1. date 照抄截图日期列原文（今天/昨天/2026-08-30/8月30日 等），不要自己编年份。
-2. time 用 24 小时制。下午8:15 → 20:15。没有钟点可空。
+2. time 必须填 HH:mm。下午8:15 → 20:15。只有「上午/下午/晚上/早上/中午」分别填 09:00/15:00/20:00/08:00/12:00。今天/昨天/前天没有钟点填 12:00。禁止输出「时间未知」或空 time。
 3. 商家名完整抄写，不要截断、不要补「公司」。
 4. amount 是元（不是分）。截图写 -50.00 / ¥50 / 50元 都写成 50。type：支出 expense、收入 income。
 5. 重叠行只输出一次。看不清的字段留空，但 amount 能读就必须输出这一笔。
@@ -572,7 +572,8 @@ class AiViewModel @Inject constructor(
                     ScreenshotItemUi(
                         // 预览保留可空 date：识别不出时让用户看见"日期未知"，确认入账时才落今天
                         date = item.date, merchant = merchant, product = item.product,
-                        amount = item.amount, type = item.type, time = item.time,
+                        amount = item.amount, type = item.type,
+                        time = com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(item.time, item.date),
                         duplicate = duplicate, selected = !duplicate,
                     )
                 )
@@ -660,7 +661,7 @@ class AiViewModel @Inject constructor(
                         type = item.type,
                         category = category,
                         date = date,
-                        time = item.time ?: "",
+                        time = com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(item.time, item.date),
                         merchant = item.merchant,
                         product = item.product ?: "",
                         source = com.simpleaccount.app.data.entity.Transaction.SOURCE_MANUAL,
@@ -668,12 +669,12 @@ class AiViewModel @Inject constructor(
                 )
                 existingTxs = existingTxs + com.simpleaccount.app.data.entity.Transaction(
                     amount = amountFen, type = item.type, category = category, date = date,
-                    time = item.time ?: "", merchant = item.merchant, product = item.product ?: "",
+                    time = com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(item.time, item.date), merchant = item.merchant, product = item.product ?: "",
                     source = com.simpleaccount.app.data.entity.Transaction.SOURCE_MANUAL, id = id
                 )
                 recorded++
                 val dir = if (item.type == com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME) "收入" else "支出"
-                lines.add("- ✅ (流水号:$id) $dir ${"%.2f".format(item.amount)}元 · ${item.merchant.ifBlank { "未记商家" }} · $category · $date ${item.time ?: ""}")
+                lines.add("- ✅ (流水号:$id) $dir ${"%.2f".format(item.amount)}元 · ${item.merchant.ifBlank { "未记商家" }} · $category · $date ${com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(item.time, item.date)}")
             }
             _state.value = _state.value.copy(screenshotPending = null)
             refreshPendingCount()
@@ -816,7 +817,10 @@ class AiViewModel @Inject constructor(
         val type = if (typeRaw.contains("income") || typeRaw.contains("收入"))
             com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
         else com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE
-        return ExtractedTx(date, merchant, product, amount, type, parseTimeText(timeRaw))
+        return ExtractedTx(
+            date, merchant, product, amount, type,
+            com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(timeRaw, dateRaw, merchant, product),
+        )
     }
 
     private fun parseExtractedLoose(text: String): List<ExtractedTx> {

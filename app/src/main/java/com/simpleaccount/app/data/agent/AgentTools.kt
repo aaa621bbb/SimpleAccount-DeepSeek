@@ -40,14 +40,15 @@ class AgentTools @Inject constructor(
     val specs: List<AgentToolSpec> = listOf(
         AgentToolSpec(
             name = "query_transactions",
-            description = "查询账本交易明细。可按月份(yyyy-MM)、收支类型、分类、商家/商品关键词筛选用；全部留空则返回最近50条。返回每条记录：日期/收支/金额/分类/商家/商品。",
+            description = "查询账本交易明细。可按月份/类型/分类/商家筛。默认返回 100 条，最大 500。超过一页用 offset 翻页。批量改分类不必把 500 条 ids 抄完，直接 reclassify_transactions(merchant/from_category)。",
             parameters = mapOf(
                 "month" to ("string" to "月份，格式 yyyy-MM，例如 2026-03；也接受「本月/上个月」；空则不限月份"),
                 "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天」。与 month 同时出现时优先用 date"),
                 "type" to ("string" to "'expense' 支出 或 'income' 收入；空则不限"),
                 "category" to ("string" to "分类名，例如 餐饮；空则不限"),
                 "keyword" to ("string" to "商家或商品关键词，用于搜索；空则不限"),
-                "limit" to ("integer" to "最多返回条数，默认50，最大200"),
+                "limit" to ("integer" to "最多返回条数，默认100，最大500"),
+                "offset" to ("integer" to "跳过前 N 条，默认0，用于翻到第 101–500 笔"),
             ),
             required = emptyList(),
         ),
@@ -134,7 +135,7 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "reclassify_transactions",
-            description = "把选定的若干笔改到新分类（对象级/选择集），调用后立刻写库。优先传 ids。也可 merchant + amount（元）只改该商家下这一笔金额；其余用第二次调用（不带 amount）。匹配超过 30 笔且无 ids 会拒绝。不要用 classify_merchants（那会改该商家全部历史和映射）。禁止口头说已完成而不调用本工具。",
+            description = "把选定的若干笔改到新分类，调用后立刻写库并返回 rows_affected。优先 ids；也可 merchant / from_category / amount / month。筛选命中最多 800 笔。禁止口头说已完成。rows_affected=0 就是失败。",
             parameters = mapOf(
                 "ids" to ("string" to "流水号，逗号或空格分隔，例如 12,15,18"),
                 "category" to ("string" to "目标分类，必须是现有分类之一"),
@@ -393,7 +394,8 @@ class AgentTools @Inject constructor(
         val type = a.optString("type").trim().lowercase()
         val category = a.optString("category").trim()
         val keyword = a.optString("keyword").trim()
-        val limit = a.optInt("limit", 50).coerceIn(1, 200)
+        val limit = a.optInt("limit", 100).coerceIn(1, 500)
+        val offset = a.optInt("offset", 0).coerceAtLeast(0)
 
         val typeFilter = when (type) {
             "expense", "支出" -> Transaction.TYPE_EXPENSE
@@ -414,14 +416,13 @@ class AgentTools @Inject constructor(
             .sortedByDescending { it.date }
             .toList()
         val total = matched.size
-        val all = matched.take(limit)
+        val all = matched.drop(offset).take(limit)
 
-        if (all.isEmpty()) return "没有找到符合条件的交易记录。"
+        if (all.isEmpty()) return "没有找到符合条件的交易记录。total=$total offset=$offset"
         val sb = StringBuilder()
-        if (total > all.size) {
-            sb.appendLine("符合条件的交易共 $total 条，以下为最近 ${all.size} 条（仅为部分数据，不代表全部）：")
-        } else {
-            sb.appendLine("符合条件的交易 ${all.size} 条：")
+        sb.appendLine("total=$total offset=$offset returned=${all.size}（批量改分类请直接 reclassify_transactions，不必抄完全部流水号）")
+        if (total > offset + all.size) {
+            sb.appendLine("还有 ${total - offset - all.size} 条，下一页 offset=${offset + all.size}。")
         }
         all.forEach { t ->
             val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
@@ -561,8 +562,10 @@ class AgentTools @Inject constructor(
                 source = Transaction.SOURCE_MANUAL,
             )
         )
+        val stored = accountRepository.getById(id)
+        if (stored == null) return "失败 rows_affected=0。记账后读库失败（流水号 $id）。"
         val dir = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已记账（流水号 $id）：$dir ${MoneyUtil.fenToYuan(amountFen)} 元 · " +
+        return "【账本已核验】rows_affected=1 已记账（流水号 $id）：$dir ${MoneyUtil.fenToYuan(amountFen)} 元 · " +
             listOf(merchant, product, category, date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
@@ -576,8 +579,11 @@ class AgentTools @Inject constructor(
             accountRepository.getAll().maxByOrNull { it.id }
         } ?: return if (id > 0) "没有找到流水号 $id 的记录（可能已删除）。" else "账本是空的，没有可撤回的。"
         accountRepository.delete(t.id)
+        if (accountRepository.getById(t.id) != null) {
+            return "失败 rows_affected=0。流水号 ${t.id} 删除后仍在账本。"
+        }
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已撤回流水号 ${t.id}：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
+        return "【账本已核验】rows_affected=1 已撤回流水号 ${t.id}：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
             listOf(t.merchant, t.product, t.category, t.date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
@@ -605,9 +611,13 @@ class AgentTools @Inject constructor(
         if (category !in valid) return "参数错误：分类「$category」不存在，可用分类：${valid.joinToString("、")}。"
         val t = accountRepository.getById(id) ?: return "没有找到流水号 $id 的记录。"
         accountRepository.update(t.copy(category = category, updatedAt = System.currentTimeMillis()))
+        val now = accountRepository.getById(id)
+        if (now == null || now.category != category) {
+            return "失败 rows_affected=0。流水号 $id 写库后核验不是「$category」。"
+        }
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已把流水号 $id 的分类从「${t.category}」改为「$category」：" +
-            "$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · ${t.merchant.ifBlank { t.product.ifBlank { t.date } }}。该商家其他账单未受影响。"
+        return "【账本已核验】rows_affected=1 流水号 $id 从「${t.category}」改为「$category」：" +
+            "$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · ${t.merchant.ifBlank { t.product.ifBlank { t.date } }}。"
     }
 
     private fun parseIds(a: JSONObject): List<Long> {
@@ -687,12 +697,12 @@ class AgentTools @Inject constructor(
         val merchant = a.optString("merchant").trim()
         val fromCat = a.optString("from_category").trim()
         if (ids.isEmpty() && merchant.isEmpty() && fromCat.isEmpty()) {
-            return "请提供流水号 ids，或商家+原分类。不要整本账一刀切。"
+            return "失败 rows_affected=0。请提供流水号 ids，或商家/原分类。不要整本账一刀切。"
         }
         val targets = matchReclassify(a)
-        if (targets.isEmpty()) return "没有匹配的账单。"
-        if (ids.isEmpty() && targets.size > 30) {
-            return "匹配 ${targets.size} 笔，太多。请先 query_transactions 拿到流水号，把要改的 ids 传给我（例如 12,15,18）。classify_merchants 会改该商家全部历史，这里不用。"
+        if (targets.isEmpty()) return "失败 rows_affected=0。没有匹配的账单。"
+        if (ids.isEmpty() && targets.size > 800) {
+            return "失败 rows_affected=0。匹配 ${targets.size} 笔超过 800。请加 month/from_category/amount 收窄，或分批传 ids。"
         }
         var n = 0
         targets.forEach {
@@ -704,12 +714,15 @@ class AgentTools @Inject constructor(
         val verified = targets.mapNotNull { accountRepository.getById(it.id) }
         val mismatch = verified.filter { it.category != category }
         if (mismatch.isNotEmpty()) {
-            return "写库后核验失败：${mismatch.size} 笔仍不是「$category」。账本未按口头结果改完。"
+            return "失败 rows_affected=$n。写库后核验失败：${mismatch.size} 笔仍不是「$category」。"
+        }
+        if (n == 0) {
+            return "rows_affected=0。选中的 ${verified.size} 笔本来就是「$category」，账本没有新的改动。"
         }
         val sample = verified.take(8).joinToString("\n") {
             "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} 现分类=${it.category}"
         }
-        return "【账本已核验】已把 ${verified.size} 笔改到「$category」（实际改 $n 笔）。未改商家映射。\n$sample"
+        return "【账本已核验】rows_affected=$n matched=${verified.size} 改到「$category」。未改商家映射。\n$sample"
     }
 
     /** 操控：跳转页面 */
@@ -741,10 +754,11 @@ class AgentTools @Inject constructor(
             updatedAt = System.currentTimeMillis()
         )
         accountRepository.update(updated)
+        val now = accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 写库后读不到。"
         val dir = if (updated.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已修改流水号 $id：$dir ${MoneyUtil.fenToYuan(updated.amount)} 元 · ${updated.date} · " +
-            listOf(updated.merchant, updated.product, updated.category).filter { it.isNotBlank() }.joinToString(" · ") +
-            (if (updated.note.isNotBlank()) " · 备注：${updated.note}" else "")
+        return "【账本已核验】rows_affected=1 已修改流水号 $id：$dir ${MoneyUtil.fenToYuan(now.amount)} 元 · ${now.date} · " +
+            listOf(now.merchant, now.product, now.category).filter { it.isNotBlank() }.joinToString(" · ") +
+            (if (now.note.isNotBlank()) " · 备注：${now.note}" else "")
     }
 
     /** 操控：删除一笔账单 */
@@ -754,8 +768,9 @@ class AgentTools @Inject constructor(
         if (id <= 0) return "参数错误：transaction_id 必须是有效的流水号。"
         val t = accountRepository.getById(id) ?: return "没有找到流水号 $id 的记录（可能已删除）。"
         accountRepository.delete(id)
+        if (accountRepository.getById(id) != null) return "失败 rows_affected=0。流水号 $id 删除后仍在账本。"
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已删除流水号 $id：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
+        return "【账本已核验】rows_affected=1 已删除流水号 $id：$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · " +
             listOf(t.merchant, t.product, t.date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 

@@ -33,10 +33,16 @@ class LocalAccountant @Inject constructor(
 
     suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
-        if (s.isEmpty() || s.length > 80) return null
-        if (isJudgment(s)) return null
+        if (s.isEmpty()) return null
+        val writeLike = Regex(
+            "记(?:一笔|上|账|一下)|帮我记|入账|撤回|撤销|" +
+                "改成|改到|归到|归类|归入|改分类|算作|算成|调成|调到|批量改|" +
+                "无感|自动记账"
+        ).containsMatchIn(s)
+        if (s.length > 80 && !writeLike) return null
+        if (s.length > 4000) return null
+        if (isJudgment(s) && !writeLike) return null
 
-        // 口语记账 / 撤回 / 无感：本地秒回，不进模型思考
         parseAdd(s)?.let { return it }
         parseWithdraw(s)?.let { return it }
         parseRecategorize(s)?.let { return it }
@@ -52,7 +58,6 @@ class LocalAccountant @Inject constructor(
         topCategory(s, all)?.let { return it }
         merchantSpend(s, all)?.let { return it }
 
-        // 体检类：没模型才本地出；有模型让它基于快照写建议
         if (!modelAvailable && isHealthAsk(s)) {
             return InsightsEngine.toMarkdown(
                 InsightsEngine.compute(all, settingsRepository.monthlyBudget())
@@ -147,14 +152,17 @@ class LocalAccountant @Inject constructor(
         if (idMatch == null && !lastish) return null
         val t = if (idMatch != null) {
             val id = idMatch.groupValues[1].toLong()
-            accountRepository.getById(id) ?: return "流水号 $id 不在账本里（可能已经删了）。"
+            accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 不在账本里（可能已经删了）。"
         } else {
             accountRepository.getAll().maxByOrNull { it.id }
-                ?: return "账本是空的，没有可撤回的。"
+                ?: return "失败 rows_affected=0。账本是空的，没有可撤回的。"
         }
         accountRepository.delete(t.id)
+        if (accountRepository.getById(t.id) != null) {
+            return "失败 rows_affected=0。流水号 ${t.id} 删除后仍在账本。"
+        }
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已撤回流水号 **${t.id}**：$dir **¥${MoneyUtil.fenToYuan(t.amount)}** · ${t.merchant.ifBlank { t.category }} · ${t.date}。"
+        return "【账本已核验】rows_affected=1 已撤回流水号 **${t.id}**：$dir **¥${MoneyUtil.fenToYuan(t.amount)}** · ${t.merchant.ifBlank { t.category }} · ${t.date}。"
     }
 
     private suspend fun parseAutoRecord(s: String): String? {
@@ -200,37 +208,88 @@ class LocalAccountant @Inject constructor(
                 source = Transaction.SOURCE_MANUAL,
             )
         )
+        if (accountRepository.getById(id) == null) {
+            return "失败 rows_affected=0。记账后读库失败（流水号 $id）。"
+        }
         val dir = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "已记账（流水号 **$id**）：$dir **¥${MoneyUtil.fenToYuan(amountFen)}** · $category · ${merchant.ifBlank { "未填商家" }} · $date $time\n\n记错了跟我说「撤回 $id」。"
+        return "【账本已核验】rows_affected=1 已记账（流水号 **$id**）：$dir **¥${MoneyUtil.fenToYuan(amountFen)}** · $category · ${merchant.ifBlank { "未填商家" }} · $date $time\n\n记错了跟我说「撤回 $id」。"
     }
 
-    /** 对象级改分类：流水号 / 刚才那笔 / 某商家这几笔。整商户「全部」才一刀切。 */
+    /**
+     * 对象级 / 选择集改分类。
+     * 支持：流水号、刚才那笔、某商家（最多 800 笔）、金额子集 + 其余。
+     */
     private suspend fun parseRecategorize(s: String): String? {
-        if (!Regex("改成|改到|归到|改归").containsMatchIn(s)) return null
+        if (!Regex("改成|改到|归到|改归|归入|算作|算成|调成|调到|改分类|归类为|归为").containsMatchIn(s)) return null
         val valid = categoryRepository.getAll().map { it.name }.sortedByDescending { it.length }
-        val category = valid.firstOrNull { s.contains(it) && Regex("(?:改成|改到|归到|改归)\\s*${Regex.escape(it)}").containsMatchIn(s) }
-            ?: return null
-        val idHit = Regex("(?:流水号|账单)\\s*(\\d+)").find(s)
-        val targets = when {
-            idHit != null -> {
-                val id = idHit.groupValues[1].toLong()
-                listOf(accountRepository.getById(id) ?: return "流水号 $id 不在账本里。")
-            }
-            Regex("刚才|最新").containsMatchIn(s) -> {
-                listOf(accountRepository.getAll().maxByOrNull { it.id } ?: return "账本是空的。")
-            }
-            else -> {
-                val merch = Regex("把\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12}?)(?:这几笔|那几笔|的账|全部|都)?").find(s)
-                    ?.groupValues?.get(1)?.takeIf { it !in listOf("刚才", "这笔", "那笔") }
-                    ?: return null
-                val all = accountRepository.getAll().filter { it.merchant.contains(merch) }
-                if (all.isEmpty()) return "没找到商家「$merch」的账单。"
-                if (!Regex("全部|都改|所有").containsMatchIn(s) && all.size > 8) {
-                    return "「$merch」有 ${all.size} 笔。请说流水号（例如「把流水号 12 改成$category」），或者说「把${merch}全部改成$category」。"
-                }
-                all
-            }
+        fun categoryIn(fragment: String): String? = valid.firstOrNull {
+            Regex("(?:改成|改到|归到|改归|归入|算作|算成|调成|调到|改分类(?:为|成|到)?|归类为|归为)\\s*${Regex.escape(it)}")
+                .containsMatchIn(fragment)
         }
+
+        val idHit = Regex("(?:流水号|账单)\\s*(\\d+)").find(s)
+        if (idHit != null) {
+            val category = categoryIn(s) ?: return null
+            val id = idHit.groupValues[1].toLong()
+            val t = accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 不在账本里。"
+            return applyRecategorize(listOf(t), category)
+        }
+        if (Regex("刚才|最新").containsMatchIn(s)) {
+            val category = categoryIn(s) ?: return null
+            val t = accountRepository.getAll().maxByOrNull { it.id } ?: return "失败 rows_affected=0。账本是空的。"
+            return applyRecategorize(listOf(t), category)
+        }
+
+        val merch = Regex(
+            "把\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,24}?)(?:这几笔|那几笔|的账|全部|都|的|(?:改成|改到|归到|归类|算作|调成))"
+        ).find(s)?.groupValues?.get(1)?.takeIf { it !in listOf("刚才", "这笔", "那笔") }
+            ?: return null
+
+        val pool = accountRepository.getAll().filter { it.merchant.contains(merch) || it.product.contains(merch) }
+        if (pool.isEmpty()) return "失败 rows_affected=0。没找到商家「$merch」的账单。"
+        if (pool.size > 800) {
+            return "失败 rows_affected=0。「$merch」有 ${pool.size} 笔，超过 800。请加金额、月份或流水号收窄。"
+        }
+
+        val restSplit = Regex("其余|剩下的?|其他的?").split(s, limit = 2)
+        val firstFrag = restSplit[0]
+        val restFrag = restSplit.getOrNull(1)
+        val firstCat = categoryIn(firstFrag) ?: categoryIn(s) ?: return null
+        val amountFen = Regex("(\\d+(?:\\.\\d{1,2})?)\\s*(?:元|块)").find(firstFrag)?.groupValues?.get(1)
+            ?.let { MoneyUtil.parseToFen(it) }
+            ?: Regex("([零一二三四五六七八九十百千万两]+)(?:元|块)").find(firstFrag)?.groupValues?.get(1)
+                ?.let { MoneyUtil.parseChineseToFen(it) }
+
+        val jobs = mutableListOf<Pair<List<Transaction>, String>>()
+        if (amountFen != null && amountFen > 0) {
+            val subset = pool.filter { it.amount == amountFen }
+            if (subset.isEmpty()) {
+                return "失败 rows_affected=0。「$merch」没有 ¥${MoneyUtil.fenToYuan(amountFen)} 的账单。"
+            }
+            jobs += subset to firstCat
+            if (restFrag != null) {
+                val restCat = categoryIn(restFrag)
+                    ?: return "失败 rows_affected=0。其余要改到哪一类没看清。"
+                val rest = pool.filter { it.amount != amountFen }
+                if (rest.isNotEmpty()) jobs += rest to restCat
+            }
+        } else {
+            jobs += pool to firstCat
+        }
+
+        val lines = mutableListOf<String>()
+        var affected = 0
+        for ((txs, cat) in jobs) {
+            val r = applyRecategorize(txs, cat)
+            lines += r
+            affected += Regex("rows_affected=(\\d+)").findAll(r).mapNotNull { it.groupValues[1].toIntOrNull() }.sum()
+        }
+        if (affected == 0 && lines.any { it.contains("失败") }) return lines.joinToString("\n")
+        return lines.joinToString("\n")
+    }
+
+    private suspend fun applyRecategorize(targets: List<Transaction>, category: String): String {
+        if (targets.isEmpty()) return "失败 rows_affected=0。没有匹配的账单。"
         var n = 0
         targets.forEach {
             if (it.category != category) {
@@ -238,10 +297,18 @@ class LocalAccountant @Inject constructor(
                 n++
             }
         }
-        val sample = targets.take(6).joinToString("\n") {
-            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)}"
+        val verified = targets.mapNotNull { accountRepository.getById(it.id) }
+        val bad = verified.filter { it.category != category }
+        if (bad.isNotEmpty()) {
+            return "失败 rows_affected=$n。写库后核验失败：流水号 ${bad.joinToString(",") { it.id.toString() }} 仍不是「$category」。"
         }
-        return "已把 ${targets.size} 笔改到「$category」（实际改 $n 笔）。\n$sample"
+        if (n == 0) {
+            return "rows_affected=0。选中的 ${verified.size} 笔本来就是「$category」，账本没有新的改动。"
+        }
+        val sample = verified.take(8).joinToString("\n") {
+            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} 现分类=${it.category}"
+        }
+        return "【账本已核验】rows_affected=$n matched=${verified.size} 改到「$category」。\n$sample"
     }
 
     private fun formatDay(date: String, txs: List<Transaction>): String {
@@ -279,7 +346,7 @@ class LocalAccountant @Inject constructor(
         if (byCat.isNotEmpty()) {
             sb.appendLine()
             sb.appendLine("| 分类 | 金额 |")
-            sb.appendLine("| --- | --- |")
+            sb.appendLine("| --- | --- | --- |")
             byCat.forEach { (c, a) -> sb.appendLine("| $c | ¥${MoneyUtil.fenToYuan(a)} |") }
         }
         return sb.toString().trim()

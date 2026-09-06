@@ -108,7 +108,7 @@ $snapshot
 - 用户说「撤回一笔账单/撤回/撤销」→ 立刻调用 withdraw_transaction（可不带流水号，默认删最新一笔），禁止再问、禁止说无法执行
 - 用户说打开无感/自动记账 → 立刻 set_auto_record(enabled=true) 再 navigate 到无感记账页
 - 查看或排查商家归类 → list_merchants
-- 某商家下选定若干笔改分类 → 先 query_transactions 拿流水号，再 reclassify_transactions(ids, category)。禁止用 classify_merchants（那会改该商家全部历史和映射）
+- 某商家下选定若干笔改分类 → 直接 reclassify_transactions(merchant/from_category/ids, category)。query_transactions 默认 100、最大 500，批量改不必抄完流水号。禁止用 classify_merchants（那会改该商家全部历史和映射）
 - 给商家批量归类（整商户一刀切，需确认）→ classify_merchants
 - 跳转到任意页面（"打开统计""带我去导入"）→ navigate
 - 编辑账单字段（金额/日期/备注/商家）→ edit_transaction；删除账单 → delete_transaction
@@ -126,7 +126,7 @@ $snapshot
 8. 排版用 Markdown 结构化输出，重点一目了然：小节用 "### 标题"，关键数字/结论用 **加粗**，并列项用 "- " 列表，多组数据对比用 Markdown 表格（列数不超过 4 列，行数不超过 8 行）。不要用 emoji 堆砌，最多一两个。
 8. 用户明确说要记账（"帮我记上""记一笔""买了X花了Y"）时：**先调用 add_transaction 把账记上**，再确认结果；严禁只说"好的我可以记"而不真正调用工具，严禁先说"账本里没有这笔所以记不了"——没查到的该记就记。
 9. 用户要求改某一笔的分类 → update_transaction_category；改某商家下选定的若干笔（含「五十元那笔、其余」）→ 先 query_transactions 拿流水号或直接 reclassify_transactions(merchant, amount, category)。禁止整商户一刀切用 classify_merchants，除非用户明确说「全部/以后」。
-10. 归类必须用工具完成并等工具返回「账本已核验」。禁止口头说「已完成/已改好」——没调用写工具就是账本没改。能力不够就明说「无法执行」，不要编造成功。
+10. 归类必须用工具完成并等工具返回「账本已核验」且 rows_affected>0。禁止口头说「已完成/已改好」——没调用写工具就是账本没改。rows_affected=0 必须告诉用户失败。能力不够就明说「无法执行」，不要编造成功。
 11. 用户闲聊或问与记账无关的问题时，礼貌回应并把话题引导回记账理财。
 12. 撤回、记账、改分类、开关无感：工具一跑完就用工具结果当最终答复，禁止再说「无法执行」「需要确认」「正在思考」。回答写成连贯段落，禁止一字一行。
 13. 推理内容必须依据工具结果。禁止在思考里承认「刚才的话是编的」还继续对用户撒谎。
@@ -138,6 +138,15 @@ $snapshot
         if (intent == QueryIntent.CHAT) return emptyList()
         val all = agentTools.specs
         val s = userMessage
+        if (intent == QueryIntent.LEDGER_WRITE) {
+            return all.filter {
+                it.name in setOf(
+                    "add_transaction", "withdraw_transaction", "delete_transaction",
+                    "edit_transaction", "update_transaction_category", "reclassify_transactions",
+                    "query_transactions", "list_merchants", "set_merchant_category",
+                )
+            }
+        }
         if (s.length > 120) return all
         val names = mutableSetOf<String>()
         if (intent == QueryIntent.NAV) {
@@ -147,13 +156,6 @@ $snapshot
         if (intent == QueryIntent.MEMORY) {
             names += setOf("memory_get", "memory_write")
             return all.filter { it.name in names }
-        }
-        if (intent == QueryIntent.LEDGER_WRITE) {
-            names += setOf(
-                "add_transaction", "withdraw_transaction", "delete_transaction",
-                "edit_transaction", "update_transaction_category", "reclassify_transactions",
-                "query_transactions", "list_merchants", "set_merchant_category",
-            )
         }
         if (intent == QueryIntent.LEDGER_READ) {
             if (Regex("明细|哪几笔|流水|账单列表|查一下").containsMatchIn(s)) names += "query_transactions"
@@ -251,12 +253,12 @@ $snapshot
         val model = settingsRepository.model()
         val intent = IntentGate.classify(userMessage)
         val writeFast = intent == QueryIntent.LEDGER_WRITE ||
-            Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到|归类|归入").containsMatchIn(userMessage)
+            Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到|归类|归入|改分类|批量改").containsMatchIn(userMessage)
         val thinkingLevel = if (writeFast) SettingsRepository.THINKING_OFF else settingsRepository.thinkingLevel()
         val tools = pickTools(userMessage, intent)
         val cap = when (intent) {
             QueryIntent.CHAT, QueryIntent.NAV -> 1
-            QueryIntent.LEDGER_WRITE -> maxOf(maxRounds, 3)
+            QueryIntent.LEDGER_WRITE -> maxOf(maxRounds, 4)
             else -> maxRounds
         }
 
@@ -282,6 +284,7 @@ $snapshot
 
         var rounds = 0
         var networkRetried = false
+        var forcedWrite = false
         val loopDetector = ToolLoopDetector()
         onStatus(
             when {
@@ -311,7 +314,18 @@ $snapshot
             }
 
             if (resp.toolCalls.isEmpty()) {
-                return AgentResult(resp.content, rounds)
+                if (intent == QueryIntent.LEDGER_WRITE && !forcedWrite && rounds < cap) {
+                    forcedWrite = true
+                    messages.add(ToolChatMessage(role = "assistant", content = resp.content))
+                    messages.add(
+                        ToolChatMessage(
+                            role = "user",
+                            content = "你还没有调用写账工具，账本没有任何改动。立刻调用 reclassify_transactions / update_transaction_category / add_transaction / withdraw_transaction。做不到只回复「无法执行」。禁止说已完成。",
+                        )
+                    )
+                    continue
+                }
+                return AgentResult(groundWriteReply(intent, resp.content, wrote = false), rounds)
             }
 
             onStatus("正在办理（第 $rounds 步）…")
@@ -351,7 +365,13 @@ $snapshot
                 return AgentResult("(工具调用异常，请重试)", rounds)
             }
             if (writeReplies.isNotEmpty()) {
-                return AgentResult(writeReplies.joinToString("\n\n"), rounds)
+                val body = writeReplies.joinToString("\n\n")
+                val affected = Regex("rows_affected=(\\d+)").findAll(body)
+                    .mapNotNull { it.groupValues[1].toIntOrNull() }.sum()
+                if (intent == QueryIntent.LEDGER_WRITE && affected == 0 && body.contains("rows_affected=")) {
+                    return AgentResult(body, rounds)
+                }
+                return AgentResult(body, rounds)
             }
         }
         messages.add(
@@ -376,8 +396,9 @@ $snapshot
     /** 写意图若没真正调写工具，禁止把「已完成」交给用户。 */
     private fun groundWriteReply(intent: QueryIntent, content: String, wrote: Boolean): String {
         if (wrote || intent != QueryIntent.LEDGER_WRITE) return content
-        val fake = Regex("已完成|已经改|已改好|已归类|已把|改好了|搞定了|已经把").containsMatchIn(content)
-        if (!fake && content.isNotBlank()) return content
+        if (content.contains("无法执行") || content.contains("账本没有改动") || content.contains("失败 rows_affected=0")) {
+            return content.ifBlank { "无法执行：账本没有改动。" }
+        }
         return "账本没有改动。我没有调用写账工具，不能说已经改好。\n\n请直接说流水号（例如「把流水号 12 改成居住」），或说「把【商家】的五十元改成居住，其余改成餐饮」。"
     }
 }

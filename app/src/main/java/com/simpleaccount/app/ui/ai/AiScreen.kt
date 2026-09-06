@@ -535,7 +535,7 @@ fun AiScreen(
                                 )
                                 Text(
                                     (it0.date ?: "日期未知（确认后将记入今天）") +
-                                        (it0.time?.let { tm -> " $tm" } ?: " 时间未知") +
+                                        " " + (it0.time?.takeIf { tm -> tm.isNotBlank() } ?: com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(it0.date)) +
                                         if (it0.duplicate) " · 账本已有（跳过）" else "",
                                     fontSize = 11.sp,
                                     color = if (it0.duplicate) MaterialTheme.colorScheme.error
