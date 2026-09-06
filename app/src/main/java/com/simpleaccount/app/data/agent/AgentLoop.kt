@@ -51,6 +51,7 @@ class AgentLoop @Inject constructor(
             "list_months" -> "正在核对账本月份…"
             "list_merchants" -> "正在查看商家归类…"
             "classify_merchants" -> "正在归类商家…"
+            "reclassify_transactions" -> "正在改这些账单的分类…"
             "get_insights" -> "正在生成本月体检…"
             "memory_get" -> "正在检索长期记忆…"
             "memory_write" -> "正在写入记忆…"
@@ -107,7 +108,8 @@ $snapshot
 - 用户说「撤回一笔账单/撤回/撤销」→ 立刻调用 withdraw_transaction（可不带流水号，默认删最新一笔），禁止再问、禁止说无法执行
 - 用户说打开无感/自动记账 → 立刻 set_auto_record(enabled=true) 再 navigate 到无感记账页
 - 查看或排查商家归类 → list_merchants
-- 给商家批量归类 → classify_merchants
+- 某商家下选定若干笔改分类 → 先 query_transactions 拿流水号，再 reclassify_transactions(ids, category)。禁止用 classify_merchants（那会改该商家全部历史和映射）
+- 给商家批量归类（整商户一刀切，需确认）→ classify_merchants
 - 跳转到任意页面（"打开统计""带我去导入"）→ navigate
 - 编辑账单字段（金额/日期/备注/商家）→ edit_transaction；删除账单 → delete_transaction
 - 新建/删除分类 → create_category / delete_category；设置商家固定映射 → set_merchant_category
@@ -123,33 +125,55 @@ $snapshot
 7. 回答用简体中文，语气友好自然；金额用「元」，保留两位小数。关键数字后注明数据依据（如"据9月账单"）。回答时给出有价值的观察或建议（占比、环比、异常消费），但不啰嗦。
 8. 排版用 Markdown 结构化输出，重点一目了然：小节用 "### 标题"，关键数字/结论用 **加粗**，并列项用 "- " 列表，多组数据对比用 Markdown 表格（列数不超过 4 列，行数不超过 8 行）。不要用 emoji 堆砌，最多一两个。
 8. 用户明确说要记账（"帮我记上""记一笔""买了X花了Y"）时：**先调用 add_transaction 把账记上**，再确认结果；严禁只说"好的我可以记"而不真正调用工具，严禁先说"账本里没有这笔所以记不了"——没查到的该记就记。
-9. 用户要求改某一笔的分类 → 用 update_transaction_category（只改那一笔）；要改某商家所有账 → 才用 classify_merchants。不要混用。
+9. 用户要求改某一笔的分类 → update_transaction_category；改某商家下选定的若干笔 → reclassify_transactions（必须带 ids 或 merchant+from_category，禁止整商户一刀切）；要改某商家所有账和映射 → 才用 classify_merchants。不要混用。
 10. 归类必须用工具完成，不要自己口头分类。
 11. 用户闲聊或问与记账无关的问题时，礼貌回应并把话题引导回记账理财。
 12. 撤回、记账、开关无感：工具一跑完就用工具结果当最终答复，禁止再说「无法执行」「需要确认」「正在思考」。回答写成连贯段落，禁止一字一行。
 """.trimIndent()
     }
 
-    /** 按意图裁工具：弱模型面对 19 个工具会乱调；查询类只给汇总工具。 */
-    private fun pickTools(userMessage: String): List<AgentToolSpec> {
+    /** 按意图裁工具：无关 query 不挂账本工具，避免误打库。 */
+    private fun pickTools(userMessage: String, intent: QueryIntent): List<AgentToolSpec> {
+        if (intent == QueryIntent.CHAT) return emptyList()
         val all = agentTools.specs
         val s = userMessage
-        if (s.length > 80) return all
-        val names = mutableSetOf(
-            "query_transactions", "get_summary", "get_category_totals",
-            "list_months", "get_merchant_totals", "get_daily_totals", "get_insights",
-        )
+        if (s.length > 120) return all
+        val names = mutableSetOf<String>()
+        if (intent == QueryIntent.NAV) {
+            names += "navigate"
+            return all.filter { it.name in names }
+        }
+        if (intent == QueryIntent.MEMORY) {
+            names += setOf("memory_get", "memory_write")
+            return all.filter { it.name in names }
+        }
+        if (intent == QueryIntent.LEDGER_READ) {
+            if (Regex("明细|哪几笔|流水|账单列表|查一下").containsMatchIn(s)) names += "query_transactions"
+            if (Regex("多少|汇总|一共|总共|花了|结余").containsMatchIn(s)) {
+                names += setOf("get_summary", "get_category_totals")
+            }
+            if (Regex("商家|哪家").containsMatchIn(s)) names += "get_merchant_totals"
+            if (Regex("哪天|每天|昨天|今天|前天").containsMatchIn(s)) {
+                names += setOf("get_daily_totals", "query_transactions")
+            }
+            if (Regex("体检|花哪|月报|环比|超支|预算").containsMatchIn(s)) names += "get_insights"
+            if (names.isEmpty()) names += setOf("get_summary", "get_insights", "get_category_totals")
+            names += "list_months"
+        }
         if (Regex("记(?:一笔|上|账)|帮我记|入账").containsMatchIn(s)) names += "add_transaction"
         if (Regex("删|撤回|撤销").containsMatchIn(s)) {
             names += "withdraw_transaction"
             names += "delete_transaction"
         }
-        if (Regex("改成|编辑|备注|改金额").containsMatchIn(s)) names += "edit_transaction"
-        if (Regex("分类|归类|映射").containsMatchIn(s)) {
+        if (Regex("改金额|编辑|备注").containsMatchIn(s)) names += "edit_transaction"
+        if (Regex("改成|重分类|归类|这几笔|这几条|分类|映射").containsMatchIn(s)) {
             names += setOf(
-                "update_transaction_category", "classify_merchants", "list_merchants",
-                "set_merchant_category", "create_category", "delete_category",
+                "query_transactions", "reclassify_transactions", "update_transaction_category",
+                "list_merchants", "set_merchant_category",
             )
+            if (Regex("以后|全部|所有|映射").containsMatchIn(s)) {
+                names += setOf("classify_merchants", "create_category", "delete_category")
+            }
         }
         if (s.contains("预算")) names += "set_monthly_budget"
         if (Regex("主题|深色|浅色|暗色|夜间").containsMatchIn(s)) names += "set_theme"
@@ -158,9 +182,10 @@ $snapshot
             names += "set_auto_record"
             names += "navigate"
         }
-        names += "memory_get"
         if (Regex("记住").containsMatchIn(s)) names += "memory_write"
-        return all.filter { it.name in names }.ifEmpty { all }
+        return all.filter { it.name in names }.ifEmpty {
+            all.filter { it.name in setOf("get_summary", "get_insights", "list_months") }
+        }
     }
 
     private fun buildSnapshot(all: List<com.simpleaccount.app.data.entity.Transaction>): String {
@@ -208,6 +233,7 @@ $snapshot
         maxRounds: Int = 2,
         onStatus: (String) -> Unit = {},
         onDelta: (String) -> Unit = {},
+        onReasoning: (String) -> Unit = {},
     ): AgentResult {
         val enabled = settingsRepository.isAiEnabled()
         if (!enabled) return AgentResult("", 0, "AI 功能未开启")
@@ -215,17 +241,31 @@ $snapshot
         if (apiKey.isBlank()) return AgentResult("", 0, "未配置 API Key")
         val baseUrl = settingsRepository.baseUrl()
         val model = settingsRepository.model()
-
-        val allTx = accountRepository.getAll()
-        val coveredMonths = allTx.map { it.date.take(7) }.distinct().sorted()
-        val snapshot = buildSnapshot(allTx)
-        val tools = pickTools(userMessage)
-        val memory = runCatching { memoryStore.injectForNewSession() }.getOrDefault("")
-        runCatching { memoryStore.maybeCaptureFromUser(userMessage) }
+        val thinkingLevel = settingsRepository.thinkingLevel()
+        val intent = IntentGate.classify(userMessage)
+        val tools = pickTools(userMessage, intent)
+        val cap = when (intent) {
+            QueryIntent.CHAT, QueryIntent.NAV -> 1
+            else -> maxRounds
+        }
 
         val messages = mutableListOf<ToolChatMessage>()
-        val ledgerName = runCatching { ledgerRepository.getCurrent()?.name }.getOrNull() ?: "主账本"
-        messages.add(ToolChatMessage("system", buildSystemPrompt(coveredMonths, snapshot, ledgerName) + "\n\n" + memory))
+        if (IntentGate.needsLedger(intent)) {
+            val allTx = accountRepository.getAll()
+            val coveredMonths = allTx.map { it.date.take(7) }.distinct().sorted()
+            val snapshot = buildSnapshot(allTx)
+            val memory = runCatching { memoryStore.injectForNewSession() }.getOrDefault("")
+            runCatching { memoryStore.maybeCaptureFromUser(userMessage) }
+            val ledgerName = runCatching { ledgerRepository.getCurrent()?.name }.getOrNull() ?: "主账本"
+            messages.add(ToolChatMessage("system", buildSystemPrompt(coveredMonths, snapshot, ledgerName) + "\n\n" + memory))
+        } else {
+            messages.add(
+                ToolChatMessage(
+                    "system",
+                    "你是记账 App 里的管家。用户这句和账本无关，直接简短回答，不要调用工具、不要编造账单数字。回答写成连贯段落，禁止一字一行。",
+                )
+            )
+        }
         history.takeLast(12).forEach { (r, c) -> messages.add(ToolChatMessage(r, c)) }
         messages.add(ToolChatMessage("user", com.simpleaccount.app.util.DateResolver.enrichUserMessage(userMessage)))
 
@@ -233,14 +273,20 @@ $snapshot
         var networkRetried = false
         val loopDetector = ToolLoopDetector()
         val writeFast = Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账").containsMatchIn(userMessage)
-        onStatus(if (writeFast) "正在办理…" else "正在查账…")
-        while (rounds < maxRounds) {
+        onStatus(
+            when {
+                writeFast -> "正在办理…"
+                intent == QueryIntent.CHAT -> "正在回复…"
+                else -> "正在查账…"
+            }
+        )
+        while (rounds < cap) {
             rounds++
             val resp = aiService.chatWithTools(
                 baseUrl, apiKey, model, messages, tools,
                 onDelta = onDelta,
-                thinkingLevel = SettingsRepository.THINKING_OFF,
-                onReasoning = { },
+                thinkingLevel = thinkingLevel,
+                onReasoning = onReasoning,
             )
             if (resp.error != null) {
                 if (resp.error == "已停止") return AgentResult("", rounds, "已停止")
@@ -307,7 +353,8 @@ $snapshot
         val finalResp = aiService.chatWithTools(
             baseUrl, apiKey, model, messages, emptyList(),
             onDelta = onDelta,
-            thinkingLevel = SettingsRepository.THINKING_OFF,
+            thinkingLevel = thinkingLevel,
+            onReasoning = onReasoning,
         )
         return if (finalResp.error != null || finalResp.content.isBlank()) {
             AgentResult("（分析了 ${rounds} 轮仍不完整，请把问题拆小一点再问）", rounds)

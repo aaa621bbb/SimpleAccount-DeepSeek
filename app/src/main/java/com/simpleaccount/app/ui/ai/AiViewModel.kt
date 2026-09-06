@@ -355,7 +355,13 @@ class AiViewModel @Inject constructor(
                 onDelta = { d ->
                     val cur = _state.value.streamingText.orEmpty() + d
                     _state.value = _state.value.copy(streamingText = cur, phase = null)
-                }
+                },
+                onReasoning = { chunk ->
+                    val merged = com.simpleaccount.app.ui.components.coalesceReasoning(
+                        _state.value.reasoning.orEmpty() + chunk
+                    )
+                    _state.value = _state.value.copy(reasoning = merged)
+                },
             )
             ticker.cancel()
             r

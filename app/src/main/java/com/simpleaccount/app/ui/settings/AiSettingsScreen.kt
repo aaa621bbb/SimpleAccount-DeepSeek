@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import com.simpleaccount.app.data.repository.SettingsRepository
 
 /** 服务商图标映射（每个厂商一个专属图标 + 颜色） */
 private fun providerIcon(name: String): ImageVector = when (name) {
@@ -257,10 +258,30 @@ fun AiSettingsScreen(
             Spacer(Modifier.height(16.dp))
             Text("思考深度", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Text(
-                "已由系统强制关闭。管家走意图/工具管线，不输出推理链；首字目标十秒内（工具执行时延不计）。",
+                "关闭则不输出推理链、更快。部分推理模型开思考是刚需；延迟靠意图门控和工具裁剪治理，不会强制关思考。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    SettingsRepository.THINKING_OFF to "关闭",
+                    SettingsRepository.THINKING_LOW to "低",
+                    SettingsRepository.THINKING_MEDIUM to "中",
+                    SettingsRepository.THINKING_HIGH to "高",
+                ).forEach { (id, label) ->
+                    FilterChip(
+                        selected = state.thinkingLevel == id,
+                        onClick = { viewModel.setThinkingLevel(id) },
+                        label = { Text(label) }
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             // --------- 截图记账（识图）：主模型优先 + 独立配置兜底 ---------
             Row(

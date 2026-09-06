@@ -204,7 +204,7 @@ class HomeViewModel @Inject constructor(
                 recent = sorted.take(count).map { RowUi(it, catMap[it.category]) },
                 insightHeadline = health.headline,
                 insightSub = health.subline,
-                insightReport = if (all.isEmpty()) "" else InsightsEngine.toMarkdown(health),
+                insightReport = if (transactions.isEmpty()) "" else InsightsEngine.toMarkdown(health),
                 evidenceTips = health.evidenceTips,
                 insightScore = health.score,
                 insightGrade = health.grade,

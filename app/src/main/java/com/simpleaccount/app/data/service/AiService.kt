@@ -20,7 +20,7 @@ class AiService @Inject constructor() {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(75, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -217,11 +217,36 @@ class AiService @Inject constructor() {
      * 不支持的模型会忽略这些字段。
      */
     private fun applyThinking(body: JSONObject, model: String, level: String) {
-        // 强制停用推理链。低复杂度 query 开 CoT 会空转数分钟，首 token 必须 <10s。
         val m = model.lowercase()
-        body.put("enable_thinking", false)
+        val off = level == "off" || level.isBlank()
+        if (off) {
+            body.put("enable_thinking", false)
+            if (m.contains("glm") || m.contains("chatglm")) {
+                body.put("thinking", JSONObject().put("type", "disabled"))
+            }
+            return
+        }
+        body.put("enable_thinking", true)
         if (m.contains("glm") || m.contains("chatglm")) {
-            body.put("thinking", JSONObject().put("type", "disabled"))
+            body.put("thinking", JSONObject().put("type", "enabled"))
+        }
+        val budget = when (level) {
+            "low" -> 512
+            "high" -> 2048
+            else -> 1024
+        }
+        if (m.contains("qwen") || m.contains("qwq")) {
+            body.put("thinking_budget", budget)
+        }
+        if (m.contains("o1") || m.contains("o3") || m.contains("o4") || m.contains("gpt-5")) {
+            body.put(
+                "reasoning_effort",
+                when (level) {
+                    "low" -> "low"
+                    "high" -> "high"
+                    else -> "medium"
+                },
+            )
         }
     }
 

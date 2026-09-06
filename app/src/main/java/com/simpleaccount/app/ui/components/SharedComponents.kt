@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -78,35 +79,50 @@ fun CategoryIconCircle(
     }
 }
 
-/** 单条流水行 */
+/** 单条流水行：商家主标题、分类次级、金额强调，与首页卡片同一信息层级。 */
 @Composable
 fun TransactionRow(
     transaction: Transaction,
     category: Category?,
     onClick: (() -> Unit)? = null,
+    showDate: Boolean = true,
 ) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    val accent = parseColor(category?.colorHex ?: "#BDC3C7")
+    val title = transaction.merchant.ifBlank { category?.name ?: "未分类" }
+    val secondary = buildList {
+        val catName = category?.name ?: transaction.category
+        if (catName.isNotBlank() && catName != title) add(catName)
+        if (transaction.product.isNotBlank()) add(transaction.product)
+    }.joinToString(" · ")
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 11.dp)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = t.space16, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CategoryIconCircle(category, size = 42)
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(36.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(accent)
+        )
+        Spacer(Modifier.width(10.dp))
+        CategoryIconCircle(category, size = 40)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                text = category?.name ?: "未分类",
+                text = title,
                 style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            val detail = listOf(transaction.merchant, transaction.product)
-                .filter { it.isNotBlank() }.joinToString(" · ")
-            if (detail.isNotBlank()) {
+            if (secondary.isNotBlank()) {
                 Text(
-                    text = detail,
+                    text = secondary,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -119,16 +135,19 @@ fun TransactionRow(
             Text(
                 text = (if (transaction.type == Transaction.TYPE_INCOME) "+¥" else "-¥") +
                         MoneyUtil.fenToYuan(transaction.amount),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
                 color = if (transaction.type == Transaction.TYPE_INCOME)
                     LocalAppPalette.current.income else MaterialTheme.colorScheme.onSurface
             )
-            Text(
-                text = transaction.date + (if (transaction.time.isNotBlank()) " " + transaction.time else ""),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (showDate) {
+                Text(
+                    text = transaction.date.takeLast(5) +
+                        (if (transaction.time.isNotBlank()) " " + transaction.time else ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ import com.simpleaccount.app.data.repository.CategoryRepository
 import com.simpleaccount.app.data.entity.Merchant
 import com.simpleaccount.app.util.DateUtil
 import com.simpleaccount.app.util.MoneyUtil
+import org.json.JSONArray
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,6 +33,7 @@ class AgentTools @Inject constructor(
         val DESTRUCTIVE = setOf(
             "delete_category",
             "classify_merchants",
+            "reclassify_transactions",
         )
     }
 
@@ -130,6 +132,19 @@ class AgentTools @Inject constructor(
                 "category" to ("string" to "新分类名，必须是现有分类之一"),
             ),
             required = listOf("transaction_id", "category"),
+        ),
+        AgentToolSpec(
+            name = "reclassify_transactions",
+            description = "把选定的若干笔改到新分类（对象级/选择集）。优先传 ids（流水号，逗号分隔）。也可 merchant+from_category+month 限定一小撮，匹配超过 30 笔会拒绝——那种请先 query_transactions 拿流水号。不要用 classify_merchants（那会改该商家全部历史和映射）。",
+            parameters = mapOf(
+                "ids" to ("string" to "流水号，逗号或空格分隔，例如 12,15,18"),
+                "category" to ("string" to "目标分类，必须是现有分类之一"),
+                "merchant" to ("string" to "可选：只改该商家名下的匹配笔；ids 已给时忽略"),
+                "from_category" to ("string" to "可选：只改当前属于该类的笔"),
+                "month" to ("string" to "可选：yyyy-MM 或「本月」"),
+                "date" to ("string" to "可选：某一天 yyyy-MM-dd"),
+            ),
+            required = listOf("category"),
         ),
         AgentToolSpec(
             name = "navigate",
@@ -264,6 +279,7 @@ class AgentTools @Inject constructor(
                 "add_transaction" -> addTransaction(call.arguments)
                 "withdraw_transaction" -> withdrawTransaction(call.arguments)
                 "update_transaction_category" -> updateTransactionCategory(call.arguments)
+                "reclassify_transactions" -> reclassifyTransactions(call.arguments)
                 "navigate" -> navigate(call.arguments)
                 "edit_transaction" -> editTransaction(call.arguments)
                 "delete_transaction" -> deleteTransaction(call.arguments)
@@ -316,6 +332,7 @@ class AgentTools @Inject constructor(
             }
             "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
             "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
+            "reclassify_transactions" -> previewReclassify(a)
             else -> "将执行 ${call.name}"
         }
     }
@@ -591,6 +608,91 @@ class AgentTools @Inject constructor(
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
         return "已把流水号 $id 的分类从「${t.category}」改为「$category」：" +
             "$dir ${MoneyUtil.fenToYuan(t.amount)} 元 · ${t.merchant.ifBlank { t.product.ifBlank { t.date } }}。该商家其他账单未受影响。"
+    }
+
+    private fun parseIds(a: JSONObject): List<Long> {
+        val out = mutableListOf<Long>()
+        fun eat(raw: Any?) {
+            when (raw) {
+                null, JSONObject.NULL -> {}
+                is JSONArray -> for (i in 0 until raw.length()) eat(raw.opt(i))
+                is Number -> out += raw.toLong()
+                is String -> raw.split(Regex("[,，\\s]+")).mapNotNull { it.trim().toLongOrNull() }.let { out += it }
+                else -> raw.toString().toLongOrNull()?.let { out += it }
+            }
+        }
+        if (a.has("ids")) eat(a.get("ids"))
+        if (a.has("transaction_ids")) eat(a.get("transaction_ids"))
+        if (a.has("transaction_id")) eat(a.optLong("transaction_id"))
+        return out.filter { it > 0 }.distinct()
+    }
+
+    private suspend fun matchReclassify(a: JSONObject): List<Transaction> {
+        val ids = parseIds(a)
+        val merchant = a.optString("merchant").trim()
+        val fromCat = a.optString("from_category").trim()
+        val month = normalizeMonth(a.optString("month").trim()) ?: ""
+        val date = normalizeDate(a.optString("date").trim()) ?: ""
+        val all = accountRepository.getAll()
+        return if (ids.isNotEmpty()) {
+            val set = ids.toSet()
+            all.filter { it.id in set }
+        } else {
+            all.filter {
+                (merchant.isEmpty() || it.merchant.contains(merchant)) &&
+                    (fromCat.isEmpty() || it.category == fromCat) &&
+                    (month.isEmpty() || it.date.startsWith(month)) &&
+                    (date.isEmpty() || it.date == date)
+            }
+        }
+    }
+
+    private suspend fun previewReclassify(a: JSONObject): String {
+        val category = a.optString("category").trim()
+        val ids = parseIds(a)
+        val merchant = a.optString("merchant").trim()
+        val fromCat = a.optString("from_category").trim()
+        if (ids.isEmpty() && merchant.isEmpty() && fromCat.isEmpty()) {
+            return "缺少流水号。请先查出要改的几笔，再把 ids 传给 reclassify_transactions。"
+        }
+        val targets = matchReclassify(a)
+        if (targets.isEmpty()) return "没有匹配到要改分类的账单。"
+        val sample = targets.take(6).joinToString("；") {
+            "流水号${it.id} ${it.merchant.ifBlank { it.product.ifBlank { it.category } }} ¥${MoneyUtil.fenToYuan(it.amount)}"
+        }
+        val extra = if (targets.size > 6) " 等 ${targets.size} 笔" else ""
+        val via = if (ids.isNotEmpty()) "按流水号" else "按商家/分类筛选"
+        return "将把 $via 选中的 ${targets.size} 笔改到「$category」：$sample$extra。不会改商家映射，也不会动没选中的账。"
+    }
+
+    /** 选择集级改分类：只动传入的流水，不写商家映射。 */
+    private suspend fun reclassifyTransactions(args: String): String {
+        val a = parseArgs(args)
+        val category = a.optString("category").trim()
+        val valid = categoryRepository.getAll().map { it.name }.toSet()
+        if (category !in valid) return "参数错误：分类「$category」不存在，可用：${valid.joinToString("、")}。"
+        val ids = parseIds(a)
+        val merchant = a.optString("merchant").trim()
+        val fromCat = a.optString("from_category").trim()
+        if (ids.isEmpty() && merchant.isEmpty() && fromCat.isEmpty()) {
+            return "请提供流水号 ids，或商家+原分类。不要整本账一刀切。"
+        }
+        val targets = matchReclassify(a)
+        if (targets.isEmpty()) return "没有匹配的账单。"
+        if (ids.isEmpty() && targets.size > 30) {
+            return "匹配 ${targets.size} 笔，太多。请先 query_transactions 拿到流水号，把要改的 ids 传给我（例如 12,15,18）。classify_merchants 会改该商家全部历史，这里不用。"
+        }
+        var n = 0
+        targets.forEach {
+            if (it.category != category) {
+                accountRepository.update(it.copy(category = category, updatedAt = System.currentTimeMillis()))
+                n++
+            }
+        }
+        val sample = targets.take(8).joinToString("\n") {
+            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} ${it.category}→$category"
+        }
+        return "已把 ${targets.size} 笔改到「$category」（实际改 $n 笔，其余本来就是这类）。未改商家映射。\n$sample"
     }
 
     /** 操控：跳转页面 */

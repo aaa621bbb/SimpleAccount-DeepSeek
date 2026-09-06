@@ -41,6 +41,8 @@ class LocalAccountant @Inject constructor(
         parseWithdraw(s)?.let { return it }
         parseAutoRecord(s)?.let { return it }
 
+        if (!IntentGate.needsLedger(IntentGate.classify(s))) return null
+
         val all = accountRepository.getAll()
 
         daySpend(s, all)?.let { return it }

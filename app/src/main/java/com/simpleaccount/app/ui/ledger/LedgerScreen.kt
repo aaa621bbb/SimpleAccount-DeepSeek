@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -59,7 +61,7 @@ fun LedgerScreen(
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
 
     // 分组由 ViewModel 在后台线程算好，UI 直接用（不再 remember 里现算导致切页卡顿）
-    val grouped = state.groups.map { it.month to it.rows }
+    val grouped = state.groups
 
     Scaffold(
         topBar = {
@@ -260,21 +262,44 @@ fun LedgerScreen(
 
 /** 账本行 + 删除按钮（金额扁平视图与月份分组视图共用） */
 @Composable
-private fun LedgerRowLine(row: RowUi, onDelete: () -> Unit, onOpen: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) {
-            TransactionRow(
-                transaction = row.transaction,
-                category = row.category,
-                onClick = onOpen
+private fun LedgerRowLine(
+    row: RowUi,
+    onDelete: () -> Unit,
+    onOpen: () -> Unit,
+    showDay: Boolean = false,
+) {
+    val t = com.simpleaccount.app.ui.theme.LocalTokens.current
+    Column {
+        if (showDay) {
+            Text(
+                row.transaction.date,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 2.dp)
             )
         }
-        IconButton(onClick = onDelete) {
-            Icon(
-                Icons.Filled.Delete,
-                contentDescription = "删除",
-                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                TransactionRow(
+                    transaction = row.transaction,
+                    category = row.category,
+                    onClick = onOpen,
+                    showDate = !showDay,
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                )
+            }
         }
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+            thickness = t.hairline,
+            modifier = Modifier.padding(start = 72.dp)
+        )
     }
 }

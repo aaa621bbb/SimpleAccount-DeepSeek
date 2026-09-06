@@ -64,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -127,11 +128,28 @@ fun AiScreen(
         }
     }
 
-    // 新消息/输入状态/流式增量变化时自动滚到底部
-    LaunchedEffect(state.messages.size, state.typing, state.streamingText?.length?.div(40)) {
-        if (state.messages.isNotEmpty() || state.typing) {
-            listState.animateScrollToItem(state.messages.size - 1 + if (state.typing) 1 else 0)
+    // 贴底跟随：用户上滑下探时不再强制滚回首行
+    var stickToBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            val atEnd = last != null &&
+                last.index >= info.totalItemsCount - 1 &&
+                (last.offset + last.size) <= info.viewportEndOffset + 120
+            listState.isScrollInProgress to atEnd
+        }.collect { (scrolling, atEnd) ->
+            if (scrolling && !atEnd) stickToBottom = false
+            else if (!scrolling && atEnd) stickToBottom = true
         }
+    }
+    LaunchedEffect(state.messages.size) {
+        if (state.messages.lastOrNull()?.role == AiMessage.ROLE_USER) stickToBottom = true
+    }
+    LaunchedEffect(stickToBottom, state.messages.size, state.typing, state.streamingText?.length?.div(80)) {
+        if (!stickToBottom) return@LaunchedEffect
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0) listState.scrollToItem(last, scrollOffset = Int.MAX_VALUE / 8)
     }
 
     Scaffold { padding ->
@@ -235,8 +253,8 @@ fun AiScreen(
                             }
                         }
                         val stream = state.streamingText
-                        if (!stream.isNullOrEmpty()) StreamingBubble(stream)
-                        else TypingBubble(state.phase)
+                        if (!stream.isNullOrEmpty()) StreamingBubble(stream, state.reasoning)
+                        else TypingBubble(state.phase, state.reasoning)
                     }
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -691,7 +709,7 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun TypingBubble(phase: String?) {
+private fun TypingBubble(phase: String?, reasoning: String? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -723,17 +741,28 @@ private fun TypingBubble(phase: String?) {
         ) {
             CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(7.dp))
-            Text(
-                phase ?: "正在办理…",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp
-            )
+            Column {
+                Text(
+                    phase ?: "正在办理…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp
+                )
+                if (!reasoning.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun StreamingBubble(text: String) {
+private fun StreamingBubble(text: String, reasoning: String? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -763,7 +792,20 @@ private fun StreamingBubble(text: String) {
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            MarkdownText(text = text, baseColor = MaterialTheme.colorScheme.onSurface)
+            Column {
+                if (!reasoning.isNullOrBlank()) {
+                    Text(
+                        com.simpleaccount.app.ui.components.coalesceReasoning(reasoning),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                    Spacer(Modifier.height(6.dp))
+                }
+                MarkdownText(text = text, baseColor = MaterialTheme.colorScheme.onSurface)
+            }
         }
     }
 }

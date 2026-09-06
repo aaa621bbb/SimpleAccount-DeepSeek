@@ -127,7 +127,7 @@ fun HomeScreen(
                 }
             }
 
-                if (state.insightReport.isNotBlank()) {
+                if (state.evidenceTips.isNotEmpty()) {
                 com.simpleaccount.app.ui.components.SoftCard(
                     Modifier
                         .fillMaxWidth()
@@ -351,7 +351,7 @@ fun HomeScreen(
     if (showInsight) {
         AlertDialog(
             onDismissRequest = { showInsight = false },
-            title = { Text("本月体检 ${state.insightGrade} · ${state.insightScore}分") },
+                    title = { Text("本月体检") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(
@@ -364,7 +364,7 @@ fun HomeScreen(
                         com.simpleaccount.app.ui.components.MarkdownText(state.insightReport)
                     } else {
                         val grouped = state.evidenceTips.groupBy { it.section }
-                        listOf("总览", "结构", "节奏", "风险", "建议").forEach { sec ->
+                        listOf("对照", "漂移", "超额", "周期", "动作").forEach { sec ->
                             val items = grouped[sec].orEmpty()
                             if (items.isEmpty()) return@forEach
                             Text(

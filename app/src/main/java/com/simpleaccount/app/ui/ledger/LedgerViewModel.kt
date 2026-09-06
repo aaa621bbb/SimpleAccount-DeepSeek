@@ -50,7 +50,12 @@ data class LedgerFilter(
     }
 }
 
-data class LedgerMonthGroup(val month: String, val rows: List<RowUi>)
+data class LedgerMonthGroup(
+    val month: String,
+    val rows: List<RowUi>,
+    val expenseFen: Long = 0,
+    val incomeFen: Long = 0,
+)
 
 data class LedgerUiState(
     val filter: LedgerFilter,

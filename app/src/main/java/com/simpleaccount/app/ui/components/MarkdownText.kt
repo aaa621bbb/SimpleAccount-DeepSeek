@@ -46,14 +46,7 @@ private sealed class MdBlock {
 private fun isCjk(c: Char) = c in '\u4e00'..'\u9fff'
 
 /** 模型把「一千二百」拆成一字一行时，拼回连贯句子。 */
-private fun coalesceShards(src: String): String {
-    val lines = src.lines()
-    val nonempty = lines.filter { it.isNotBlank() }
-    if (nonempty.size >= 4 && nonempty.count { it.trim().length <= 2 } * 2 >= nonempty.size) {
-        return nonempty.joinToString("") { it.trim() }
-    }
-    return src
-}
+private fun coalesceShards(src: String): String = coalesceReasoning(src)
 
 private fun parseMarkdown(raw: String): List<MdBlock> {
     val src = coalesceShards(raw)
