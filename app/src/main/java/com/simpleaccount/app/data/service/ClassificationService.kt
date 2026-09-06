@@ -5,6 +5,7 @@ import com.simpleaccount.app.data.entity.Merchant
 import com.simpleaccount.app.data.entity.Transaction
 import com.simpleaccount.app.util.CategoryPresets
 import com.simpleaccount.app.util.KeywordRules
+import com.simpleaccount.app.util.MerchantMatcher
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -50,12 +51,20 @@ class ClassificationService @Inject constructor(
         validCategoryNames: Set<String>,
         type: String = Transaction.TYPE_EXPENSE,
     ): String {
-        val mName = merchant.trim()
+        val mName = MerchantMatcher.stripEllipsis(merchant.trim())
 
-        // --- 层级1：商家映射表（用户映射表最高优先）---
+        // --- 层级1：商家映射表（精确名 + 截断名模糊匹配）---
         if (mName.isNotEmpty()) {
-            val known = merchantDao.getByMerchant(mName)
+            val known = lookupMerchant(mName)
             if (known != null) {
+                // 截图截断名命中全称时，把映射表名字升到更完整的那个
+                val canonical = MerchantMatcher.preferCanonical(known.merchant, mName)
+                if (canonical != known.merchant) {
+                    merchantDao.update(
+                        known.copy(merchant = canonical, updatedAt = System.currentTimeMillis())
+                    )
+                    merchantCache = null
+                }
                 when (known.status) {
                     Merchant.STATUS_USER_SET -> return known.category
                     Merchant.STATUS_CLASSIFIED -> if (known.category.isNotEmpty()) return known.category
@@ -89,14 +98,31 @@ class ClassificationService @Inject constructor(
         return fallback
     }
 
+    @Volatile private var merchantCache: List<Merchant>? = null
+
+    private suspend fun lookupMerchant(name: String): Merchant? {
+        if (name.isEmpty()) return null
+        merchantDao.getByMerchant(name)?.let { return it }
+        val cache = merchantCache ?: merchantDao.getAll().also { merchantCache = it }
+        return cache.firstOrNull { MerchantMatcher.isSameMerchant(it.merchant, name) }
+    }
+
     private suspend fun upsertMerchant(name: String, category: String, status: String) {
         if (name.isEmpty()) return
-        val existing = merchantDao.getByMerchant(name)
+        val existing = lookupMerchant(name)
         if (existing != null) {
-            // user_set 不覆盖；classified 不重复写相同分类
             if (existing.status == Merchant.STATUS_USER_SET) return
-            if (existing.status == Merchant.STATUS_CLASSIFIED && existing.category == category) return
-            merchantDao.update(existing.copy(category = category, status = status, updatedAt = System.currentTimeMillis()))
+            val canonical = MerchantMatcher.preferCanonical(existing.merchant, name)
+            if (existing.status == Merchant.STATUS_CLASSIFIED && existing.category == category && canonical == existing.merchant) return
+            merchantDao.update(
+                existing.copy(
+                    merchant = canonical,
+                    category = category,
+                    status = status,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            merchantCache = null
         } else {
             merchantDao.insert(
                 Merchant(
@@ -104,6 +130,7 @@ class ClassificationService @Inject constructor(
                     createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()
                 )
             )
+            merchantCache = null
         }
     }
 }
