@@ -40,15 +40,15 @@ class AgentTools @Inject constructor(
     val specs: List<AgentToolSpec> = listOf(
         AgentToolSpec(
             name = "query_transactions",
-            description = "查询账本交易明细。可按月份/类型/分类/商家筛。默认返回 100 条，最大 500。超过一页用 offset 翻页。批量改分类不必把 500 条 ids 抄完，直接 reclassify_transactions(merchant/from_category)。",
+            description = "查询账本交易明细。可按月份/类型/分类/商家筛。默认返回 100 条，最大 800，支持 offset 翻页一次性看 500+。超过一页用 offset 翻页。批量改 500 笔不必把每条 id 抄完，直接 reclassify_transactions(merchant/from_category/amount)。",
             parameters = mapOf(
                 "month" to ("string" to "月份，格式 yyyy-MM，例如 2026-03；也接受「本月/上个月」；空则不限月份"),
-                "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天」。与 month 同时出现时优先用 date"),
+                "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天/上午/下午」。与 month 同时出现时优先用 date"),
                 "type" to ("string" to "'expense' 支出 或 'income' 收入；空则不限"),
                 "category" to ("string" to "分类名，例如 餐饮；空则不限"),
                 "keyword" to ("string" to "商家或商品关键词，用于搜索；空则不限"),
-                "limit" to ("integer" to "最多返回条数，默认100，最大500"),
-                "offset" to ("integer" to "跳过前 N 条，默认0，用于翻到第 101–500 笔"),
+                "limit" to ("integer" to "最多返回条数，默认100，最大800（满足 500 条批量改写可视窗）"),
+                "offset" to ("integer" to "跳过前 N 条，默认0，用于翻页 offset=800 看下一批"),
             ),
             required = emptyList(),
         ),
@@ -394,7 +394,7 @@ class AgentTools @Inject constructor(
         val type = a.optString("type").trim().lowercase()
         val category = a.optString("category").trim()
         val keyword = a.optString("keyword").trim()
-        val limit = a.optInt("limit", 100).coerceIn(1, 500)
+        val limit = a.optInt("limit", 100).coerceIn(1, 800)
         val offset = a.optInt("offset", 0).coerceAtLeast(0)
 
         val typeFilter = when (type) {
@@ -518,17 +518,13 @@ class AgentTools @Inject constructor(
                 }
                 ?: java.time.LocalDate.now().toString()
         }
-        // 时间（HH:mm，从参数或"今天 HH:mm"类文本里提取）
+        // 时间（HH:mm）：多模态端到端修复，支持 上午/下午/晚上/凌晨/中午/今天/昨天/前天 等语义
         val timeRaw = a.optString("time").trim()
-        val nowTime = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) }
         val time = if (timeRaw.isNotBlank()) {
-            Regex("(\\d{1,2}):(\\d{2})").find(timeRaw)?.let { tm ->
-                "%02d:%02d".format(
-                    tm.groupValues[1].toInt().coerceIn(0, 23),
-                    tm.groupValues[2].toInt().coerceIn(0, 59)
-                )
-            } ?: nowTime
-        } else nowTime
+            com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(timeRaw, a.optString("date"))
+        } else {
+            com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(date)
+        }
 
         // 分类：显式指定且合法 → 直接用；否则 商家映射表 → 关键词规则 → 兜底（与导入同优先级）
         val valid = categoryRepository.getAll().map { it.name }.toSet()

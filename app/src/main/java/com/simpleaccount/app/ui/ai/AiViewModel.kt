@@ -479,9 +479,12 @@ class AiViewModel @Inject constructor(
 6. 只有确认图上没有任何金额时才输出 []。
             """.trimIndent()
 
+            // 清晰度初筛：单段平均大小过小（<35KB）提示可能模糊，仍尽力识别但回执中提醒
+            val avgKb = if (base64List.isNotEmpty()) base64List.sumOf { it.length } / 1024 / base64List.size else 0
+            val clarityHint = if (avgKb > 0 && avgKb < 35) "（清晰度偏低 ${avgKb}KB/段，建议重截清晰原图）" else ""
             _state.value = _state.value.copy(
                 phase = "正在识别截图（${if (useMain) "主模型" else "识图模型"}）…",
-                traces = _state.value.traces + "已压缩 ${base64List.size} 段，一次发给模型（不再反复识别）"
+                traces = _state.value.traces + "已压缩 ${base64List.size} 段，一次发给模型$clarityHint"
             )
 
             // 所有切片一次请求发给模型（省 token、也更快）。最多 2 次：主模型失败才回退识图配置。
