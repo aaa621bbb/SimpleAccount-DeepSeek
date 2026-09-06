@@ -50,13 +50,44 @@ data class StatsUiState(
     val calDayTx: Map<Int, List<CalDayTx>> = emptyMap(),
     /** 当前月份+收支口径下，每个分类的流水明细（供点击分类弹出账单） */
     val catTx: Map<String, List<CalDayTx>> = emptyMap(),
+    val topMerchants: List<Pair<String, Long>> = emptyList(),
+    val weekdayAvgFen: Long = 0L,
+    val weekendAvgFen: Long = 0L,
+    val dailyAvgFen: Long = 0L,
+    val lastMonthTotal: Long = 0L,
+    val weekdayTotals: List<Pair<String, Long>> = emptyList(),
+    val hourBuckets: List<Pair<String, Long>> = emptyList(),
+    val freqPoints: List<FreqPoint> = emptyList(),
+    val shareMonths: List<ShareMonth> = emptyList(),
+    val momDeltas: List<MomDelta> = emptyList(),
+    val conc: ConcUi = ConcUi(),
+    val elastic: List<ElasticPoint> = emptyList(),
+    val pareto: List<ParetoPoint> = emptyList(),
+    val heat: List<HeatCell> = emptyList(),
+    val spark: List<SparkPoint> = emptyList(),
+    val flowIncome: List<FlowPart> = emptyList(),
+    val flowExpense: List<FlowPart> = emptyList(),
+    val radar: RadarUi = RadarUi(),
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) : ViewModel() {
+
+    val layout: StateFlow<StatsLayoutUi> = kotlinx.coroutines.flow.combine(
+        settingsRepository.statsOrderFlow,
+        settingsRepository.statsHiddenFlow,
+        settingsRepository.pieLegendCountFlow,
+    ) { order, hidden, count ->
+        StatsLayoutUi(
+            order = StatsModules.parseOrder(order),
+            hidden = StatsModules.parseHidden(hidden),
+            pieLegendCount = count,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsLayoutUi())
 
     private val monthFlow = kotlinx.coroutines.flow.MutableStateFlow(DateUtil.thisMonth())
     private val typeFlow = kotlinx.coroutines.flow.MutableStateFlow(Transaction.TYPE_EXPENSE)
@@ -125,6 +156,8 @@ class StatsViewModel @Inject constructor(
         val calPrefix = "%04d-%02d".format(calMonth.year, calMonth.monthValue)
         val calDayTotals = mutableMapOf<Int, DayTotals>()
         val calDayTx = mutableMapOf<Int, MutableList<CalDayTx>>()
+        val extra = StatsExtra.compute(month, type, txs, filtered, trend, calPrefix)
+
         txs.filter { it.date.startsWith(calPrefix) }.forEach { t ->
             val day = t.date.substring(8, 10).toIntOrNull() ?: return@forEach
             val cur = calDayTotals.getOrPut(day) { DayTotals() }
@@ -152,7 +185,72 @@ class StatsViewModel @Inject constructor(
                 list.sortedByDescending { it.date }.map {
                     CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date)
                 }
-            }
+            },
+            topMerchants = filtered.filter { it.merchant.isNotBlank() }
+                .groupBy { it.merchant }
+                .mapValues { it.value.sumOf { t -> t.amount } }
+                .toList()
+                .sortedByDescending { it.second }
+                .take(8),
+            weekdayAvgFen = run {
+                val days = filtered.groupBy { it.date }.filterKeys {
+                    runCatching { java.time.LocalDate.parse(it).dayOfWeek.value }.getOrDefault(1) < 6
+                }
+                if (days.isEmpty()) 0L else days.values.sumOf { list -> list.sumOf { it.amount } } / days.size
+            },
+            weekendAvgFen = run {
+                val days = filtered.groupBy { it.date }.filterKeys {
+                    runCatching { java.time.LocalDate.parse(it).dayOfWeek.value }.getOrDefault(1) >= 6
+                }
+                if (days.isEmpty()) 0L else days.values.sumOf { list -> list.sumOf { it.amount } } / days.size
+            },
+            dailyAvgFen = run {
+                val days = filtered.groupBy { it.date }
+                if (days.isEmpty()) 0L else total / days.size
+            },
+            lastMonthTotal = run {
+                val last = runCatching {
+                    if (month == "all") null else java.time.YearMonth.parse(month).minusMonths(1).toString()
+                }.getOrNull()
+                if (last == null) 0L
+                else txs.filter { it.type == type && it.date.startsWith(last) }.sumOf { it.amount }
+            },
+            weekdayTotals = run {
+                val names = listOf("一", "二", "三", "四", "五", "六", "日")
+                val acc = LongArray(7)
+                filtered.forEach { t ->
+                    val i = runCatching { java.time.LocalDate.parse(t.date).dayOfWeek.value }.getOrDefault(1) - 1
+                    if (i in 0..6) acc[i] += t.amount
+                }
+                names.mapIndexed { i, n -> n to acc[i] }
+            },
+            hourBuckets = run {
+                val labels = listOf("晨 6–11", "午 11–14", "下午 14–18", "晚 18–22", "夜 22–6")
+                val acc = LongArray(5)
+                filtered.forEach { t ->
+                    val h = t.time.substringBefore(':').toIntOrNull() ?: return@forEach
+                    val i = when {
+                        h in 6..10 -> 0
+                        h in 11..13 -> 1
+                        h in 14..17 -> 2
+                        h in 18..21 -> 3
+                        else -> 4
+                    }
+                    acc[i] += t.amount
+                }
+                labels.mapIndexed { i, n -> n to acc[i] }
+            },
+            freqPoints = extra.freqPoints,
+            shareMonths = extra.shareMonths,
+            momDeltas = extra.momDeltas,
+            conc = extra.conc,
+            elastic = extra.elastic,
+            pareto = extra.pareto,
+            heat = extra.heat,
+            spark = extra.spark,
+            flowIncome = extra.flowIncome,
+            flowExpense = extra.flowExpense,
+            radar = extra.radar,
         )
     }
 
