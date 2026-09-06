@@ -1,8 +1,8 @@
+# 手动触发出包：需要 APK 时到仓库 Actions 标签页点 "Run workflow"。
+# 不再随 push/PR 自动编译 —— 可反复推送源码而不会消耗 Actions 配额。
 name: Build APK
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
