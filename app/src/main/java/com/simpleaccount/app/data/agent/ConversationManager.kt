@@ -23,6 +23,7 @@ import javax.inject.Singleton
 class ConversationManager @Inject constructor(
     private val conversationDao: ConversationDao,
     private val aiMessageDao: AiMessageDao,
+    private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) {
 
     companion object {
@@ -46,18 +47,39 @@ class ConversationManager @Inject constructor(
 
     fun observeConversations(): Flow<List<Conversation>> = conversationDao.observeAll()
 
-    /** 取最近活跃的会话；没有则创建一个。 */
+    /**
+     * 取应续接的会话（v2.31.0 自动续接）：
+     * 1. 优先恢复上次记住的会话 id（退出 App 再进仍续接）；
+     * 2. 否则取最近活跃会话；
+     * 3. 都没有则新建。
+     */
     suspend fun ensureCurrentConversation(): Conversation {
-        conversationDao.getLatest()?.let { return it }
-        val c = Conversation(id = UUID.randomUUID().toString(), title = "新对话")
-        conversationDao.insert(c)
-        return c
+        val remembered = settingsRepository.lastConversationId()
+        if (remembered.isNotBlank()) {
+            conversationDao.getById(remembered)?.let {
+                touchActive(it.id)
+                return it
+            }
+        }
+        conversationDao.getLatest()?.let {
+            touchActive(it.id)
+            return it
+        }
+        return newConversation()
     }
 
     suspend fun newConversation(): Conversation {
         val c = Conversation(id = UUID.randomUUID().toString(), title = "新对话")
         conversationDao.insert(c)
+        touchActive(c.id)
         return c
+    }
+
+    /** 记住当前活跃会话，供下次冷启动自动续接。 */
+    suspend fun touchActive(conversationId: String) {
+        if (conversationId.isBlank()) return
+        settingsRepository.setLastConversationId(conversationId)
+        conversationDao.touch(conversationId, System.currentTimeMillis())
     }
 
     suspend fun getConversation(id: String): Conversation? = conversationDao.getById(id)
@@ -66,10 +88,14 @@ class ConversationManager @Inject constructor(
         if (title.isNotBlank()) conversationDao.setTitle(id, title.trim(), System.currentTimeMillis())
     }
 
-    /** 删除会话及其全部消息 */
+    /** 删除会话及其全部消息；若删的是当前记住的，切到最新。 */
     suspend fun deleteConversation(id: String) {
         aiMessageDao.deleteByConversation(id)
         conversationDao.deleteById(id)
+        if (settingsRepository.lastConversationId() == id) {
+            val next = conversationDao.getLatest()
+            settingsRepository.setLastConversationId(next?.id.orEmpty())
+        }
     }
 
     /** 清空某会话的消息（保留会话本身） */
@@ -86,7 +112,7 @@ class ConversationManager @Inject constructor(
     suspend fun getMessages(conversationId: String): List<AiMessage> =
         aiMessageDao.getForConversation(conversationId, MESSAGES_PAGE)
 
-    /** 插入一条消息并 touch 会话；返回带最终字段的实体 */
+/** 插入一条消息并 touch 会话；返回带最终字段的实体 */
     suspend fun addMessage(
         conversationId: String,
         role: String,
@@ -107,6 +133,8 @@ class ConversationManager @Inject constructor(
         )
         aiMessageDao.insert(m)
         conversationDao.touch(conversationId, m.timestamp)
+        // 每次写入都刷新「最近会话」，保证退出后自动续接
+        runCatching { settingsRepository.setLastConversationId(conversationId) }
         trimCaps(conversationId)
         return m
     }

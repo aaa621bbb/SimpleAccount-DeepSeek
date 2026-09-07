@@ -14,13 +14,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** 趋势点 */
 data class TrendPoint(val month: String, val expense: Long, val income: Long)
 
-/** 饼图扇区 */
-data class PieSlice(val categoryName: String, val colorHex: String, val value: Long)
+/** 饼图扇区（categoryName 可为「一级」或「一级/二级」） */
+data class PieSlice(
+    val categoryName: String,
+    val colorHex: String,
+    val value: Long,
+    /** 一级分类名（用于取色与点选） */
+    val parentCategory: String = categoryName.substringBefore('/'),
+)
 
 /** 日历某天的收支合计 */
 data class DayTotals(val expense: Long = 0L, val income: Long = 0L)
@@ -33,6 +40,7 @@ data class CalDayTx(
     val merchant: String,
     val product: String,
     val date: String = "",
+    val subCategory: String = "",
 )
 
 data class StatsUiState(
@@ -109,10 +117,10 @@ class StatsViewModel @Inject constructor(
             .getOrDefault(DateUtil.thisMonth())
     }
 
-    val uiState: StateFlow<StatsUiState> = combine(
+val uiState: StateFlow<StatsUiState> = combine(
         monthFlow,
         typeFlow,
-        transactionsFlow,
+        combine(transactionsFlow, settingsRepository.ledgerScopeVersionFlow) { txs, _ -> txs },
         categoriesFlow
     ) { month, type, txs, cats ->
         computeStats(month, type, txs, cats)
@@ -121,28 +129,33 @@ class StatsViewModel @Inject constructor(
         .flowOn(kotlinx.coroutines.Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
 
-    private fun computeStats(
+private fun computeStats(
         month: String,
         type: String,
-        txs: List<Transaction>,
+        txsIn: List<Transaction>,
         cats: List<com.simpleaccount.app.data.entity.Category>,
     ): StatsUiState {
+        // 收支口径：按用户开关过滤退款/投资
+        val txs = settingsRepository.filterByLedgerScope(txsIn)
         // 月份列表从真实数据生成（有账的月份，倒序），而不是固定的最近12个月
         val months = txs.map { it.date.take(7) }.distinct().sortedDescending()
             .ifEmpty { DateUtil.recentMonths(12) }
 
-        // 饼图 & 总数
+        // 饼图 & 总数：二级分类维度（有二级用 一级/二级，无二级退回一级）
         val colorMap = cats.associate { it.name to it.colorHex }
         val filtered = when {
             month == "all" -> txs.filter { it.type == type }
             else -> txs.filter { it.type == type && it.date.startsWith(month) }
         }
-        val byCat = filtered.groupBy { it.category }
+        fun dimKey(t: Transaction): String =
+            if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+        val byCat = filtered.groupBy { dimKey(it) }
             .mapValues { (_, list) -> list.sumOf { it.amount } }
             .toList()
             .sortedByDescending { it.second }
         val slices = byCat.map { (cat, total) ->
-            PieSlice(cat, colorMap[cat] ?: "#BDC3C7", total)
+            val parent = cat.substringBefore('/')
+            PieSlice(cat, colorMap[parent] ?: "#BDC3C7", total, parent)
         }
         val total = filtered.sumOf { it.amount }
 
@@ -164,8 +177,8 @@ class StatsViewModel @Inject constructor(
             calDayTotals[day] = if (t.type == Transaction.TYPE_EXPENSE)
                 cur.copy(expense = cur.expense + t.amount)
             else cur.copy(income = cur.income + t.amount)
-            calDayTx.getOrPut(day) { mutableListOf() }.add(
-                CalDayTx(t.type, t.amount, t.category, t.merchant, t.product)
+calDayTx.getOrPut(day) { mutableListOf() }.add(
+                CalDayTx(t.type, t.amount, t.category, t.merchant, t.product, subCategory = t.subCategory)
             )
         }
 
@@ -181,9 +194,10 @@ class StatsViewModel @Inject constructor(
             calMonthNum = calMonth.monthValue,
             calDayTotals = calDayTotals,
             calDayTx = calDayTx,
-            catTx = filtered.groupBy { it.category }.mapValues { (_, list) ->
+            // 明细按二级维度键索引（一级/二级 或 一级）
+            catTx = filtered.groupBy { dimKey(it) }.mapValues { (_, list) ->
                 list.sortedByDescending { it.date }.map {
-                    CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date)
+                    CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date, it.subCategory)
                 }
             },
             topMerchants = filtered.filter { it.merchant.isNotBlank() }
@@ -254,12 +268,21 @@ class StatsViewModel @Inject constructor(
         )
     }
 
-    fun setMonth(m: String) {
+fun setMonth(m: String) {
         monthFlow.value = m
     }
 
     fun setType(t: String) {
         typeFlow.value = t
+    }
+
+    /** 统计页「高级分析」是否默认展开（读设置）。 */
+    fun advancedOpenInitially(): Boolean = settingsRepository.statsAdvancedOpen()
+
+    fun persistAdvancedOpen(open: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setStatsAdvancedOpen(open)
+        }
     }
 
     private fun buildTrend(txs: List<Transaction>, months: List<String>): List<TrendPoint> {

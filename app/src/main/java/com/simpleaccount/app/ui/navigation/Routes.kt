@@ -16,8 +16,11 @@ object Routes {
     const val DATA_MANAGE = "data_manage"
     const val LOGS = "logs"
     const val ABOUT = "about"
-    const val AI_SETTINGS = "ai_settings"
+const val AI_SETTINGS = "ai_settings"
+    const val ONDEVICE_MODELS = "ondevice_models"
     const val AUTO_RECORD = "auto_record"
+    /** 收支口径：退款/投资是否计入统计与预算 */
+    const val LEDGER_SCOPE = "ledger_scope"
     const val LEDGER_MANAGE = "ledger_manage"
     const val APPEARANCE = "appearance"
     const val STATS_LAYOUT = "stats_layout"

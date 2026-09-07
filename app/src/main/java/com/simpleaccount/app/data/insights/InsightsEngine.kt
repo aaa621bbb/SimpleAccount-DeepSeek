@@ -116,12 +116,15 @@ object InsightsEngine {
             .sumOf { it.amount }
         val momPct = if (lastExpense > 0) (expense - lastExpense) * 100.0 / lastExpense else null
 
+// 分类排行：优先二级分类维度（有二级用「一级/二级」，无二级退回一级）
         val topCategories = thisTx.filter { it.type == Transaction.TYPE_EXPENSE }
-            .groupBy { it.category }
+            .groupBy { t ->
+                if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+            }
             .mapValues { it.value.sumOf { t -> t.amount } }
             .toList()
             .sortedByDescending { it.second }
-            .take(5)
+            .take(8)
 
         val byDay = thisTx.filter { it.type == Transaction.TYPE_EXPENSE }
             .groupBy { it.date }
@@ -135,12 +138,14 @@ object InsightsEngine {
 
         val subscriptions = detectSubscriptions(all)
         val lifestyle = lifestyle(thisTx)
-        val today = DateUtil.today()
+val today = DateUtil.today()
         val todayFen = thisTx.filter { it.date == today && it.type == Transaction.TYPE_EXPENSE }.sumOf { it.amount }
         val dayOfMonth = if (month == DateUtil.thisMonth()) java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
         else ym.lengthOfMonth()
         val daysInMonth = ym.lengthOfMonth()
-        val projected = if (dayOfMonth > 0) expense * daysInMonth / dayOfMonth else 0L
+        // v2.31.0：月底测算修正——一次性/低频支出只计一次，不按剩余天数日均摊销；
+        // 地铁/餐饮等常态日频支出仍按日折算。严禁一刀切豁免。
+        val projected = projectMonthEnd(thisTx, dayOfMonth, daysInMonth)
         val lastPaceFen = lastTx.filter {
             it.type == Transaction.TYPE_EXPENSE &&
                 runCatching { java.time.LocalDate.parse(it.date).dayOfMonth <= dayOfMonth }.getOrDefault(false)
@@ -150,8 +155,10 @@ object InsightsEngine {
             .filter { it.value.size >= 2 && it.key.substringBefore('|').isNotBlank() }
             .map { (k, v) -> "${k.substringBefore('|')} ¥${MoneyUtil.fenToYuan(v.first().amount)} ×${v.size}" }
             .take(3)
-        val lastCats = lastTx.filter { it.type == Transaction.TYPE_EXPENSE }
-            .groupBy { it.category }
+val lastCats = lastTx.filter { it.type == Transaction.TYPE_EXPENSE }
+            .groupBy { t ->
+                if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+            }
             .mapValues { it.value.sumOf { t -> t.amount } }
         val evidenceTips = buildEvidenceTips(
             thisTx, expense, income, lastExpense, lastYearExpense, lastPaceFen, momPct, budgetFen,
@@ -249,6 +256,89 @@ object InsightsEngine {
         val wAvg = if (weekDays > 0) weekSum / weekDays else 0L
         val eAvg = if (endDays > 0) endSum / endDays else 0L
         return Triple(wAvg, eAvg, night)
+    }
+
+/**
+     * 月底支出预估（v2.31.0 修正）：
+     * - **可复发（日频）支出**：地铁、公交、餐饮外卖等，按「已发生日均 × 剩余天数」外推；
+     * - **一次性/低频**：月初话费、单次火车票、大额装修等，只计已发生金额一次，不摊销。
+     * 判定从严：仅当「本月出现 ≤2 天 且 非交通/餐饮日频类」才豁免日均；地铁等仍按日折算。
+     */
+    fun projectMonthEnd(monthTx: List<Transaction>, dayOfMonth: Int, daysInMonth: Int): Long {
+        if (dayOfMonth <= 0) return 0L
+        val exp = monthTx.filter { it.type == Transaction.TYPE_EXPENSE }
+        if (exp.isEmpty()) return 0L
+        val remainDays = (daysInMonth - dayOfMonth).coerceAtLeast(0)
+        if (remainDays == 0) return exp.sumOf { it.amount }
+
+        // 按「商家|分类|金额桶」聚类，识别一次性
+        data class Cluster(
+            val days: Set<String>,
+            val total: Long,
+            val dailyLike: Boolean,
+            val oneShotHint: Boolean,
+        )
+        val clusters = exp.groupBy { t ->
+            val amtBucket = t.amount / 100 // 元级
+            "${t.merchant.ifBlank { t.category }}|${t.category}|$amtBucket"
+        }.map { (_, list) ->
+            val days = list.map { it.date }.toSet()
+            val cat = list.first().category
+            val product = list.joinToString(" ") { it.product + it.merchant + it.note }
+            Cluster(
+                days = days,
+                total = list.sumOf { it.amount },
+                dailyLike = isDailyLikeExpense(cat, product),
+                oneShotHint = isOneShotHint(cat, product),
+            )
+        }
+
+        var oneShot = 0L
+        var recurring = 0L
+        for (c in clusters) {
+            // 从严：显式一次性关键词 → 只计一次；
+            // 或（非日频 且 本月出现 ≤2 天）→ 一次性。地铁等 dailyLike 永不豁免。
+            val treatAsOneShot = when {
+                c.dailyLike -> false
+                c.oneShotHint -> true
+                c.days.size <= 2 -> true
+                else -> false
+            }
+            if (treatAsOneShot) oneShot += c.total else recurring += c.total
+        }
+        // 可复发部分：按已发生日数日均 × 整月天数
+        val recurringProjected = if (dayOfMonth > 0) recurring * daysInMonth / dayOfMonth else recurring
+        return oneShot + recurringProjected
+    }
+
+    /**
+     * 日频/常态支出：地铁公交餐饮外卖等，不得一次性豁免。
+     * 注意：不把整个「通讯」当日常——话费/月租是低频，见 [isOneShotHint]。
+     */
+    fun isDailyLikeExpense(category: String, haystack: String): Boolean {
+        if (isOneShotHint(category, haystack)) return false
+        val cat = category
+        if (cat in setOf("餐饮", "交通")) return true
+        val h = haystack
+        val keys = listOf(
+            "地铁", "公交", "巴士", "共享单车", "哈啰", "美团单车", "青桔",
+            "打车", "出租车", "滴滴", "高德打车", "曹操",
+            "外卖", "堂食", "早餐", "午餐", "晚饭", "奶茶", "咖啡",
+            "便利店", "超市", "菜场",
+        )
+        return keys.any { h.contains(it) || cat.contains(it) }
+    }
+
+    /** 一次性/低频提示：话费、火车票、机票、房租等。 */
+    fun isOneShotHint(category: String, haystack: String): Boolean {
+        val h = "$category $haystack"
+        val keys = listOf(
+            "话费", "手机费", "充值", "月租",
+            "火车票", "高铁", "动车", "机票", "机票款", "飞机票",
+            "房租", "物业费", "水电", "燃气费", "宽带",
+            "保险", "学费", "医疗", "装修",
+        )
+        return keys.any { h.contains(it) }
     }
 
     /** 连续 ≥3 个月、金额波动 ≤25% 的商家。管家内部可用，体检卡片不再当指标。 */
@@ -407,10 +497,13 @@ object InsightsEngine {
             )
         }
 
-        // —— 漂移：类目占比百分点，阈值才出 ——
+// —— 漂移：类目占比百分点（二级维度键 cat 可能是「一级/二级」）——
         top.take(5).forEach { (cat, amt) ->
             val share = if (expense > 0) amt * 100.0 / expense else 0.0
-            val prev = lastCats[cat] ?: 0L
+            // 优先同键（一级/二级），否则回退到一级合计
+            val parent = cat.substringBefore('/')
+            val prev = lastCats[cat]
+                ?: lastCats.filterKeys { it == parent || it.startsWith("$parent/") }.values.sum()
             val prevShare = if (lastExpense > 0) prev * 100.0 / lastExpense else 0.0
             val pp = share - prevShare
             val dAmt = amt - prev
@@ -419,8 +512,11 @@ object InsightsEngine {
                 tips.add(
                     InsightTip(
                         title = "$cat 占比 ${share.toInt()}%（$ppTxt）",
-                        body = "本月 ¥${fen(amt)}，上月 ¥${fen(prev)}，金额差 ${if (dAmt >= 0) "+" else ""}¥${fen(abs(dAmt))}。",
-                        evidenceIds = idsOf({ it.category == cat }),
+                        body = "本月 ¥${fen(amt)}，上月同级约 ¥${fen(prev)}，金额差 ${if (dAmt >= 0) "+" else ""}¥${fen(abs(dAmt))}。",
+                        evidenceIds = idsOf({ t ->
+                            val key = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+                            key == cat || t.category == cat
+                        }),
                         section = "漂移",
                     )
                 )
@@ -457,11 +553,11 @@ object InsightsEngine {
                         section = "超额",
                     )
                 )
-                if (projected > budgetFen && dayOfMonth < daysInMonth) {
+if (projected > budgetFen && dayOfMonth < daysInMonth) {
                     tips.add(
                         InsightTip(
                             title = "按这速度月底超约 ¥${fen(projected - budgetFen)}",
-                            body = "算法：已花 × 本月天数 ÷ 今天是几号 = ¥${fen(projected)}，对比预算 ¥${fen(budgetFen)}。还没花的日子按前几天平均估，不是断言。",
+                            body = "算法：日频支出按日均外推，一次性/低频（话费、单次火车票等）只计一次不摊销；地铁等常态仍按日折算。预计 ¥${fen(projected)}，对比预算 ¥${fen(budgetFen)}。",
                             evidenceIds = idsOf({ true }, 6),
                             section = "超额",
                         )
@@ -532,15 +628,21 @@ object InsightsEngine {
             )
         }
 
-        // —— 动作：可执行，禁止空话 ——
+// —— 动作：可执行，禁止空话（cat 为二级维度键）——
         top.firstOrNull()?.let { (cat, amt) ->
-            val prev = lastCats[cat] ?: 0L
+            val parent = cat.substringBefore('/')
+            val prev = lastCats[cat]
+                ?: lastCats.filterKeys { it == parent || it.startsWith("$parent/") }.values.sum()
+            fun matchDim(t: Transaction): Boolean {
+                val key = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+                return key == cat || t.category == cat
+            }
             if (prev > 0 && amt > prev) {
                 tips.add(
                     InsightTip(
                         title = "若「$cat」回到上月水平，本月少花 ¥${fen(amt - prev)}",
-                        body = "本月 $cat ¥${fen(amt)}，上月 ¥${fen(prev)}。",
-                        evidenceIds = idsOf({ it.category == cat }),
+                        body = "本月 $cat ¥${fen(amt)}，上月同级约 ¥${fen(prev)}。",
+                        evidenceIds = idsOf(::matchDim),
                         section = "动作",
                     )
                 )
@@ -549,12 +651,10 @@ object InsightsEngine {
                     InsightTip(
                         title = "想压支出先盯「$cat」",
                         body = "占支出 ${amt * 100 / expense}%，共 ¥${fen(amt)}。",
-                        evidenceIds = idsOf({ it.category == cat }),
+                        evidenceIds = idsOf(::matchDim),
                         section = "动作",
                     )
                 )
-            } else {
-                // 既未回到上月水平、占比也未过半：不给多余动作建议
             }
         }
         if (budgetFen > 0 && expense < budgetFen && dayOfMonth < daysInMonth) {

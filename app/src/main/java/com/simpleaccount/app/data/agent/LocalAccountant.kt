@@ -37,10 +37,14 @@ class LocalAccountant @Inject constructor(
     private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
 
-    /** 写提案：预览文案 + 用户批准后执行的落库动作。 */
+/**
+     * 写提案：预览文案 + 用户批准后执行的落库动作。
+     * [needsConfirm]=false 表示仅追问补齐信息（金额/时刻未明示），直接展示、不弹确认、不落库。
+     */
     data class WriteProposal(
         val preview: String,
         val commit: suspend () -> String,
+        val needsConfirm: Boolean = true,
     )
 
     /** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
@@ -226,21 +230,27 @@ class LocalAccountant @Inject constructor(
         }
     }
 
-    /**
-     * 口语记账提案：语义解析（[UtteranceParser]）+ 时刻不默认。
-     * 金额缺失 → 返回 null（转云端 Agent 追问）；时刻缺失 → 预览注明"时刻待补"，
-     * 落库时刻留空，用户可在账本里编辑补上。
+/**
+     * 口语记账提案：语义解析（[UtteranceParser]）+ 时刻/金额不臆测。
+     * v2.31.0：金额缺失时返回追问提案（不落库）；补齐后再生成可落库提案。
+     * 时刻缺失 → 预览注明「时刻待补」，落库时刻留空。
      */
     private suspend fun proposeAdd(s: String): WriteProposal? {
         val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
         if (!want) return null
-        if (s.contains("多少")) return null
+        if (s.contains("多少") && !Regex("\\d").containsMatchIn(s)) return null
         val valid = categoryRepository.getAll().map { it.name }.toSet()
         val knownMerchants = accountRepository.getAll()
             .map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct()
         val p = UtteranceParser.parse(s, valid, knownMerchants)
-        val amountFen = p.amountFen ?: return null
-        if (amountFen <= 0) return null
+        // 金额未明示 → 必须先追问，禁止臆测填充
+        val amountFen = p.amountFen
+        if (amountFen == null || amountFen <= 0) {
+            val hint = listOf(p.merchant, p.product).filter { it.isNotBlank() }.joinToString(" · ")
+            val ask = if (hint.isBlank()) "这笔要记多少钱？说个金额我马上帮你记上。"
+            else "「$hint」要记多少钱？说个金额我马上帮你记上。"
+            return WriteProposal(preview = ask, needsConfirm = false) { ask }
+        }
         val date = p.date ?: DateUtil.today()
         val time = p.time.orEmpty()
         val category = p.category

@@ -1,8 +1,10 @@
 package com.simpleaccount.app.data.agent
 
 /**
- * 管家意图门控：无关 query 不碰账本、不挂工具，避免首答被一次全表扫描拖死。
- * 封锁级要求：无关联查询（如闲聊/天气/笑话）不得空转 DB，也不得挂 ledger 工具。
+ * 管家意图门控：分类用户意图以收敛工具集与上下文。
+ *
+ * v2.31.0：CHAT 不再意味着「禁止挂工具」——AgentLoop 仍可挂最小工具集，
+ * 由模型自主裁决是否调用；needsLedger=false 时跳过全表快照以控制成本。
  */
 enum class QueryIntent {
     CHAT,

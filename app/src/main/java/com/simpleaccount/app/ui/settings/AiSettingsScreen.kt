@@ -127,14 +127,14 @@ fun AiSettingsScreen(
             Text("智能体大脑", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "云端大模型理解最强；端侧小模型离线可用（0.6B–1.5B，接入中）。本地管家始终可用，与该开关无关。",
+                "云端大模型理解最强；端侧小模型下载后全离线可用（0.6B–1.5B，免费、数据不出设备）。本地管家始终可用。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
             listOf(
                 SettingsRepository.BACKEND_CLOUD to "云端大模型（推荐）",
-                SettingsRepository.BACKEND_ONDEVICE to "端侧小模型（预留）",
+                SettingsRepository.BACKEND_ONDEVICE to "端侧小模型（离线免费）",
             ).forEach { (value, label) ->
                 Row(
                     Modifier
@@ -147,6 +147,41 @@ fun AiSettingsScreen(
                     RadioButton(
                         selected = state.modelBackend == value,
                         onClick = { viewModel.setModelBackend(value) }
+                    )
+                    Text(label, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            if (state.modelBackend == SettingsRepository.BACKEND_ONDEVICE) {
+                TextButton(onClick = { navController.navigate(com.simpleaccount.app.ui.navigation.Routes.ONDEVICE_MODELS) }) {
+                    Text("管理端侧模型（下载 / 基准 / 引导）")
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // --------- 智能体执行授权 ---------
+            Text("智能体执行授权", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "记账、改账、删除等写操作：默认每次确认；也可授权后自动执行。金额与时刻未说清时仍会先追问。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            listOf(
+                SettingsRepository.EXEC_AUTH_CONFIRM to "每次执行前需确认（默认）",
+                SettingsRepository.EXEC_AUTH_AUTO to "授权后自动执行",
+            ).forEach { (value, label) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { viewModel.setAgentExecAuth(value) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = state.agentExecAuth == value,
+                        onClick = { viewModel.setAgentExecAuth(value) }
                     )
                     Text(label, style = MaterialTheme.typography.bodyLarge)
                 }

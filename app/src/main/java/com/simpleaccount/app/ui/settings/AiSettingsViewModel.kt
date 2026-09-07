@@ -131,8 +131,13 @@ data class AiSettingsUiState(
     val models: List<String> = emptyList(),
     val loadingModels: Boolean = false,
     val thinkingLevel: String = SettingsRepository.THINKING_OFF,
-    /** 智能体模型后端：cloud 云端大模型 / ondevice 端侧小模型（预留）。 */
+    /** 智能体模型后端：cloud 云端大模型 / ondevice 端侧小模型。 */
     val modelBackend: String = SettingsRepository.BACKEND_CLOUD,
+    /**
+     * 智能体执行授权：
+     * confirm=每次执行前需确认（默认）；auto=授权后自动执行。
+     */
+    val agentExecAuth: String = SettingsRepository.EXEC_AUTH_CONFIRM,
 )
 
 @HiltViewModel
@@ -171,6 +176,7 @@ class AiSettingsViewModel @Inject constructor(
                 useMainForVision = settingsRepository.useMainModelForVision(),
                 thinkingLevel = settingsRepository.thinkingLevel(),
                 modelBackend = settingsRepository.modelBackend(),
+                agentExecAuth = settingsRepository.agentExecAuth(),
             )
             // 已配好 Key → 自动拉取该接口的可用模型列表
             if (settingsRepository.apiKey().isNotBlank()) refreshModels()
@@ -280,11 +286,19 @@ class AiSettingsViewModel @Inject constructor(
         }
     }
 
-    /** 切换智能体模型后端（云端/端侧预留），AgentLoop 经 ModelBackendProvider 生效。 */
+/** 切换智能体模型后端（云端/端侧），AgentLoop 经 ModelBackendProvider 生效。 */
     fun setModelBackend(backend: String) {
         viewModelScope.launch {
             settingsRepository.setModelBackend(backend)
             _state.value = _state.value.copy(modelBackend = backend)
+        }
+    }
+
+    /** 智能体执行授权：每次确认 / 授权后自动执行。 */
+    fun setAgentExecAuth(auth: String) {
+        viewModelScope.launch {
+            settingsRepository.setAgentExecAuth(auth)
+            _state.value = _state.value.copy(agentExecAuth = auth)
         }
     }
 

@@ -196,7 +196,7 @@ fun AiScreen(
                 }
             }
 
-            if (!state.enabled) {
+if (!state.enabled) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -209,7 +209,7 @@ fun AiScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "AI 功能未开启，请到设置中开启并配置 API Key",
+                            "云端 AI 未开启。可配置 API Key，或到「端侧小模型」下载离线免费模型。",
                             modifier = Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             fontSize = 13.sp

@@ -50,10 +50,18 @@ data class HomeUiState(
     val todayDupes: List<String> = emptyList(),
     val pendingMerchants: Int = 0,
     val importFailures: Int = 0,
-    /** 首页版式：simple 简约风 / dense 信息密集风。 */
+/** 首页版式：simple 简约风 / dense 信息密集风。 */
     val homeLayout: String = SettingsRepository.HOME_SIMPLE,
     /** 条目标题字段：merchant 商家名 / product 商品名。 */
     val titleField: String = SettingsRepository.TITLE_MERCHANT,
+    /** 密集风：近 7 天每日支出（日→分） */
+    val weekHeat: List<Pair<String, Long>> = emptyList(),
+    /** 密集风：本月高频商户 Top */
+    val topMerchants: List<Pair<String, Long>> = emptyList(),
+    /** 密集风：本月类目（二级维度）占比 */
+    val catShares: List<Pair<String, Long>> = emptyList(),
+    /** 待确认的无感记账草稿数（不进统计，首页提醒） */
+    val draftCount: Int = 0,
 )
 
 @HiltViewModel
@@ -118,11 +126,11 @@ class HomeViewModel @Inject constructor(
         val title: String,
     )
 
-    val uiState: StateFlow<HomeUiState> =
+val uiState: StateFlow<HomeUiState> =
         combine(
             accountRepository.observeAll(),
             categoriesFlow,
-            budgetFlow,
+            combine(budgetFlow, settingsRepository.ledgerScopeVersionFlow) { b, _ -> b },
             combine(recentCountFlow, sortFlow, ledgerRepository.observeAll(), ledgerRepository.currentIdFlow) { count, sort, ledgers, lid ->
                 Extra(count, sort, ledgers, lid)
             },
@@ -139,7 +147,10 @@ class HomeViewModel @Inject constructor(
             val ledgers = q.ledgers
             val lid = q.lid
             val month = DateUtil.thisMonth()
-            val transactions = all.filter { it.date.startsWith(month) }
+            // 收支口径过滤（随 ledgerScopeVersion 变更重算）
+            val scoped = settingsRepository.filterByLedgerScope(all)
+            val draftCount = all.count { it.source == Transaction.SOURCE_DRAFT }
+            val transactions = scoped.filter { it.date.startsWith(month) }
             val catMap = categories.associateBy { it.name }
             var expense = 0L
             var income = 0L
@@ -151,6 +162,32 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             }
+            // 密集风数据：近 7 天热力 / 高频商户 / 类目占比（二级）
+            val today = java.time.LocalDate.now()
+            val weekHeat = (6 downTo 0).map { offset ->
+                val d = today.minusDays(offset.toLong())
+                val key = d.toString()
+                val label = "%d/%d".format(d.monthValue, d.dayOfMonth)
+                val sum = scoped.filter {
+                    it.date == key && it.type == Transaction.TYPE_EXPENSE
+                }.sumOf { it.amount }
+                label to sum
+            }
+            val topMerchants = transactions.filter {
+                it.type == Transaction.TYPE_EXPENSE && it.merchant.isNotBlank()
+            }.groupBy { it.merchant.trim() }
+                .mapValues { it.value.sumOf { t -> t.amount } }
+                .toList()
+                .sortedByDescending { it.second }
+                .take(5)
+            val catShares = transactions.filter { it.type == Transaction.TYPE_EXPENSE }
+                .groupBy { t ->
+                    if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+                }
+                .mapValues { it.value.sumOf { t -> t.amount } }
+                .toList()
+                .sortedByDescending { it.second }
+                .take(6)
             val sorted = if (sort == HomeSort.AMOUNT) {
                 transactions.sortedWith(
                     compareByDescending<Transaction> { it.amount }
@@ -165,7 +202,7 @@ class HomeViewModel @Inject constructor(
                         .thenByDescending { it.id }
                 )
             }
-            val health = InsightsEngine.compute(all, budget, month)
+            val health = InsightsEngine.compute(scoped, budget, month)
             val day = java.time.LocalDate.now().dayOfMonth
             val days = java.time.YearMonth.now().lengthOfMonth()
             val remainDays = (days - day).coerceAtLeast(1)
@@ -193,8 +230,12 @@ class HomeViewModel @Inject constructor(
                 todayDupes = health.todayDupes,
                 pendingMerchants = follow.pending,
                 importFailures = follow.failures,
-                homeLayout = prefs.layout,
+homeLayout = prefs.layout,
                 titleField = prefs.title,
+                weekHeat = weekHeat,
+                topMerchants = topMerchants,
+                catShares = catShares,
+                draftCount = draftCount,
             )
         }
             // 聚合计算（排序/体检/分组）在 Default 线程做，避免大数据量时阻塞主线程掉帧

@@ -150,6 +150,153 @@ class AddTransactionViewModel @Inject constructor(
         _state.value = _state.value.copy(subCategory = if (cur == name) "" else name, error = null)
     }
 
+    // ---------------- 就地分类 CRUD（记一笔页，不跳设置） ----------------
+
+    /** 新增一级分类并选中。 */
+    suspend fun addCategoryInPlace(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            _state.value = _state.value.copy(error = "分类名不能为空")
+            return false
+        }
+        if (categoryRepository.getByName(trimmed) != null) {
+            _state.value = _state.value.copy(error = "分类「$trimmed」已存在")
+            return false
+        }
+        val type = _state.value.type
+        val list = categoryRepository.getByType(type)
+        val maxOrder = (list.maxOfOrNull { it.sortOrder } ?: -1) + 1
+        val cat = Category(
+            name = trimmed,
+            type = type,
+            sortOrder = maxOrder,
+            isPreset = false,
+            iconName = "more_horiz",
+            colorHex = "#BDC3C7",
+        )
+        categoryRepository.add(cat)
+        _categoriesByType.value = categoryRepository.getByType(type)
+        // 重新拉取以拿到 id
+        val created = categoryRepository.getByName(trimmed)
+        if (created != null) onCategorySelect(created)
+        return true
+    }
+
+    /** 重命名当前选中的自定义一级分类（预置只允许改不了名）。 */
+    suspend fun renameCategoryInPlace(newName: String): Boolean {
+        val cat = _state.value.selectedCategory ?: return false
+        if (cat.isPreset) {
+            _state.value = _state.value.copy(error = "预置分类不可改名")
+            return false
+        }
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty() || trimmed == cat.name) return false
+        if (categoryRepository.getByName(trimmed) != null) {
+            _state.value = _state.value.copy(error = "分类「$trimmed」已存在")
+            return false
+        }
+        accountRepository.getAll()
+            .filter { it.category == cat.name }
+            .forEach { t ->
+                accountRepository.update(t.copy(category = trimmed, updatedAt = System.currentTimeMillis()))
+            }
+        subCategoryRepository.renameParent(cat.name, trimmed)
+        categoryRepository.update(cat.copy(name = trimmed))
+        _categoriesByType.value = categoryRepository.getByType(_state.value.type)
+        val updated = categoryRepository.getByName(trimmed)
+        if (updated != null) {
+            _state.value = _state.value.copy(selectedCategory = updated, error = null)
+            refreshSubs()
+        }
+        return true
+    }
+
+    /** 删除当前选中一级分类（账单迁到「其它」）。预置不可删。 */
+    suspend fun deleteCategoryInPlace(): Boolean {
+        val cat = _state.value.selectedCategory ?: return false
+        if (cat.isPreset) {
+            _state.value = _state.value.copy(error = "预置分类不可删除")
+            return false
+        }
+        val fallback = if (cat.type == Category.TYPE_EXPENSE)
+            com.simpleaccount.app.util.CategoryPresets.DEFAULT_EXPENSE_CATEGORY
+        else com.simpleaccount.app.util.CategoryPresets.DEFAULT_INCOME_CATEGORY
+        val fallbackEntity = categoryRepository.getByName(fallback) ?: return false
+        accountRepository.getAll()
+            .filter { it.category == cat.name }
+            .forEach { t ->
+                accountRepository.update(
+                    t.copy(category = fallbackEntity.name, subCategory = "", updatedAt = System.currentTimeMillis())
+                )
+            }
+        subCategoryRepository.deleteByParent(cat.name)
+        categoryRepository.deleteById(cat.id)
+        _categoriesByType.value = categoryRepository.getByType(_state.value.type)
+        _state.value = _state.value.copy(selectedCategory = fallbackEntity, subCategory = "", error = null)
+        refreshSubs()
+        return true
+    }
+
+    /** 在当前一级下新增二级并选中。 */
+    suspend fun addSubInPlace(name: String): Boolean {
+        val parent = _state.value.selectedCategory?.name ?: return false
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        val existing = subCategoryRepository.getByParent(parent)
+        if (existing.any { it.name == trimmed }) {
+            _state.value = _state.value.copy(error = "二级「$trimmed」已存在")
+            return false
+        }
+        val maxOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1
+        subCategoryRepository.add(
+            com.simpleaccount.app.data.entity.SubCategory(parent = parent, name = trimmed, sortOrder = maxOrder)
+        )
+        refreshSubs()
+        onSubCategorySelect(trimmed)
+        return true
+    }
+
+    /** 删除指定二级（账单二级清空）。 */
+    suspend fun deleteSubInPlace(name: String): Boolean {
+        val parent = _state.value.selectedCategory?.name ?: return false
+        val sub = subCategoryRepository.getByParent(parent).firstOrNull { it.name == name } ?: return false
+        accountRepository.getAll()
+            .filter { it.category == parent && it.subCategory == name }
+            .forEach { t ->
+                accountRepository.update(t.copy(subCategory = "", updatedAt = System.currentTimeMillis()))
+            }
+        subCategoryRepository.deleteById(sub.id)
+        if (_state.value.subCategory == name) {
+            _state.value = _state.value.copy(subCategory = "")
+        }
+        refreshSubs()
+        return true
+    }
+
+    /** 重命名二级分类。 */
+    suspend fun renameSubInPlace(oldName: String, newName: String): Boolean {
+        val parent = _state.value.selectedCategory?.name ?: return false
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty() || trimmed == oldName) return false
+        val list = subCategoryRepository.getByParent(parent)
+        if (list.any { it.name == trimmed }) {
+            _state.value = _state.value.copy(error = "二级「$trimmed」已存在")
+            return false
+        }
+        val sub = list.firstOrNull { it.name == oldName } ?: return false
+        accountRepository.getAll()
+            .filter { it.category == parent && it.subCategory == oldName }
+            .forEach { t ->
+                accountRepository.update(t.copy(subCategory = trimmed, updatedAt = System.currentTimeMillis()))
+            }
+        subCategoryRepository.update(sub.copy(name = trimmed))
+        if (_state.value.subCategory == oldName) {
+            _state.value = _state.value.copy(subCategory = trimmed)
+        }
+        refreshSubs()
+        return true
+    }
+
     fun onDateChange(date: String) {
         _state.value = _state.value.copy(date = date, error = null)
     }
