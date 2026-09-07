@@ -70,6 +70,7 @@ class AutoRecordManager @Inject constructor(
                 amount = parsed.amountFen,
                 type = parsed.type,
                 category = category,
+                subCategory = com.simpleaccount.app.util.KeywordRules.classifySub(merchant, category).orEmpty(),
                 date = today,
                 time = time,
                 merchant = merchant,

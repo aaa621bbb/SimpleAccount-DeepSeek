@@ -73,11 +73,10 @@ fun CategoryCarousel(
         animationSpec = Motion.springOrSnap(reduce, Motion.cursorSpring),
         label = "cat-cursor-y",
     )
-    val cursorW by animateFloatAsState(
-        targetValue = targetW,
-        animationSpec = Motion.springOrSnap(reduce, Motion.cursorSpring),
-        label = "cat-cursor-w",
-    )
+    // 光标宽度不做动画：width() 每次取值都会触发整行测量布局，
+    // 逐帧动画等于每帧 relayout。只在选中列变化时取一次静态宽度（一次布局即可），
+    // 位移动画全部走 graphicsLayer（合成器线程 transform）。
+    val cursorW = targetW
 
     val nested = remember {
         object : NestedScrollConnection {

@@ -5,12 +5,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -58,10 +61,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.ui.components.TransactionRow
 import com.simpleaccount.app.ui.navigation.Routes
 import com.simpleaccount.app.util.MoneyUtil
 
+/**
+ * 首页：双版式策略（简约风 / 信息密集风，随用户设置切换）。
+ *
+ * 版式保证："最近记录"恒占内容区一半以上——顶部概览区封顶 46% 内容高度
+ * （超高则内部滚动），剩余空间全部归"最近记录"。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -73,6 +83,7 @@ fun HomeScreen(
     var showInsight by remember { mutableStateOf(false) }
     var showLedgers by remember { mutableStateOf(false) }
     var evidenceTip by remember { mutableStateOf<com.simpleaccount.app.data.insights.InsightTip?>(null) }
+    val isDense = state.homeLayout == SettingsRepository.HOME_DENSE
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -102,173 +113,71 @@ fun HomeScreen(
                 )
             )
 
-            // 本月支出卡：固定在顶部，不随列表滚动消失
-            SummaryCards(state, onSetBudget = { showBudgetDialog = true })
-
-            if (state.todayDupes.isNotEmpty()) {
-                com.simpleaccount.app.ui.components.SoftCard(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                ) {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        Text(
-                            "可能重复记账",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            "今天 " + state.todayDupes.joinToString("、") + "。点进流水核对一下。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { navController.navigate(Routes.LEDGER) }
-                                .padding(top = 2.dp)
-                        )
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                // 顶部概览封顶 46% 内容高度 → "最近记录"恒占 ≥54% 内容区（不低于半屏）
+                val topCap = maxHeight * 0.46f
+                Column(Modifier.fillMaxSize()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = topCap)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (isDense) {
+                            DenseTop(state, navController, onSetBudget = { showBudgetDialog = true }, onOpenInsight = { showInsight = true })
+                        } else {
+                            SimpleTop(state, navController, onSetBudget = { showBudgetDialog = true }, onOpenInsight = { showInsight = true })
+                        }
                     }
-                }
-            }
 
-                if (state.evidenceTips.isNotEmpty()) {
-                com.simpleaccount.app.ui.components.SoftCard(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .clickable { showInsight = true }
-                ) {
+                    // 最近记录标题 + 排序切换
                     Row(
-                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 0.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer)
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    state.insightGrade.ifBlank { "—" },
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    "${state.insightScore}分",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "本月体检",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                state.insightHeadline,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (state.insightSub.isNotBlank()) {
-                                Text(
-                                    state.insightSub,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (state.importFailures > 0 || state.pendingMerchants > 0) {
-                com.simpleaccount.app.ui.components.SoftCard(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                ) {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Text(
-                            "导入之后",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            "最近记录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
-                        if (state.importFailures > 0) {
+                        TextButton(onClick = { viewModel.toggleSort() }) {
                             Text(
-                                "${state.importFailures} 条没对上，点这里核对差缺",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { navController.navigate(Routes.IMPORT) }
-                                    .padding(top = 4.dp)
-                            )
-                        }
-                        if (state.pendingMerchants > 0) {
-                            Text(
-                                "${state.pendingMerchants} 个商家还没归类，点这里纠错",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { navController.navigate(Routes.MERCHANT_MANAGE) }
-                                    .padding(top = 4.dp)
+                                if (state.sortByAmount) "按金额" else "按时间",
+                                fontSize = 13.sp
                             )
                         }
                     }
-                }
-            }
 
-            // 最近记录标题 + 排序切换
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 0.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "最近记录",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = { viewModel.toggleSort() }) {
-                    Text(
-                        if (state.sortByAmount) "按金额" else "按时间",
-                        fontSize = 13.sp
-                    )
-                }
-            }
-
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)
-            ) {
-                if (state.recent.isEmpty()) {
-                    item {
-                        com.simpleaccount.app.ui.components.EmptyState(
-                            text = "暂无记录",
-                            caption = "点右下角记一笔，或用右上角上传账单。",
-                        )
-                    }
-                } else {
-                    item {
-                        com.simpleaccount.app.ui.components.SoftCard(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            state.recent.forEachIndexed { idx, row ->
-                                Box { TransactionRow(row.transaction, row.category, onClick = { navController.navigate(Routes.edit(row.transaction.id)) }) }
-                                if (idx != state.recent.lastIndex) {
-                                    androidx.compose.material3.HorizontalDivider(
-                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
-                                        modifier = Modifier.padding(start = 68.dp)
-                                    )
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)
+                    ) {
+                        if (state.recent.isEmpty()) {
+                            item {
+                                com.simpleaccount.app.ui.components.EmptyState(
+                                    text = "暂无记录",
+                                    caption = "点右下角记一笔，或用右上角上传账单。",
+                                )
+                            }
+                        } else {
+                            item {
+                                com.simpleaccount.app.ui.components.SoftCard(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                ) {
+                                    state.recent.forEachIndexed { idx, row ->
+                                        Box { TransactionRow(row.transaction, row.category, onClick = { navController.navigate(Routes.edit(row.transaction.id)) }, titleField = state.titleField) }
+                                        if (idx != state.recent.lastIndex) {
+                                            androidx.compose.material3.HorizontalDivider(
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                                                modifier = Modifier.padding(start = 68.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -446,6 +355,323 @@ fun HomeScreen(
     }
 }
 
+/** 简约风顶部：收敛卡片体量，关键信息（支出/结余/预算/今日/体检一句话）一行式呈现。 */
+@Composable
+private fun SimpleTop(
+    state: HomeUiState,
+    navController: NavHostController,
+    onSetBudget: () -> Unit,
+    onOpenInsight: () -> Unit,
+) {
+    CompactSummary(state, onSetBudget)
+
+    // 体检一句话（可点开详情）
+    if (state.evidenceTips.isNotEmpty() || state.insightHeadline.isNotBlank()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
+                .clickable(onClick = onOpenInsight)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                state.insightGrade.ifBlank { "体检" },
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                state.insightHeadline.ifBlank { "本月体检" } + if (state.insightSub.isNotBlank()) " · ${state.insightSub}" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            Text("›", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    // 提醒合并为一行
+    val alerts = buildList {
+        if (state.todayDupes.isNotEmpty()) add("可能重复记账：${state.todayDupes.take(2).joinToString("、")}")
+        if (state.importFailures > 0) add("${state.importFailures} 条没对上")
+        if (state.pendingMerchants > 0) add("${state.pendingMerchants} 个商家待归类")
+    }
+    if (alerts.isNotEmpty()) {
+        Text(
+            alerts.joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            maxLines = 1,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    navController.navigate(
+                        if (state.pendingMerchants > 0) Routes.MERCHANT_MANAGE
+                        else if (state.importFailures > 0) Routes.IMPORT
+                        else Routes.LEDGER
+                    )
+                }
+                .padding(horizontal = 20.dp, vertical = 4.dp)
+        )
+    }
+}
+
+/** 信息密集风顶部：完整统计卡 + 体检 + 提醒 + 一屏概览条。 */
+@Composable
+private fun DenseTop(
+    state: HomeUiState,
+    navController: NavHostController,
+    onSetBudget: () -> Unit,
+    onOpenInsight: () -> Unit,
+) {
+    // 本月支出卡
+    SummaryCards(state, onSetBudget = onSetBudget)
+
+    // 一屏概览条：今日/预计/日均/结余横滑
+    OverviewStrip(state)
+
+    if (state.todayDupes.isNotEmpty()) {
+        com.simpleaccount.app.ui.components.SoftCard(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(
+                    "可能重复记账",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    "今天 " + state.todayDupes.joinToString("、") + "。点进流水核对一下。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { navController.navigate(Routes.LEDGER) }
+                        .padding(top = 2.dp)
+                )
+            }
+        }
+    }
+
+    if (state.evidenceTips.isNotEmpty()) {
+        com.simpleaccount.app.ui.components.SoftCard(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .clickable(onClick = onOpenInsight)
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            state.insightGrade.ifBlank { "—" },
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "${state.insightScore}分",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "本月体检",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        state.insightHeadline,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (state.insightSub.isNotBlank()) {
+                        Text(
+                            state.insightSub,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (state.importFailures > 0 || state.pendingMerchants > 0) {
+        com.simpleaccount.app.ui.components.SoftCard(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(
+                    "导入之后",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (state.importFailures > 0) {
+                    Text(
+                        "${state.importFailures} 条没对上，点这里核对差缺",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { navController.navigate(Routes.IMPORT) }
+                            .padding(top = 4.dp)
+                    )
+                }
+                if (state.pendingMerchants > 0) {
+                    Text(
+                        "${state.pendingMerchants} 个商家还没归类，点这里纠错",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { navController.navigate(Routes.MERCHANT_MANAGE) }
+                            .padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 密集风专属：一屏概览条（今日/预计/日均/结余），横滑不占纵向空间。 */
+@Composable
+private fun OverviewStrip(state: HomeUiState) {
+    val day = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
+    val dailyAvg = if (state.expense > 0) state.expense / day else 0L
+    val cells = buildList {
+        add("今日" to "¥" + MoneyUtil.fenToYuan(state.todayFen))
+        if (state.projectedFen > 0) add("预计月底" to "¥" + MoneyUtil.fenToYuan(state.projectedFen))
+        if (dailyAvg > 0) add("本月日均" to "¥" + MoneyUtil.fenToYuan(dailyAvg))
+        if (state.todayCapFen > 0) {
+            val left = state.todayCapFen - state.todayFen
+            add(if (left >= 0) "今天还能花" to "¥" + MoneyUtil.fenToYuan(left) else "今天已超" to "¥" + MoneyUtil.fenToYuan(-left))
+        }
+        add("结余" to "¥" + MoneyUtil.fenToYuan(state.balance))
+        add("收入" to "¥" + MoneyUtil.fenToYuan(state.income))
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        cells.forEach { (label, value) ->
+            Column(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+/** 简约风统计卡：单卡收敛（支出/结余/预算/今日/进度），纵向只占一小卡。 */
+@Composable
+private fun CompactSummary(state: HomeUiState, onSetBudget: () -> Unit) {
+    val pal = com.simpleaccount.app.ui.theme.LocalAppPalette.current
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(pal.cardGradient))
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Column {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "本月支出 · ${java.time.YearMonth.now().monthValue}月",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                    Text(
+                        "¥" + MoneyUtil.fenToYuan(state.expense),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        "结余 ¥" + MoneyUtil.fenToYuan(
+                            if (state.budgetFen > 0) state.budgetFen - state.expense else state.balance
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Text(
+                        if (state.budgetFen > 0) "预算 ¥" + MoneyUtil.fenToYuan(state.budgetFen) else "点按设预算",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.clickable(onClick = onSetBudget)
+                    )
+                }
+            }
+            if (state.budgetFen > 0) {
+                Spacer(Modifier.height(8.dp))
+                val used = (state.expense.toFloat() / state.budgetFen).coerceIn(0f, 1f)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.25f))
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(used)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(if (state.expense > state.budgetFen) Color(0xFFFFB4AB) else Color.White)
+                    )
+                }
+            }
+            if (state.expense > 0 || state.todayFen > 0) {
+                Spacer(Modifier.height(6.dp))
+                val bits = mutableListOf("今天 ¥" + MoneyUtil.fenToYuan(state.todayFen))
+                if (state.todayCapFen > 0) {
+                    val left = state.todayCapFen - state.todayFen
+                    bits.add(if (left >= 0) "还能花 ¥" + MoneyUtil.fenToYuan(left) else "已超 ¥" + MoneyUtil.fenToYuan(-left))
+                }
+                if (state.projectedFen > 0) bits.add("月底约 ¥" + MoneyUtil.fenToYuan(state.projectedFen))
+                Text(
+                    bits.joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.8f)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
     val pal = com.simpleaccount.app.ui.theme.LocalAppPalette.current
@@ -606,8 +832,11 @@ private fun UploadBillButton(onClick: () -> Unit) {
             appear.snapTo(0f)
             alpha.snapTo(1f)
         } else {
-            appear.animateTo(0f, Motion.softSpring)
-            alpha.animateTo(1f, Motion.tweenOrSnap(false, Motion.ENTER_MS))
+            // 位移与淡入并发：合成器线程 transform/opacity，避免串行两段式入场
+            kotlinx.coroutines.coroutineScope {
+                launch { appear.animateTo(0f, Motion.softSpring) }
+                launch { alpha.animateTo(1f, Motion.tweenOrSnap(false, Motion.ENTER_MS)) }
+            }
         }
     }
     TextButton(

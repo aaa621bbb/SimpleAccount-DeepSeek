@@ -94,8 +94,11 @@ class AiViewModel @Inject constructor(
     /** 当前 Agent 回合任务（支持停止/新消息打断） */
     private var agentJob: Job? = null
 
+    /** 本地写提案待执行的落库动作（用户在确认卡片上点"确认执行"后运行）。 */
+    private var pendingLocalCommit: (suspend () -> String)? = null
+
     private val welcomeText =
-        "你好，我是 AI 记账管家。查实数（昨天花了多少、本月花了多少、帮我记 15 元）本地秒回，数字跟账本一致；分析、建议、体检、怎么办交给模型写，不会用模板截胡。"
+        "你好，我是 AI 记账管家。查实数（昨天花了多少、本月花了多少）本地秒回，数字跟账本一致；分析、建议、体检、怎么办交给模型写，不会用模板截胡。记账、改账、删除都会先弹确认卡片，经你手动批准才落库；我说不清几点时会直接问你，绝不瞎猜。"
 
     init {
         viewModelScope.launch {
@@ -273,6 +276,20 @@ class AiViewModel @Inject constructor(
                 _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
                 return@launch
             }
+            // 本地写提案（不依赖云端模型）：只生成预览，经确认卡片批准后才落库
+            val proposal = runCatching { localAccountant.tryProposeWrite(trimmed) }.getOrNull()
+            if (proposal != null) {
+                pendingLocalCommit = proposal.commit
+                conversationManager.addMessage(
+                    convId, AiMessage.ROLE_ASSISTANT,
+                    "这项操作会改账本，点「确认执行」后才落库：\n\n${proposal.preview}"
+                )
+                _state.value = _state.value.copy(
+                    typing = false, phase = null, streamingText = null,
+                    pendingConfirm = PendingConfirmUi(LOCAL_WRITE_TOOL, "", proposal.preview)
+                )
+                return@launch
+            }
             if (!settingsRepository.isAiEnabled()) {
                 conversationManager.addMessage(
                     convId, AiMessage.ROLE_ASSISTANT,
@@ -300,11 +317,29 @@ class AiViewModel @Inject constructor(
         val convId = _state.value.currentConversationId
         viewModelScope.launch {
             _state.value = _state.value.copy(pendingConfirm = null, typing = true, phase = "正在执行…")
-            val result = agentTools.execute(
-                com.simpleaccount.app.data.agent.AgentToolCall("confirm-1", p.tool, p.args),
-                confirmed = true,
-            )
-            conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, result.content)
+            if (p.tool == LOCAL_WRITE_TOOL) {
+                // 本地写提案：执行用户已批准的落库动作
+                val commit = pendingLocalCommit
+                pendingLocalCommit = null
+                val text = runCatching { commit?.invoke() }.getOrNull()
+                    ?: "失败 rows_affected=0。这次操作已过期，请重新说一次。"
+                conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, text)
+            } else {
+                val result = agentTools.execute(
+                    com.simpleaccount.app.data.agent.AgentToolCall("confirm-1", p.tool, p.args),
+                    confirmed = true,
+                )
+                val audit = com.simpleaccount.app.data.agent.ToolExecutionRecord(
+                    tool = result.name,
+                    ok = result.ok,
+                    affectedRows = result.affectedRows,
+                    elapsedMs = result.elapsedMs,
+                    permission = result.permission,
+                    permissionNote = result.permissionNote,
+                ).verdictLine()
+                conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, result.content)
+                _state.value = _state.value.copy(traces = (_state.value.traces + audit).takeLast(12))
+            }
             _state.value = _state.value.copy(typing = false, phase = null)
         }
     }
@@ -312,9 +347,15 @@ class AiViewModel @Inject constructor(
     fun dismissPending() {
         val convId = _state.value.currentConversationId
         _state.value = _state.value.copy(pendingConfirm = null)
+        pendingLocalCommit = null
         viewModelScope.launch {
             conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, "已取消这次操作，账本没有改动。")
         }
+    }
+
+    companion object {
+        /** 本地写提案在确认卡片里的伪工具名（与 Agent 工具区分）。 */
+        const val LOCAL_WRITE_TOOL = "__local_write__"
     }
 
     // ---------------- Agent 回合 ----------------
@@ -361,6 +402,9 @@ class AiViewModel @Inject constructor(
                         _state.value.reasoning.orEmpty() + chunk
                     )
                     _state.value = _state.value.copy(reasoning = merged)
+                },
+                onTrace = { line ->
+                    _state.value = _state.value.copy(traces = (_state.value.traces + line).takeLast(12))
                 },
             )
             ticker.cancel()
@@ -658,11 +702,15 @@ class AiViewModel @Inject constructor(
                 val category = classificationService.classifyForImport(
                     item.merchant, item.product ?: "", "", validNames, item.type
                 )
+                val sub = com.simpleaccount.app.util.KeywordRules.classifySub(
+                    "${item.merchant} ${item.product ?: ""}", category
+                ).orEmpty()
                 val id = accountRepository.insert(
                     com.simpleaccount.app.data.entity.Transaction(
                         amount = amountFen,
                         type = item.type,
                         category = category,
+                        subCategory = sub,
                         date = date,
                         time = com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(item.time, item.date),
                         merchant = item.merchant,

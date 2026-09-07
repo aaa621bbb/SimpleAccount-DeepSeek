@@ -3,6 +3,7 @@ package com.simpleaccount.app.ui.addtransaction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +70,7 @@ fun AddTransactionScreen(
     val vm: AddTransactionViewModel = hiltViewModel()
     val state by vm.state.collectAsState()
     val categories by vm.categoriesByType.collectAsState()
+    val subOptions by vm.subOptions.collectAsState()
     val dateStyle by vm.dateStyle.collectAsState(initial = "date_wheel")
     val timeStyle by vm.timeStyle.collectAsState(initial = "time_dial")
     val merchantHints by vm.merchantHints.collectAsState()
@@ -171,6 +174,28 @@ fun AddTransactionScreen(
                 selected = state.selectedCategory,
                 onSelect = vm::onCategorySelect,
             )
+            // 二级分类（可选，不选=不细分；再点一次取消）
+            if (state.selectedCategory != null && subOptions.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text("细分（可选）", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    subOptions.forEach { sub ->
+                        val selected = state.subCategory == sub.name
+                        FilterChip(
+                            selected = selected,
+                            onClick = { vm.onSubCategorySelect(sub.name) },
+                            label = { Text(sub.name) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
 
             Row(Modifier.fillMaxWidth()) {

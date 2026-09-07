@@ -20,6 +20,9 @@ class SimpleAccountApp : Application() {
     lateinit var categoryDao: CategoryDao
 
     @Inject
+    lateinit var subCategoryDao: com.simpleaccount.app.data.dao.SubCategoryDao
+
+    @Inject
     lateinit var dataRetentionManager: DataRetentionManager
 
     @Inject
@@ -67,6 +70,10 @@ class SimpleAccountApp : Application() {
         val existing = categoryDao.count()
         if (existing == 0) {
             categoryDao.insertAll(CategoryPresets.presetCategories())
+        }
+        // 二级分类预置体系：老用户升级后首启同样灌入（count=0 才灌，不覆盖用户改动）
+        if (subCategoryDao.count() == 0) {
+            subCategoryDao.insertAll(com.simpleaccount.app.util.SubCategoryPresets.presetSubCategories())
         }
     }
 }

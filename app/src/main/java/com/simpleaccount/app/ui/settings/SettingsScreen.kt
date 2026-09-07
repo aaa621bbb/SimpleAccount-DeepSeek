@@ -100,6 +100,18 @@ class SettingsViewModel @Inject constructor(
     private val _uiSkin = MutableStateFlow(settingsRepository.uiSkin())
     val uiSkin = _uiSkin.asStateFlow()
 
+    /** 首页版式 + 条目标题字段（随设置全局生效）。 */
+    val homeLayout = settingsRepository.homeLayoutFlow
+    val titleField = settingsRepository.titleFieldFlow
+
+    fun setHomeLayout(v: String) {
+        viewModelScope.launch { settingsRepository.setHomeLayout(v) }
+    }
+
+    fun setTitleField(v: String) {
+        viewModelScope.launch { settingsRepository.setTitleField(v) }
+    }
+
     fun setThemeMode(mode: String) {
         _themeMode.value = mode
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }

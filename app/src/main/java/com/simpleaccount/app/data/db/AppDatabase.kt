@@ -20,6 +20,7 @@ import com.simpleaccount.app.data.entity.ImportFailure
 import com.simpleaccount.app.data.entity.ImportLog
 import com.simpleaccount.app.data.entity.Merchant
 import com.simpleaccount.app.data.entity.Setting
+import com.simpleaccount.app.data.entity.SubCategory
 import com.simpleaccount.app.data.entity.Transaction
 
 @Database(
@@ -33,8 +34,9 @@ import com.simpleaccount.app.data.entity.Transaction
         AiMessage::class,
         Setting::class,
         com.simpleaccount.app.data.entity.Ledger::class,
+        SubCategory::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -185,6 +187,23 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_ledgerId` ON `transactions` (`ledgerId`)")
             }
         }
+
+        /** v7 → v8：二级分类体系。新建 sub_categories 表 + transactions 新增 subCategory 列。 */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `sub_categories` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `parent` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `isPreset` INTEGER NOT NULL
+                    )"""
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sub_categories_parent` ON `sub_categories` (`parent`)")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN `subCategory` TEXT NOT NULL DEFAULT ''")
+            }
+        }
     }
 
     abstract fun transactionDao(): TransactionDao
@@ -196,4 +215,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiMessageDao(): AiMessageDao
     abstract fun settingDao(): SettingDao
     abstract fun ledgerDao(): LedgerDao
+    abstract fun subCategoryDao(): com.simpleaccount.app.data.dao.SubCategoryDao
 }

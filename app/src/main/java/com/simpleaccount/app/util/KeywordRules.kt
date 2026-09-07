@@ -80,6 +80,123 @@ object KeywordRules {
     }
 
     /**
+     * 二级分类关键词：父类名 → (二级名, 关键词列表)。
+     * 供 [classifySub] 做口语/商家商品串的二级推断；无把握返回 null（不硬猜）。
+     */
+    private val SUB_RULES: Map<String, List<Pair<String, List<String>>>> = mapOf(
+        "餐饮" to listOf(
+            "早餐" to listOf("早餐", "早饭", "包子", "油条", "豆浆", "烧饼", "煎饼"),
+            "午餐" to listOf("午餐", "午饭", "盒饭", "便当", "快餐", "工作餐"),
+            "晚餐" to listOf("晚餐", "晚饭", "正餐", "聚餐"),
+            "夜宵" to listOf("夜宵", "烧烤", "小龙虾", "烤串", "大排档"),
+            "奶茶" to listOf("奶茶", "喜茶", "霸王茶姬", "蜜雪冰城", "茶百道", "古茗", "茶饮"),
+            "咖啡" to listOf("咖啡", "瑞幸", "星巴克", "库迪", "拿铁", "美式"),
+            "零食" to listOf("零食", "辣条", "薯片", "坚果", "糖果", "饼干"),
+            "水果" to listOf("水果", "西瓜", "苹果", "香蕉", "榴莲", "车厘子"),
+            "外卖" to listOf("外卖", "美团", "饿了么"),
+        ),
+        "交通" to listOf(
+            "公交" to listOf("公交", "巴士"),
+            "地铁" to listOf("地铁", "轨道"),
+            "打车" to listOf("打车", "滴滴", "出租车", "网约车", "顺风车", "代驾"),
+            "火车" to listOf("火车", "高铁", "动车", "12306"),
+            "飞机" to listOf("飞机", "机票", "航班", "值机"),
+            "加油" to listOf("加油", "汽油", "充电桩", "充电"),
+            "停车" to listOf("停车", "车位"),
+            "骑行" to listOf("哈啰", "单车", "骑行", "电单车"),
+            "高速" to listOf("高速", "过路费", "ETC"),
+        ),
+        "购物" to listOf(
+            "日用" to listOf("纸巾", "洗发水", "沐浴露", "牙膏", "日用", "杂货"),
+            "服饰" to listOf("衣服", "裤子", "鞋", "帽子", "优衣库", "服饰", "服装"),
+            "数码" to listOf("手机", "电脑", "耳机", "充电器", "数码", "京东"),
+            "生鲜" to listOf("生鲜", "买菜", "蔬菜", "猪肉", "海鲜", "菜市场"),
+            "家居" to listOf("家居", "家纺", "收纳", "灯具", "家具"),
+            "美妆" to listOf("美妆", "护肤", "口红", "化妆品", "面膜"),
+        ),
+        "娱乐" to listOf(
+            "电影" to listOf("电影", "影院", "观影"),
+            "游戏" to listOf("游戏", "原神", "米哈游", "点卡", "皮肤"),
+            "会员" to listOf("会员", "爱奇艺", "腾讯视频", "优酷", "网盘", "QQ音乐", "网易云"),
+            "演出" to listOf("演唱会", "演出", "话剧", "音乐节", "门票"),
+            "运动" to listOf("健身", "台球", "羽毛球", "游泳", "运动", "球鞋"),
+            "旅游" to listOf("旅游", "门票", "景区", "游乐园"),
+            "聚会" to listOf("KTV", "剧本杀", "密室", "聚会", "团建"),
+        ),
+        "医疗" to listOf(
+            "挂号" to listOf("挂号", "门诊", "看病", "急诊"),
+            "药品" to listOf("药", "药店", "药房", "处方"),
+            "体检" to listOf("体检", "疫苗"),
+            "牙科" to listOf("牙", "口腔", "牙科", "洗牙"),
+            "眼科" to listOf("眼科", "配镜", "眼镜"),
+            "住院" to listOf("住院", "手术"),
+        ),
+        "教育" to listOf(
+            "学费" to listOf("学费", "学杂费", "学校", "大学"),
+            "书籍" to listOf("书", "书店", "教材", "绘本"),
+            "培训" to listOf("培训", "课程", "网课", "辅导", "补习", "驾校", "考研"),
+            "考试" to listOf("考试", "报名费", "考证", "雅思", "托福"),
+            "文具" to listOf("文具", "笔", "本子", "打印"),
+        ),
+        "居住" to listOf(
+            "房租" to listOf("房租", "租金", "房东", "中介"),
+            "水电" to listOf("水费", "电费", "水电", "燃气费"),
+            "物业" to listOf("物业", "停车费", "取暖费"),
+            "燃气" to listOf("燃气", "煤气"),
+            "酒店" to listOf("酒店", "住宿", "民宿", "开房"),
+            "家政" to listOf("家政", "保洁", "钟点工", "搬家"),
+            "维修" to listOf("维修", "装修", "换锁", "疏通"),
+            "宽带" to listOf("宽带", "网费"),
+        ),
+        "通讯" to listOf(
+            "话费" to listOf("话费", "充值", "移动", "联通", "电信"),
+            "流量" to listOf("流量", "流量包"),
+            "宽带" to listOf("宽带"),
+            "月租" to listOf("月租", "套餐"),
+        ),
+        "工资" to listOf(
+            "月薪" to listOf("工资", "薪水", "月薪"),
+            "绩效" to listOf("绩效", "提成"),
+            "年终" to listOf("年终", "十三薪"),
+            "补贴" to listOf("补贴", "餐补", "交通补", "高温补"),
+        ),
+        "奖金" to listOf(
+            "年终奖" to listOf("年终奖"),
+            "项目奖" to listOf("项目奖", "项目奖金"),
+        ),
+        "投资" to listOf(
+            "股票" to listOf("股票", "炒股", "证券"),
+            "基金" to listOf("基金", "理财", "定投"),
+            "利息" to listOf("利息", "存款"),
+            "分红" to listOf("分红", "股息"),
+        ),
+        "兼职" to listOf(
+            "劳务" to listOf("劳务", "兼职", "跑腿", "外快"),
+            "稿费" to listOf("稿费", "稿酬"),
+            "咨询" to listOf("咨询费", "顾问费"),
+        ),
+        "退款" to listOf(
+            "购物退款" to listOf("退款", "退货", "退钱", "退回"),
+        ),
+    )
+
+    /**
+     * 二级分类推断：只在父类命中规则表时做关键词匹配。
+     * @return 二级名；无把握返回 null（调用方留空或询问，不硬猜）。
+     */
+    fun classifySub(text: String, parent: String?): String? {
+        if (parent.isNullOrBlank()) return null
+        val rules = SUB_RULES[parent] ?: return null
+        val t = text.lowercase()
+        for ((sub, keywords) in rules) {
+            for (kw in keywords) {
+                if (t.contains(kw.lowercase())) return sub
+            }
+        }
+        return null
+    }
+
+    /**
      * 对「商家名 + 商品名」拼接串做 contains 匹配。
      * @return 命中的分类名，未命中返回 null。
      */

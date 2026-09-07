@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -55,6 +56,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -119,6 +121,36 @@ fun AiSettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.height(16.dp))
+
+            // --------- 智能体模型后端 ---------
+            Text("智能体大脑", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "云端大模型理解最强；端侧小模型离线可用（0.6B–1.5B，接入中）。本地管家始终可用，与该开关无关。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            listOf(
+                SettingsRepository.BACKEND_CLOUD to "云端大模型（推荐）",
+                SettingsRepository.BACKEND_ONDEVICE to "端侧小模型（预留）",
+            ).forEach { (value, label) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { viewModel.setModelBackend(value) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = state.modelBackend == value,
+                        onClick = { viewModel.setModelBackend(value) }
+                    )
+                    Text(label, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
             Spacer(Modifier.height(24.dp))
 
             // --------- 选择服务商 ---------

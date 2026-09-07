@@ -72,7 +72,11 @@ data class LedgerUiState(
 class LedgerViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) : ViewModel() {
+
+    /** 条目标题字段（商家名/商品名），随用户设置全局生效。 */
+    val titleField = settingsRepository.titleFieldFlow
 
     private val _filter = MutableStateFlow(LedgerFilter())
     val filter: StateFlow<LedgerFilter> = _filter.asStateFlow()

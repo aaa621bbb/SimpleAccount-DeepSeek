@@ -53,6 +53,8 @@ fun AppearanceScreen(
     val themeMode by viewModel.themeMode.collectAsState()
     val paletteId by viewModel.paletteId.collectAsState()
     val uiSkin by viewModel.uiSkin.collectAsState()
+    val homeLayout by viewModel.homeLayout.collectAsState()
+    val titleField by viewModel.titleField.collectAsState()
 
     Scaffold(
         topBar = { SettingsSubToolbar("外观", onBack = { navController.popBackStack() }) }
@@ -248,7 +250,57 @@ fun AppearanceScreen(
                             )
                         }
                     }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Text("首页版式", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                "简约风只保留关键信息；信息密集风一屏尽览。最近记录在两种版式下都不低于半屏。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            listOf(
+                SettingsRepository.HOME_SIMPLE to "简约风（默认）",
+                SettingsRepository.HOME_DENSE to "信息密集风",
+            ).forEach { (value, label) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { viewModel.setHomeLayout(value) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = homeLayout == value, onClick = { viewModel.setHomeLayout(value) })
+                    Text(label, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Text("交易标题", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                "决定首页、账本等列表里每条记录的主标题用哪个字段，另一字段降为副标题。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            listOf(
+                SettingsRepository.TITLE_MERCHANT to "商家名（默认）",
+                SettingsRepository.TITLE_PRODUCT to "商品名",
+            ).forEach { (value, label) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { viewModel.setTitleField(value) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = titleField == value, onClick = { viewModel.setTitleField(value) })
+                    Text(label, style = MaterialTheme.typography.bodyLarge)
                 }
             }
             Spacer(Modifier.height(24.dp))

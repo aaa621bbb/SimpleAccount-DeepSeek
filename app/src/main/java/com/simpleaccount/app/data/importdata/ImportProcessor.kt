@@ -360,6 +360,10 @@ class ImportProcessor @Inject constructor(
             amount = amount,
             type = type,
             category = category,
+            // 二级分类：有把握才填（规则无命中→空，不硬猜）
+            subCategory = com.simpleaccount.app.util.KeywordRules.classifySub(
+                "${row.merchant} ${row.product}", category
+            ).orEmpty(),
             date = row.date,
             time = row.time,
             merchant = row.merchant,

@@ -58,6 +58,7 @@ fun LedgerScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
+    val titleField by viewModel.titleField.collectAsState()
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
 
     // 分组由 ViewModel 在后台线程算好，UI 直接用（不再 remember 里现算导致切页卡顿）
@@ -207,7 +208,8 @@ fun LedgerScreen(
                             LedgerRowLine(
                                 row = row,
                                 onDelete = { pendingDelete = row.transaction.id },
-                                onOpen = { navController.navigate(Routes.edit(row.transaction.id)) }
+                                onOpen = { navController.navigate(Routes.edit(row.transaction.id)) },
+                                titleField = titleField
                             )
                         }
                     } else {
@@ -234,7 +236,8 @@ fun LedgerScreen(
                                 LedgerRowLine(
                                     row = row,
                                     onDelete = { pendingDelete = row.transaction.id },
-                                    onOpen = { navController.navigate(Routes.edit(row.transaction.id)) }
+                                    onOpen = { navController.navigate(Routes.edit(row.transaction.id)) },
+                                    titleField = titleField
                                 )
                             }
                         }
@@ -268,6 +271,7 @@ private fun LedgerRowLine(
     onDelete: () -> Unit,
     onOpen: () -> Unit,
     showDay: Boolean = false,
+    titleField: String = "merchant",
 ) {
     val t = com.simpleaccount.app.ui.theme.LocalTokens.current
     Column {
@@ -287,6 +291,7 @@ private fun LedgerRowLine(
                     category = row.category,
                     onClick = onOpen,
                     showDate = !showDay,
+                    titleField = titleField,
                 )
             }
             IconButton(onClick = onDelete) {

@@ -3,7 +3,6 @@ package com.simpleaccount.app.ui.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,7 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -49,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import com.simpleaccount.app.data.entity.Category
+import com.simpleaccount.app.data.entity.SubCategory
 import com.simpleaccount.app.ui.components.CategoryIconCircle
 import com.simpleaccount.app.ui.components.parseColor
 import com.simpleaccount.app.util.IconMapper
@@ -62,6 +66,11 @@ private val colorLibrary = listOf(
     "#00B894", "#FDCB6E", "#2ECC71", "#E67E22", "#6C5CE7", "#00CEC9", "#2D8CF0", "#BDC3C7"
 )
 
+/**
+ * 分类管理：二级分类体系 + 自定义排序。
+ * - 每个一级分类可展开二级子类（增删）；
+ * - 一级/二级均支持上移/下移，顺序由用户决定。
+ */
 @Composable
 fun CategoryManageScreen(
     navController: NavHostController,
@@ -73,6 +82,9 @@ fun CategoryManageScreen(
     var editing by remember { mutableStateOf<Category?>(null) }
     var pendingDelete by remember { mutableStateOf<Category?>(null) }
     var confirmDeleteEmpty by remember { mutableStateOf<Category?>(null) }
+    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var addSubParent by remember { mutableStateOf<Category?>(null) }
+    var pendingDeleteSub by remember { mutableStateOf<SubCategory?>(null) }
 
     Scaffold(
         topBar = { SettingsSubToolbar("分类管理", onBack = { navController.popBackStack() }) },
@@ -98,34 +110,88 @@ fun CategoryManageScreen(
 
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.categories, key = { it.id }) { cat ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { editing = cat }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CategoryIconCircle(cat, size = 40)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(cat.name, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                if (cat.isPreset) "预置 · 点按可改图标颜色" else "点按可改名称、图标、颜色",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    val subs = state.subs[cat.name].orEmpty()
+                    val isOpen = cat.name in expanded
+                    Column {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { editing = cat }
+                                .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    expanded = if (isOpen) expanded - cat.name else expanded + cat.name
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    if (isOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    contentDescription = if (isOpen) "收起二级分类" else "展开二级分类"
+                                )
+                            }
+                            CategoryIconCircle(cat, size = 40)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(cat.name, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "${subs.size} 个二级 · 点按改名称/图标/颜色",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { viewModel.moveCategory(cat, up = true) }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.ArrowUpward, contentDescription = "上移", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(onClick = { viewModel.moveCategory(cat, up = false) }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.ArrowDownward, contentDescription = "下移", modifier = Modifier.size(18.dp))
+                            }
+                            if (!cat.isPreset) {
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        if (viewModel.isCategoryEmpty(cat.name)) {
+                                            confirmDeleteEmpty = cat
+                                        } else {
+                                            pendingDelete = cat
+                                        }
+                                    }
+                                }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         }
-                        if (!cat.isPreset) {
-                            IconButton(onClick = {
-                                scope.launch {
-                                    if (viewModel.isCategoryEmpty(cat.name)) {
-                                        confirmDeleteEmpty = cat
-                                    } else {
-                                        pendingDelete = cat
+                        if (isOpen) {
+                            Column(Modifier.padding(start = 56.dp, end = 8.dp, bottom = 6.dp)) {
+                                subs.forEach { sub ->
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "· ${sub.name}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f).padding(vertical = 8.dp)
+                                        )
+                                        IconButton(onClick = { viewModel.moveSub(sub, up = true) }, modifier = Modifier.size(32.dp)) {
+                                            Icon(Icons.Filled.ArrowUpward, contentDescription = "上移", modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(onClick = { viewModel.moveSub(sub, up = false) }, modifier = Modifier.size(32.dp)) {
+                                            Icon(Icons.Filled.ArrowDownward, contentDescription = "下移", modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(onClick = { pendingDeleteSub = sub }, modifier = Modifier.size(32.dp)) {
+                                            Icon(
+                                                Icons.Filled.Delete, contentDescription = "删除二级分类",
+                                                tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                TextButton(onClick = { addSubParent = cat }) {
+                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("新增二级分类", fontSize = 13.sp)
+                                }
                             }
                         }
                     }
@@ -158,13 +224,61 @@ fun CategoryManageScreen(
         )
     }
 
+    // 新增二级分类
+    addSubParent?.let { parent ->
+        var subName by remember(parent) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { addSubParent = null },
+            title = { Text("新增二级分类（${parent.name}）") },
+            text = {
+                OutlinedTextField(
+                    value = subName,
+                    onValueChange = { subName = it },
+                    label = { Text("二级分类名，如 早餐") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val p = parent
+                    val n = subName.trim()
+                    addSubParent = null
+                    scope.launch { viewModel.addSub(p.name, n) }
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { addSubParent = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 删除二级分类确认
+    pendingDeleteSub?.let { sub ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteSub = null },
+            title = { Text("删除二级分类") },
+            text = { Text("删除「${sub.parent}/${sub.name}」？使用它的账单会保留一级分类、清空二级。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = sub
+                    pendingDeleteSub = null
+                    scope.launch { viewModel.deleteSub(target) }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteSub = null }) { Text("取消") }
+            }
+        )
+    }
+
     // 删除二次确认（含迁移提示）
     val delTarget = pendingDelete ?: confirmDeleteEmpty
     if (delTarget != null) {
         AlertDialog(
             onDismissRequest = { pendingDelete = null; confirmDeleteEmpty = null },
             title = { Text("删除分类") },
-            text = { Text("删除「${delTarget.name}」分类？${if (pendingDelete != null) "\n该分类下的记录将转移到「其它」。" else ""}") },
+            text = { Text("删除「${delTarget.name}」分类（含其二级分类）？${if (pendingDelete != null) "\n该分类下的记录将转移到「其它」（二级清空）。" else ""}") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
