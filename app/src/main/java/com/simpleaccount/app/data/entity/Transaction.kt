@@ -21,6 +21,8 @@ data class Transaction(
     val type: String,
     /** 分类名（与 Category.name 对应） */
     val category: String,
+    /** 二级分类名（与 SubCategory.name 对应；空=未细分） */
+    val subCategory: String = "",
     /** 日期，格式 yyyy-MM-dd */
     val date: String,
     /** 时间 HH:mm（账单/截图里有精确时间时记录；空=未知） */

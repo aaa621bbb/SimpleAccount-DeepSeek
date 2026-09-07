@@ -89,6 +89,21 @@ class SettingsRepository @Inject constructor(
         const val SKIN_GLASS = "glass"
         const val SKIN_DEPTH = "depth"
 
+        /** 交易条目标题字段：merchant 商家名 / product 商品名（另一字段降为副标题）。 */
+        const val KEY_TITLE_FIELD = "title_field"
+        const val TITLE_MERCHANT = "merchant"
+        const val TITLE_PRODUCT = "product"
+
+        /** 首页版式：simple 简约风 / dense 信息密集风。 */
+        const val KEY_HOME_LAYOUT = "home_layout"
+        const val HOME_SIMPLE = "simple"
+        const val HOME_DENSE = "dense"
+
+        /** 模型后端：cloud 云端大模型 / ondevice 端侧小模型（预留）。 */
+        const val KEY_MODEL_BACKEND = "model_backend"
+        const val BACKEND_CLOUD = "cloud"
+        const val BACKEND_ONDEVICE = "ondevice"
+
         /** 思考深度：off / low / medium / high */
         const val KEY_DATE_PICKER = "date_picker_style"
         const val KEY_TIME_PICKER = "time_picker_style"
@@ -216,6 +231,54 @@ class SettingsRepository @Inject constructor(
     suspend fun setRecentCount(n: Int) {
         setSetting(KEY_RECENT_COUNT, n.toString())
         _recentCount.value = n.coerceIn(5, 100)
+    }
+
+    // ---------------- 条目标题字段（商家名/商品名互换，全局生效） ----------------
+
+    private val _titleField = MutableStateFlow(titleField())
+    val titleFieldFlow: StateFlow<String> = _titleField.asStateFlow()
+
+    fun titleField(): String {
+        val v = readSetting(KEY_TITLE_FIELD)
+        return if (v == TITLE_PRODUCT) TITLE_PRODUCT else TITLE_MERCHANT
+    }
+
+    suspend fun setTitleField(v: String) {
+        val norm = if (v == TITLE_PRODUCT) TITLE_PRODUCT else TITLE_MERCHANT
+        setSetting(KEY_TITLE_FIELD, norm)
+        _titleField.value = norm
+    }
+
+    // ---------------- 首页版式（简约风/信息密集风） ----------------
+
+    private val _homeLayout = MutableStateFlow(homeLayout())
+    val homeLayoutFlow: StateFlow<String> = _homeLayout.asStateFlow()
+
+    fun homeLayout(): String {
+        val v = readSetting(KEY_HOME_LAYOUT)
+        return if (v == HOME_DENSE) HOME_DENSE else HOME_SIMPLE
+    }
+
+    suspend fun setHomeLayout(v: String) {
+        val norm = if (v == HOME_DENSE) HOME_DENSE else HOME_SIMPLE
+        setSetting(KEY_HOME_LAYOUT, norm)
+        _homeLayout.value = norm
+    }
+
+    // ---------------- 智能体模型后端（云端/端侧预留） ----------------
+
+    private val _modelBackend = MutableStateFlow(modelBackend())
+    val modelBackendFlow: StateFlow<String> = _modelBackend.asStateFlow()
+
+    fun modelBackend(): String {
+        val v = readSetting(KEY_MODEL_BACKEND)
+        return if (v == BACKEND_ONDEVICE) BACKEND_ONDEVICE else BACKEND_CLOUD
+    }
+
+    suspend fun setModelBackend(v: String) {
+        val norm = if (v == BACKEND_ONDEVICE) BACKEND_ONDEVICE else BACKEND_CLOUD
+        setSetting(KEY_MODEL_BACKEND, norm)
+        _modelBackend.value = norm
     }
 
     // ---------------- 每月预算 ----------------

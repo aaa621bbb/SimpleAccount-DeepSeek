@@ -107,22 +107,34 @@ fun CategoryIconCircle(
     }
 }
 
-/** 单条流水行：商家主标题、分类次级、金额强调，与首页卡片同一信息层级。皮肤下沉：玻璃为羽化描边，立体为压差阴影。 */
+/**
+ * 单条流水行：主标题字段用户可选（商家名/商品名，另一字段降为副标题），
+ * 分类次级（含二级分类）、金额强调，与首页卡片同一信息层级。
+ * 皮肤下沉：玻璃为羽化描边，立体为压差阴影。
+ */
 @Composable
 fun TransactionRow(
     transaction: Transaction,
     category: Category?,
     onClick: (() -> Unit)? = null,
     showDate: Boolean = true,
+    /** 主标题字段："merchant" 商家名（默认）/ "product" 商品名，随用户设置全局生效。 */
+    titleField: String = "merchant",
 ) {
     val t = com.simpleaccount.app.ui.theme.LocalTokens.current
     val skin = com.simpleaccount.app.ui.theme.LocalUiSkin.current
     val accent = parseColor(category?.colorHex ?: "#BDC3C7")
-    val title = transaction.merchant.ifBlank { category?.name ?: "未分类" }
+    val catName = category?.name ?: transaction.category
+    val subLabel = if (transaction.subCategory.isNotBlank()) "${catName}/${transaction.subCategory}" else catName
+    val title = if (titleField == "product") {
+        transaction.product.ifBlank { transaction.merchant.ifBlank { catName.ifBlank { "未分类" } } }
+    } else {
+        transaction.merchant.ifBlank { transaction.product.ifBlank { catName.ifBlank { "未分类" } } }
+    }
+    val other = if (titleField == "product") transaction.merchant else transaction.product
     val secondary = buildList {
-        val catName = category?.name ?: transaction.category
-        if (catName.isNotBlank() && catName != title) add(catName)
-        if (transaction.product.isNotBlank()) add(transaction.product)
+        if (subLabel.isNotBlank() && subLabel != title) add(subLabel)
+        if (other.isNotBlank() && other != title) add(other)
     }.joinToString(" · ")
     val rowBg = when (skin) {
         com.simpleaccount.app.ui.theme.UiSkin.GLASS -> Modifier.background(
@@ -230,7 +242,8 @@ fun PageEnter(content: @Composable () -> Unit) {
         if (reduce) {
             appear.snapTo(0f); alpha.snapTo(1f)
         } else {
-            appear.animateTo(0f, com.simpleaccount.app.ui.motion.Motion.softSpring)
+            // 位移与淡入并发执行（合成器线程 transform/opacity），串行会让入场拖沓成两段
+            kotlinx.coroutines.launch { appear.animateTo(0f, com.simpleaccount.app.ui.motion.Motion.softSpring) }
             alpha.animateTo(1f, com.simpleaccount.app.ui.motion.Motion.tweenOrSnap(false, com.simpleaccount.app.ui.motion.Motion.PAGE_MS))
         }
     }

@@ -47,10 +47,19 @@ data class AgentToolCall(
 
 /**
  * 工具执行结果。
+ *
+ * 可观测执行状态（执行可信性）：[ok] 是否成功、[affectedRows] 客观落库行数
+ * （写操作唯一回执依据）、[permission]/[permissionNote] 权限是否授予及原因、
+ * [elapsedMs] 执行耗时。UI 轨迹与日志逐条展示，杜绝虚假完成与谎称无权。
  */
 data class AgentToolResult(
     val toolCallId: String,
     val name: String,
     /** 返回给模型的文本（模型会基于它继续） */
     val content: String,
+    val ok: Boolean = true,
+    val affectedRows: Int = 0,
+    val permission: ToolPermission = ToolPermission.NOT_REQUIRED,
+    val permissionNote: String? = null,
+    val elapsedMs: Long = 0L,
 )

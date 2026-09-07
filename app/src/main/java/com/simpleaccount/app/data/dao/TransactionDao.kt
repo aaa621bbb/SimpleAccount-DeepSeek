@@ -57,6 +57,7 @@ interface TransactionDao {
         SELECT * FROM transactions
         WHERE ledgerId = :ledgerId
           AND (note LIKE '%' || :q || '%' OR category LIKE '%' || :q || '%'
+            OR subCategory LIKE '%' || :q || '%'
             OR merchant LIKE '%' || :q || '%' OR product LIKE '%' || :q || '%')
           AND (:monthPrefix IS NULL OR date LIKE :monthPrefix || '%')
           AND (:category IS NULL OR category = :category)

@@ -131,6 +131,8 @@ data class AiSettingsUiState(
     val models: List<String> = emptyList(),
     val loadingModels: Boolean = false,
     val thinkingLevel: String = SettingsRepository.THINKING_OFF,
+    /** 智能体模型后端：cloud 云端大模型 / ondevice 端侧小模型（预留）。 */
+    val modelBackend: String = SettingsRepository.BACKEND_CLOUD,
 )
 
 @HiltViewModel
@@ -168,6 +170,7 @@ class AiSettingsViewModel @Inject constructor(
                 visionModel = settingsRepository.visionModel(),
                 useMainForVision = settingsRepository.useMainModelForVision(),
                 thinkingLevel = settingsRepository.thinkingLevel(),
+                modelBackend = settingsRepository.modelBackend(),
             )
             // 已配好 Key → 自动拉取该接口的可用模型列表
             if (settingsRepository.apiKey().isNotBlank()) refreshModels()
@@ -274,6 +277,14 @@ class AiSettingsViewModel @Inject constructor(
             settingsRepository.setVisionModel(_state.value.visionModel.ifBlank { SettingsRepository.DEFAULT_VISION_MODEL })
             settingsRepository.setUseMainModelForVision(_state.value.useMainForVision)
             settingsRepository.setThinkingLevel(_state.value.thinkingLevel)
+        }
+    }
+
+    /** 切换智能体模型后端（云端/端侧预留），AgentLoop 经 ModelBackendProvider 生效。 */
+    fun setModelBackend(backend: String) {
+        viewModelScope.launch {
+            settingsRepository.setModelBackend(backend)
+            _state.value = _state.value.copy(modelBackend = backend)
         }
     }
 

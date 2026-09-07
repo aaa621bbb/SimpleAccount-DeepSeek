@@ -25,6 +25,8 @@ data class AddUiState(
     val type: String = Transaction.TYPE_EXPENSE,
     val amountText: String = "",
     val selectedCategory: Category? = null,
+    /** 选中的二级分类名（空=不细分）。 */
+    val subCategory: String = "",
     val date: String = DateUtil.today(),
     /** 时间 HH:mm（手动记默认当前时刻，可改） */
     val time: String = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) },
@@ -40,6 +42,7 @@ data class AddUiState(
 class AddTransactionViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val subCategoryRepository: com.simpleaccount.app.data.repository.SubCategoryRepository,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
@@ -52,6 +55,10 @@ class AddTransactionViewModel @Inject constructor(
 
     private val _categoriesByType = MutableStateFlow<List<Category>>(emptyList())
     val categoriesByType = _categoriesByType.asStateFlow()
+
+    /** 当前选中一级分类下的二级分类选项（按用户自定义顺序）。 */
+    private val _subOptions = MutableStateFlow<List<com.simpleaccount.app.data.entity.SubCategory>>(emptyList())
+    val subOptions = _subOptions.asStateFlow()
 
     private val knownMerchants = accountRepository.observeAll()
         .map { list -> list.map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct() }
@@ -88,6 +95,14 @@ class AddTransactionViewModel @Inject constructor(
         }
     }
 
+    private fun refreshSubs() {
+        viewModelScope.launch {
+            val name = _state.value.selectedCategory?.name
+            _subOptions.value = if (name.isNullOrBlank()) emptyList()
+            else subCategoryRepository.getByParent(name)
+        }
+    }
+
     private fun loadForEdit(id: Long) {
         viewModelScope.launch {
             val t = accountRepository.getById(id)
@@ -97,6 +112,7 @@ class AddTransactionViewModel @Inject constructor(
                     type = t.type,
                     amountText = MoneyUtil.fenToYuan(t.amount),
                     selectedCategory = cat,
+                    subCategory = t.subCategory,
                     date = t.date,
                     time = t.time,
                     merchant = t.merchant,
@@ -106,6 +122,7 @@ class AddTransactionViewModel @Inject constructor(
                     loading = false
                 )
                 reloadCategories()
+                refreshSubs()
             } else {
                 _state.value = _state.value.copy(loading = false, error = "记录不存在")
             }
@@ -113,7 +130,8 @@ class AddTransactionViewModel @Inject constructor(
     }
 
     fun onTypeChange(type: String) {
-        _state.value = _state.value.copy(type = type, selectedCategory = null, error = null)
+        _state.value = _state.value.copy(type = type, selectedCategory = null, subCategory = "", error = null)
+        _subOptions.value = emptyList()
         reloadCategories()
     }
 
@@ -122,7 +140,14 @@ class AddTransactionViewModel @Inject constructor(
     }
 
     fun onCategorySelect(c: Category?) {
-        _state.value = _state.value.copy(selectedCategory = c, error = null)
+        _state.value = _state.value.copy(selectedCategory = c, subCategory = "", error = null)
+        refreshSubs()
+    }
+
+    /** 选择二级分类（再点一次取消细分）。 */
+    fun onSubCategorySelect(name: String) {
+        val cur = _state.value.subCategory
+        _state.value = _state.value.copy(subCategory = if (cur == name) "" else name, error = null)
     }
 
     fun onDateChange(date: String) {
@@ -187,6 +212,7 @@ class AddTransactionViewModel @Inject constructor(
                         amount = amountFen,
                         type = s.type,
                         category = cat.name,
+                        subCategory = s.subCategory.trim(),
                         date = s.date,
                         time = s.time,
                         merchant = s.merchant.trim(),
@@ -202,6 +228,7 @@ class AddTransactionViewModel @Inject constructor(
                     amount = amountFen,
                     type = s.type,
                     category = cat.name,
+                    subCategory = s.subCategory.trim(),
                     date = s.date,
                     time = s.time,
                     merchant = s.merchant.trim(),

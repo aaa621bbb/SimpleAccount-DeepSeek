@@ -13,40 +13,45 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 本地会计：只拦截「查实数 / 记一笔」这类题。
+ * 本地会计：只答「查实数」；「记一笔 / 撤回 / 改分类 / 开关无感」走写提案。
  *
  * 判定标准（宁可漏给模型，也不截胡分析题）：
  * 1. 含判断/建议词（分析、怎么办、值不值、怎么样……）→ 一律交给模型。
  * 2. 体检 / 月报 / 花哪了：模型可用时交给模型（数字已在快照里，模型负责写观察）；
  *    没配 Key 才本地出 Markdown，保证「不开 AI 也能看账」。
- * 3. 其余必须整句匹配「某天/某月/某类/某商家花了多少」或「帮我记 X 元」，
- *    模糊包含不算。质量不会因为走本地而下降——这类题模型反而常把日期搞错。
+ * 3. 查实数必须整句匹配「某天/某月/某类/某商家花了多少」，模糊包含不算。
+ *
+ * 写路径（v2.31 重构）：
+ * - 语义解析走 [UtteranceParser]（有序多遍抽取，根治"整句当商家"）；
+ * - 时间走 [com.simpleaccount.app.util.SpokenTimeParser]，时刻无依据不默认；
+ * - 所有写操作只生成 [WriteProposal] 预览，**不直接落库**——由 UI 弹出确认卡片，
+ *   用户手动批准后才执行 commit（确认闸门，不可绕过）。
  */
 @Singleton
 class LocalAccountant @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val subCategoryRepository: com.simpleaccount.app.data.repository.SubCategoryRepository,
     private val settingsRepository: SettingsRepository,
     private val classificationService: ClassificationService,
     private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
 
+    /** 写提案：预览文案 + 用户批准后执行的落库动作。 */
+    data class WriteProposal(
+        val preview: String,
+        val commit: suspend () -> String,
+    )
+
+    /** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
     suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
         if (s.isEmpty()) return null
-        val writeLike = Regex(
-            "记(?:一笔|上|账|一下)|帮我记|入账|撤回|撤销|" +
-                "改成|改到|归到|归类|归入|改分类|算作|算成|调成|调到|批量改|" +
-                "无感|自动记账"
-        ).containsMatchIn(s)
-        if (s.length > 80 && !writeLike) return null
+        val writeLike = WRITE_LIKE.containsMatchIn(s)
+        if (writeLike) return null
+        if (s.length > 80) return null
         if (s.length > 4000) return null
-        if (isJudgment(s) && !writeLike) return null
-
-        parseAdd(s)?.let { return it }
-        parseWithdraw(s)?.let { return it }
-        parseRecategorize(s)?.let { return it }
-        parseAutoRecord(s)?.let { return it }
+        if (isJudgment(s)) return null
 
         if (!IntentGate.needsLedger(IntentGate.classify(s))) return null
 
@@ -64,6 +69,29 @@ class LocalAccountant @Inject constructor(
             )
         }
         return null
+    }
+
+    /**
+     * 写提案：记一笔 / 撤回 / 改分类 / 无感开关。
+     * 返回 null 表示本地吃不准（转云端 Agent 或追问）。
+     */
+    suspend fun tryProposeWrite(userMessage: String): WriteProposal? {
+        val s = userMessage.trim().trim('？', '?', '。', '！', '!')
+        if (s.isEmpty() || s.length > 4000) return null
+        if (!WRITE_LIKE.containsMatchIn(s)) return null
+        proposeAdd(s)?.let { return it }
+        proposeWithdraw(s)?.let { return it }
+        proposeRecategorize(s)?.let { return it }
+        proposeAutoRecord(s)?.let { return it }
+        return null
+    }
+
+    companion object {
+        private val WRITE_LIKE = Regex(
+            "记(?:一笔|上|账|一下)|帮我记|入账|撤回|撤销|" +
+                "改成|改到|归到|归类|归入|改分类|算作|算成|调成|调到|批量改|" +
+                "无感|自动记账"
+        )
     }
 
     /** 要观点、对比、规划 → 模型。数字题即使带「多少」只要夹了这些词也不截。 */
@@ -140,7 +168,9 @@ class LocalAccountant @Inject constructor(
             }
     }
 
-    private suspend fun parseWithdraw(s: String): String? {
+    // ---------------- 写提案 ----------------
+
+    private suspend fun proposeWithdraw(s: String): WriteProposal? {
         val idMatch = Regex("^撤回\\s*(\\d+)$").find(s)
         val lastPhrases = setOf(
             "撤回", "撤回一笔", "撤回一笔账", "撤回一笔账单", "帮我撤回一笔", "帮我撤回一笔账单",
@@ -152,74 +182,115 @@ class LocalAccountant @Inject constructor(
         if (idMatch == null && !lastish) return null
         val t = if (idMatch != null) {
             val id = idMatch.groupValues[1].toLong()
-            accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 不在账本里（可能已经删了）。"
+            accountRepository.getById(id)
+                ?: return WriteProposal("流水号 $id 不在账本里（可能已经删了），无需撤回。") {
+                    "失败 rows_affected=0。流水号 $id 不在账本里。"
+                }
         } else {
             accountRepository.getAll().maxByOrNull { it.id }
-                ?: return "失败 rows_affected=0。账本是空的，没有可撤回的。"
-        }
-        accountRepository.delete(t.id)
-        if (accountRepository.getById(t.id) != null) {
-            return "失败 rows_affected=0。流水号 ${t.id} 删除后仍在账本。"
+                ?: return WriteProposal("账本是空的，没有可撤回的。") {
+                    "失败 rows_affected=0。账本是空的，没有可撤回的。"
+                }
         }
         val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "【账本已核验】rows_affected=1 已撤回流水号 **${t.id}**：$dir **¥${MoneyUtil.fenToYuan(t.amount)}** · ${t.merchant.ifBlank { t.category }} · ${t.date}。"
+        val desc = "流水号 ${t.id}：$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.category }} · ${t.date}"
+        return WriteProposal(preview = "将撤回$desc。") {
+            accountRepository.delete(t.id)
+            if (accountRepository.getById(t.id) != null) {
+                "失败 rows_affected=0。流水号 ${t.id} 删除后仍在账本。"
+            } else {
+                "【账本已核验】rows_affected=1 已撤回$desc。"
+            }
+        }
     }
 
-    private suspend fun parseAutoRecord(s: String): String? {
+    private suspend fun proposeAutoRecord(s: String): WriteProposal? {
         if (!Regex("无感|自动记账").containsMatchIn(s)) return null
         val on = Regex("打开|开启|启用|开始").containsMatchIn(s)
         val off = Regex("关闭|关掉|停止|停用").containsMatchIn(s)
         if (!on && !off) return null
-        settingsRepository.setAutoRecordEnabled(on)
-        autoRecordRuntime.setEnabled(on)
-        return if (on)
-            "已打开自动记账。请到「我的 → 无感记账」授权通知使用权，否则支付通知进不来。"
-        else "已关闭自动记账。"
-    }
-
-    private suspend fun parseAdd(s: String): String? {
-        val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
-        if (!want) return null
-        if (s.contains("多少")) return null
-        val amountFen = Regex("(?:¥|￥)\\s*(\\d+(?:\\.\\d{1,2})?)|(\\d+(?:\\.\\d{1,2})?)\\s*(?:元|块钱|块)")
-            .find(s)?.let { m -> m.groupValues[1].ifBlank { m.groupValues[2] } }
-            ?.let { MoneyUtil.parseToFen(it) }
-            ?: Regex("(?:记(?:一笔|上|账|一下)|帮我记|入账)[^\\d]{0,16}(\\d+(?:\\.\\d{1,2})?)").find(s)
-                ?.groupValues?.get(1)?.let { MoneyUtil.parseToFen(it) }
-        if (amountFen == null || amountFen <= 0) return null
-        val merchant = Regex("(?:记(?:一笔|上|账|一下)|帮我记|入账)\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12})\\s*(?:¥|￥|\\d)")
-            .find(s)?.groupValues?.get(1)
-            ?.takeIf { it !in listOf("一笔", "支出", "收入", "一下") }
-            ?: Regex("(?:在|给)\\s*([\\u4e00-\\u9fa5A-Za-z0-9]{1,12})").find(s)?.groupValues?.get(1)
-            ?: ""
-        val type = if (s.contains("收入") || s.contains("工资")) Transaction.TYPE_INCOME else Transaction.TYPE_EXPENSE
-        val date = DateResolver.resolveFlexible(s) ?: DateUtil.today()
-        val valid = categoryRepository.getAll().map { it.name }.toSet()
-        val category = classificationService.classifyForImport(merchant, "", "", valid, type)
-        val time = java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) }
-        val id = accountRepository.insert(
-            Transaction(
-                amount = amountFen,
-                type = type,
-                category = category,
-                date = date,
-                time = time,
-                merchant = merchant,
-                source = Transaction.SOURCE_MANUAL,
-            )
-        )
-        if (accountRepository.getById(id) == null) {
-            return "失败 rows_affected=0。记账后读库失败（流水号 $id）。"
+        val granted = runCatching { autoRecordRuntime.health.value.listenerGranted }.getOrDefault(false)
+        return if (on) {
+            val perm = if (granted) "通知监听已授权。" else "通知使用权未授予：批准后请到「我的 → 无感记账」点「去授权」，否则支付通知进不来。"
+            WriteProposal(preview = "将打开无感记账（支付通知自动入账）。$perm") {
+                settingsRepository.setAutoRecordEnabled(true)
+                autoRecordRuntime.setEnabled(true)
+                "已打开自动记账。" + if (granted) "" else "请到「我的 → 无感记账」授权通知使用权，否则支付通知进不来。"
+            }
+        } else {
+            WriteProposal(preview = "将关闭无感记账。") {
+                settingsRepository.setAutoRecordEnabled(false)
+                autoRecordRuntime.setEnabled(false)
+                "已关闭自动记账。"
+            }
         }
-        val dir = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "【账本已核验】rows_affected=1 已记账（流水号 **$id**）：$dir **¥${MoneyUtil.fenToYuan(amountFen)}** · $category · ${merchant.ifBlank { "未填商家" }} · $date $time\n\n记错了跟我说「撤回 $id」。"
     }
 
     /**
-     * 对象级 / 选择集改分类。
+     * 口语记账提案：语义解析（[UtteranceParser]）+ 时刻不默认。
+     * 金额缺失 → 返回 null（转云端 Agent 追问）；时刻缺失 → 预览注明"时刻待补"，
+     * 落库时刻留空，用户可在账本里编辑补上。
+     */
+    private suspend fun proposeAdd(s: String): WriteProposal? {
+        val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
+        if (!want) return null
+        if (s.contains("多少")) return null
+        val valid = categoryRepository.getAll().map { it.name }.toSet()
+        val knownMerchants = accountRepository.getAll()
+            .map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct()
+        val p = UtteranceParser.parse(s, valid, knownMerchants)
+        val amountFen = p.amountFen ?: return null
+        if (amountFen <= 0) return null
+        val date = p.date ?: DateUtil.today()
+        val time = p.time.orEmpty()
+        val category = p.category
+            ?: classificationService.classifyForImport(p.merchant, p.product, "", valid, p.type)
+        val knownSubs = runCatching { subCategoryRepository.getByParent(category).map { it.name }.toSet() }
+            .getOrDefault(emptySet())
+        val sub = p.subCategory?.takeIf { knownSubs.isEmpty() || it in knownSubs }.orEmpty()
+        val dir = if (p.type == Transaction.TYPE_INCOME) "收入" else "支出"
+        val catLabel = if (sub.isNotBlank()) "$category/$sub" else category
+        val timeLabel = when {
+            time.isNotBlank() -> time
+            p.timeAmbiguous -> "时刻不明（几点？凌晨还是下午）"
+            else -> "时刻待补"
+        }
+        val bits = listOf(
+            p.merchant.ifBlank { "未填商家" },
+            p.product,
+            catLabel,
+            "$date $timeLabel",
+        ).filter { it.isNotBlank() }.joinToString(" · ")
+        val preview = "将记一笔：$dir ¥${MoneyUtil.fenToYuan(amountFen)} · $bits" +
+            (if (time.isBlank()) "（时刻无依据：批准后记账，时刻留空，可在账本里补）" else "")
+        return WriteProposal(preview = preview) {
+            val id = accountRepository.insert(
+                Transaction(
+                    amount = amountFen,
+                    type = p.type,
+                    category = category,
+                    subCategory = sub,
+                    date = date,
+                    time = time,
+                    merchant = p.merchant,
+                    product = p.product,
+                    source = Transaction.SOURCE_MANUAL,
+                )
+            )
+            if (accountRepository.getById(id) == null) {
+                "失败 rows_affected=0。记账后读库失败（流水号 $id）。"
+            } else {
+                "【账本已核验】rows_affected=1 已记账（流水号 **$id**）：$dir **¥${MoneyUtil.fenToYuan(amountFen)}** · $catLabel · ${p.merchant.ifBlank { "未填商家" }} · $date${if (time.isNotBlank()) " $time" else ""}\n\n记错了跟我说「撤回 $id」。" +
+                    (if (time.isBlank()) "\n\n（时刻未知未落库：如需精确时刻，可在账本里点这笔编辑补上。）" else "")
+            }
+        }
+    }
+
+    /**
+     * 对象级 / 选择集改分类提案。
      * 支持：流水号、刚才那笔、某商家（最多 800 笔）、金额子集 + 其余。
      */
-    private suspend fun parseRecategorize(s: String): String? {
+    private suspend fun proposeRecategorize(s: String): WriteProposal? {
         if (!Regex("改成|改到|归到|改归|归入|算作|算成|调成|调到|改分类|归类为|归为").containsMatchIn(s)) return null
         val valid = categoryRepository.getAll().map { it.name }.sortedByDescending { it.length }
         fun categoryIn(fragment: String): String? = valid.firstOrNull {
@@ -231,13 +302,23 @@ class LocalAccountant @Inject constructor(
         if (idHit != null) {
             val category = categoryIn(s) ?: return null
             val id = idHit.groupValues[1].toLong()
-            val t = accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 不在账本里。"
-            return applyRecategorize(listOf(t), category)
+            val t = accountRepository.getById(id)
+                ?: return WriteProposal("流水号 $id 不在账本里，无法改分类。") {
+                    "失败 rows_affected=0。流水号 $id 不在账本里。"
+                }
+            return WriteProposal(
+                preview = "将把流水号 $id（${t.merchant.ifBlank { t.product.ifBlank { t.category } }} ¥${MoneyUtil.fenToYuan(t.amount)}）从「${t.category}」改到「$category」。"
+            ) { applyRecategorize(listOf(t), category) }
         }
         if (Regex("刚才|最新").containsMatchIn(s)) {
             val category = categoryIn(s) ?: return null
-            val t = accountRepository.getAll().maxByOrNull { it.id } ?: return "失败 rows_affected=0。账本是空的。"
-            return applyRecategorize(listOf(t), category)
+            val t = accountRepository.getAll().maxByOrNull { it.id }
+                ?: return WriteProposal("账本是空的，没有可改的账单。") {
+                    "失败 rows_affected=0。账本是空的。"
+                }
+            return WriteProposal(
+                preview = "将把最新一笔（流水号 ${t.id}，${t.merchant.ifBlank { t.product.ifBlank { t.category } }} ¥${MoneyUtil.fenToYuan(t.amount)}）从「${t.category}」改到「$category」。"
+            ) { applyRecategorize(listOf(t), category) }
         }
 
         val merch = Regex(
@@ -246,9 +327,15 @@ class LocalAccountant @Inject constructor(
             ?: return null
 
         val pool = accountRepository.getAll().filter { it.merchant.contains(merch) || it.product.contains(merch) }
-        if (pool.isEmpty()) return "失败 rows_affected=0。没找到商家「$merch」的账单。"
+        if (pool.isEmpty()) {
+            return WriteProposal("没找到商家「$merch」的账单，无法改分类。") {
+                "失败 rows_affected=0。没找到商家「$merch」的账单。"
+            }
+        }
         if (pool.size > 800) {
-            return "失败 rows_affected=0。「$merch」有 ${pool.size} 笔，超过 800。请加金额、月份或流水号收窄。"
+            return WriteProposal("「$merch」有 ${pool.size} 笔，超过 800。请加金额、月份或流水号收窄。") {
+                "失败 rows_affected=0。「$merch」有 ${pool.size} 笔，超过 800。请加金额、月份或流水号收窄。"
+            }
         }
 
         val restSplit = Regex("其余|剩下的?|其他的?").split(s, limit = 2)
@@ -264,12 +351,16 @@ class LocalAccountant @Inject constructor(
         if (amountFen != null && amountFen > 0) {
             val subset = pool.filter { it.amount == amountFen }
             if (subset.isEmpty()) {
-                return "失败 rows_affected=0。「$merch」没有 ¥${MoneyUtil.fenToYuan(amountFen)} 的账单。"
+                return WriteProposal("「$merch」没有 ¥${MoneyUtil.fenToYuan(amountFen)} 的账单。") {
+                    "失败 rows_affected=0。「$merch」没有 ¥${MoneyUtil.fenToYuan(amountFen)} 的账单。"
+                }
             }
             jobs += subset to firstCat
             if (restFrag != null) {
                 val restCat = categoryIn(restFrag)
-                    ?: return "失败 rows_affected=0。其余要改到哪一类没看清。"
+                    ?: return WriteProposal("其余要改到哪一类没看清，请说完整（例：其余改成餐饮）。") {
+                        "失败 rows_affected=0。其余要改到哪一类没看清。"
+                    }
                 val rest = pool.filter { it.amount != amountFen }
                 if (rest.isNotEmpty()) jobs += rest to restCat
             }
@@ -277,15 +368,22 @@ class LocalAccountant @Inject constructor(
             jobs += pool to firstCat
         }
 
-        val lines = mutableListOf<String>()
-        var affected = 0
-        for ((txs, cat) in jobs) {
-            val r = applyRecategorize(txs, cat)
-            lines += r
-            affected += Regex("rows_affected=(\\d+)").findAll(r).mapNotNull { it.groupValues[1].toIntOrNull() }.sum()
+        val preview = jobs.joinToString("\n") { (txs, cat) ->
+            val sample = txs.take(4).joinToString("；") {
+                "流水号${it.id} ${it.merchant.ifBlank { it.product.ifBlank { it.category } }} ¥${MoneyUtil.fenToYuan(it.amount)}"
+            }
+            "将把 ${txs.size} 笔改到「$cat」：$sample${if (txs.size > 4) " 等" else ""}。"
         }
-        if (affected == 0 && lines.any { it.contains("失败") }) return lines.joinToString("\n")
-        return lines.joinToString("\n")
+        return WriteProposal(preview = preview) {
+            val lines = mutableListOf<String>()
+            var affected = 0
+            for ((txs, cat) in jobs) {
+                val r = applyRecategorize(txs, cat)
+                lines += r
+                affected += Regex("rows_affected=(\\d+)").findAll(r).mapNotNull { it.groupValues[1].toIntOrNull() }.sum()
+            }
+            lines.joinToString("\n")
+        }
     }
 
     private suspend fun applyRecategorize(targets: List<Transaction>, category: String): String {

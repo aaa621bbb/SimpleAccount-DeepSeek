@@ -41,6 +41,7 @@ class DataManageViewModel @Inject constructor(
     private val settingDao: SettingDao,
     private val settingsRepository: SettingsRepository,
     private val retentionManager: DataRetentionManager,
+    private val subCategoryRepository: com.simpleaccount.app.data.repository.SubCategoryRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DataManageUiState())
@@ -71,7 +72,9 @@ class DataManageViewModel @Inject constructor(
                     .put("amount", t.amount)
                     .put("type", t.type)
                     .put("category", t.category)
+                    .put("subCategory", t.subCategory)
                     .put("date", t.date)
+                    .put("time", t.time)
                     .put("note", t.note)
                     .put("merchant", t.merchant)
                     .put("product", t.product)
@@ -106,8 +109,19 @@ class DataManageViewModel @Inject constructor(
                     .put("updatedAt", m.updatedAt)
             )
         }
+        val subArr = JSONArray()
+        subCategoryRepository.getAll().forEach { s ->
+            subArr.put(
+                JSONObject()
+                    .put("id", s.id)
+                    .put("parent", s.parent)
+                    .put("name", s.name)
+                    .put("sortOrder", s.sortOrder)
+            )
+        }
         json.put("transactions", txArr)
         json.put("categories", catArr)
+        json.put("subCategories", subArr)
         json.put("merchants", merArr)
         json.put("exportedAt", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(Date()))
         return json.toString(2)
@@ -128,9 +142,11 @@ class DataManageViewModel @Inject constructor(
         conversationDao.deleteAll()
         settingDao.deleteAll()
         categoryRepository.deleteAll()
+        subCategoryRepository.deleteAll()
         settingsRepository.clearAll()
-        // 重建预置分类
+        // 重建预置分类（含二级）
         categoryRepository.addAll(CategoryPresets.presetCategories())
+        subCategoryRepository.addAll(com.simpleaccount.app.util.SubCategoryPresets.presetSubCategories())
         return true
     }
 

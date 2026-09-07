@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -49,6 +50,10 @@ data class HomeUiState(
     val todayDupes: List<String> = emptyList(),
     val pendingMerchants: Int = 0,
     val importFailures: Int = 0,
+    /** 首页版式：simple 简约风 / dense 信息密集风。 */
+    val homeLayout: String = SettingsRepository.HOME_SIMPLE,
+    /** 条目标题字段：merchant 商家名 / product 商品名。 */
+    val titleField: String = SettingsRepository.TITLE_MERCHANT,
 )
 
 @HiltViewModel
@@ -108,6 +113,11 @@ class HomeViewModel @Inject constructor(
         val failures: Int,
     )
 
+    private data class Prefs(
+        val layout: String,
+        val title: String,
+    )
+
     val uiState: StateFlow<HomeUiState> =
         combine(
             accountRepository.observeAll(),
@@ -117,7 +127,10 @@ class HomeViewModel @Inject constructor(
                 Extra(count, sort, ledgers, lid)
             },
             combine(pendingMerchantsFlow, importFailureCountFlow) { p, f -> Follow(p, f) },
-        ) { all, categories, budget, q, follow ->
+            combine(settingsRepository.homeLayoutFlow, settingsRepository.titleFieldFlow) { l, t ->
+                Prefs(l, t)
+            },
+        ) { all, categories, budget, q, follow, prefs ->
             val count = q.count
             val sort = q.sort
             val ledgers = q.ledgers
@@ -177,7 +190,11 @@ class HomeViewModel @Inject constructor(
                 todayDupes = health.todayDupes,
                 pendingMerchants = follow.pending,
                 importFailures = follow.failures,
+                homeLayout = prefs.layout,
+                titleField = prefs.title,
             )
         }
+            // 聚合计算（排序/体检/分组）在 Default 线程做，避免大数据量时阻塞主线程掉帧
+            .flowOn(kotlinx.coroutines.Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 }

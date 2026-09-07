@@ -22,6 +22,7 @@ class AgentTools @Inject constructor(
     private val accountRepository: AccountRepository,
     private val merchantRepository: MerchantRepository,
     private val categoryRepository: CategoryRepository,
+    private val subCategoryRepository: com.simpleaccount.app.data.repository.SubCategoryRepository,
     private val appControl: AppControlCenter,
     private val settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
     private val memoryStore: com.simpleaccount.app.data.memory.MemoryStore,
@@ -30,22 +31,19 @@ class AgentTools @Inject constructor(
 
     companion object {
         const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
-        val DESTRUCTIVE = setOf(
-            "delete_category",
-            "classify_merchants",
-        )
     }
 
     /** 全部工具定义（提供给模型） */
     val specs: List<AgentToolSpec> = listOf(
         AgentToolSpec(
             name = "query_transactions",
-            description = "查询账本交易明细。可按月份/类型/分类/商家筛。默认返回 100 条，最大 800，支持 offset 翻页一次性看 500+。超过一页用 offset 翻页。批量改 500 笔不必把每条 id 抄完，直接 reclassify_transactions(merchant/from_category/amount)。",
+            description = "查询账本交易明细。可按月份/日期/类型/分类/二级分类/商家筛。默认返回 100 条，最大 800，支持 offset 翻页一次性看 500+。超过一页用 offset 翻页。批量改 500 笔不必把每条 id 抄完，直接 reclassify_transactions(merchant/from_category/amount)。",
             parameters = mapOf(
                 "month" to ("string" to "月份，格式 yyyy-MM，例如 2026-03；也接受「本月/上个月」；空则不限月份"),
-                "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天/上午/下午」。与 month 同时出现时优先用 date"),
+                "date" to ("string" to "具体某一天 yyyy-MM-dd，例如 2026-09-03；也接受「昨天/前天/今天」。与 month 同时出现时优先用 date"),
                 "type" to ("string" to "'expense' 支出 或 'income' 收入；空则不限"),
-                "category" to ("string" to "分类名，例如 餐饮；空则不限"),
+                "category" to ("string" to "一级分类名，例如 餐饮；空则不限"),
+                "sub_category" to ("string" to "二级分类名，例如 早餐/午餐/晚餐/夜宵/奶茶；空则不限"),
                 "keyword" to ("string" to "商家或商品关键词，用于搜索；空则不限"),
                 "limit" to ("integer" to "最多返回条数，默认100，最大800（满足 500 条批量改写可视窗）"),
                 "offset" to ("integer" to "跳过前 N 条，默认0，用于翻页 offset=800 看下一批"),
@@ -97,13 +95,15 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "add_transaction",
-            description = "记一笔账。当用户说「我买了什么花了多少钱，帮我记上」时调用。amount 为金额（元，必填）；merchant/product 尽量从用户话里提取；category 可选（不填自动按关键词/商家映射分类）；date 可选 yyyy-MM-dd（默认今天）；type 默认 expense（收入传 income）。返回流水号。",
+            description = "记一笔账。当用户说「我买了什么花了多少钱，帮我记上」时调用。amount 为金额（元，必填）；merchant/product 尽量从用户话里提取；category 可选（不填自动按关键词/商家映射分类）；sub_category 可选（二级分类如 早餐/午餐，不填自动推断）；date 可选 yyyy-MM-dd（默认今天），time 为独立时刻字段（HH:mm 或 上午/下午/晚上等口语，无依据不传、调用后在回复里追问，禁止默认 12:00）；type 默认 expense（收入传 income）。返回流水号。",
             parameters = mapOf(
                 "amount" to ("number" to "金额，单位元，例如 6.5"),
                 "merchant" to ("string" to "商家/交易对象，可空"),
                 "product" to ("string" to "商品名，可空"),
                 "category" to ("string" to "分类名（餐饮/交通/购物/娱乐/医疗/教育/居住/通讯/其它 或 收入类），可不填自动分类"),
+                "sub_category" to ("string" to "二级分类名（早餐/午餐/晚餐/夜宵/奶茶/咖啡/打车/地铁…），可不填自动推断"),
                 "date" to ("string" to "日期 yyyy-MM-dd，默认今天"),
+                "time" to ("string" to "时刻 HH:mm（如 15:30）或口语（下午三点/昨晚）；用户没说几点就别传，框架会留空并提醒你追问"),
                 "type" to ("string" to "'expense' 支出（默认）或 'income' 收入"),
             ),
             required = listOf("amount"),
@@ -157,11 +157,13 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "edit_transaction",
-            description = "编辑一笔已有账单的任意字段（金额/日期/备注/商家/商品）。只改传入的字段。用户说「把那笔改成xx」时调用；只改分类请用 update_transaction_category。",
+            description = "编辑一笔已有账单的任意字段（金额/日期/时刻/备注/商家/商品/二级分类）。只改传入的字段。用户说「把那笔改成xx」时调用；只改一级分类请用 update_transaction_category。",
             parameters = mapOf(
                 "transaction_id" to ("integer" to "流水号"),
                 "amount" to ("number" to "新金额（元），不改不传"),
                 "date" to ("string" to "新日期 yyyy-MM-dd，不改不传"),
+                "time" to ("string" to "新时刻 HH:mm（如 15:30）或口语（下午三点）；传空字符串=清空时刻，不改不传"),
+                "sub_category" to ("string" to "新二级分类名（如 早餐），不改不传"),
                 "note" to ("string" to "新备注，不改不传"),
                 "merchant" to ("string" to "新商家，不改不传"),
                 "product" to ("string" to "新商品，不改不传"),
@@ -264,11 +266,26 @@ class AgentTools @Inject constructor(
         ),
     )
 
-    /** 依据模型给出的工具调用执行。破坏性操作未确认时返回 [NEED_CONFIRM] 前缀。 */
+    /**
+     * 依据模型给出的工具调用执行。
+     *
+     * 强制确认闸门（[WriteGate]，不可绕过）：一切新增/删除/修改类工具未经用户手动批准
+     * （confirmed=true）一律只返回 [NEED_CONFIRM] 预览、不落库；只读查询不受限。
+     * 每次执行附带可观测状态（成功/失败、落库行数、权限、耗时），见 [AgentToolResult]。
+     */
     suspend fun execute(call: AgentToolCall, confirmed: Boolean = false): AgentToolResult {
-        if (call.name in DESTRUCTIVE && !confirmed) {
-            return AgentToolResult(call.id, call.name, NEED_CONFIRM_PREFIX + previewDestructive(call))
+        if (WriteGate.isGated(call.name) && !confirmed) {
+            return AgentToolResult(
+                toolCallId = call.id,
+                name = call.name,
+                content = NEED_CONFIRM_PREFIX + previewWrite(call),
+                ok = true,
+                affectedRows = 0,
+                permission = permissionOf(call.name),
+                permissionNote = permissionNoteOf(call.name),
+            )
         }
+        val start = System.currentTimeMillis()
         val result = try {
             when (call.name) {
                 "query_transactions" -> queryTransactions(call.arguments)
@@ -316,13 +333,56 @@ class AgentTools @Inject constructor(
         } catch (e: Exception) {
             "工具执行出错：${e.message}"
         }
-        return AgentToolResult(call.id, call.name, result)
+        val elapsed = System.currentTimeMillis() - start
+        val failed = result.startsWith("错误") || result.startsWith("参数错误") ||
+            result.startsWith("工具执行出错") || result.startsWith("参数解析失败") ||
+            result.startsWith("失败 rows_affected=0") || result == "拒绝：疑似密钥，未写入。"
+        return AgentToolResult(
+            toolCallId = call.id,
+            name = call.name,
+            content = result,
+            ok = !failed,
+            affectedRows = ToolAudit.affectedRowsOf(result),
+            permission = permissionOf(call.name),
+            permissionNote = permissionNoteOf(call.name),
+            elapsedMs = elapsed,
+        )
     }
 
-    suspend fun previewDestructive(call: AgentToolCall): String {
+    /**
+     * 工具权限状态（框架如实检测，UI 逐条展示；模型不得编造"拿不到权限"）。
+     * - set_auto_record：通知监听授权状态决定后续链路是否真能跑通；
+     * - navigate：导航器未就绪时明确标记不可用及原因；
+     * - 其余账本/设置工具均为纯本地操作，无需权限。
+     */
+    private fun permissionOf(tool: String): ToolPermission = when (tool) {
+        "set_auto_record" -> {
+            val granted = runCatching { autoRecordRuntime.health.value.listenerGranted }.getOrDefault(false)
+            if (granted) ToolPermission.GRANTED else ToolPermission.DENIED
+        }
+        "navigate" -> if (appControl.navigator.value == null) ToolPermission.UNAVAILABLE else ToolPermission.NOT_REQUIRED
+        else -> ToolPermission.NOT_REQUIRED
+    }
+
+    private fun permissionNoteOf(tool: String): String? = when (tool) {
+        "set_auto_record" -> {
+            val h = runCatching { autoRecordRuntime.health.value }.getOrNull()
+            when {
+                h == null -> "运行态未知"
+                h.listenerGranted -> if (h.listenerBound) "通知监听已连接" else "已授权，监听尚未连接"
+                else -> "通知使用权未授予：打开开关后仍需到「无感记账」页点「去授权」"
+            }
+        }
+        "navigate" -> if (appControl.navigator.value == null) "App 导航尚未就绪（请回首页再试）" else null
+        else -> null
+    }
+
+    /** 确认闸门预览：所有写工具在用户批准前展示的人话摘要（含权限提示）。 */
+    suspend fun previewWrite(call: AgentToolCall): String {
         val a = parseArgs(call.arguments)
-        return when (call.name) {
-            "delete_transaction", "withdraw_transaction" -> {
+        val body = when (call.name) {
+            "add_transaction" -> previewAdd(a)
+            "delete_transaction" -> {
                 val id = a.optLong("transaction_id", -1L)
                 val t = accountRepository.getById(id)
                 if (t == null) "流水号 $id 不存在，无需删除。"
@@ -331,11 +391,86 @@ class AgentTools @Inject constructor(
                     "将删除流水号 $id：$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.product.ifBlank { t.category } }} · ${t.date}"
                 }
             }
-            "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
-            "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
+            "withdraw_transaction" -> {
+                val id = a.optLong("transaction_id", -1L)
+                val t = if (id > 0) accountRepository.getById(id)
+                else accountRepository.getAll().maxByOrNull { it.id }
+                if (t == null) "没有可撤回的记录。"
+                else {
+                    val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+                    "将撤回流水号 ${t.id}：$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.product.ifBlank { t.category } }} · ${t.date}"
+                }
+            }
+            "edit_transaction" -> previewEdit(a)
+            "update_transaction_category" -> {
+                val id = a.optLong("transaction_id", -1L)
+                val category = a.optString("category").trim()
+                val t = accountRepository.getById(id)
+                if (t == null) "流水号 $id 不存在，无法改分类。"
+                else "将把流水号 $id（${t.merchant.ifBlank { t.product.ifBlank { t.category } }} ¥${MoneyUtil.fenToYuan(t.amount)}）从「${t.category}」改到「$category」。"
+            }
             "reclassify_transactions" -> previewReclassify(a)
+            "create_category" -> {
+                val typeLabel = if (a.optString("type").lowercase().contains("income")) "收入" else "支出"
+                "将新建${typeLabel}分类「${a.optString("name").trim()}」。"
+            }
+            "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
+            "set_merchant_category" -> "将设置商家映射：以后「${a.optString("merchant").trim()}」的账都归「${a.optString("category").trim()}」（不影响已有账单）。"
+            "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
+            "set_monthly_budget" -> {
+                val yuan = a.optDouble("amount")
+                if (yuan.isNaN() || yuan <= 0) "将清除每月预算。" else "将把每月预算设为 ¥${MoneyUtil.fenToYuan(Math.round(yuan * 100))}。"
+            }
+            "set_theme" -> "将切换 App 外观为「${a.optString("mode").trim()}」。"
+            "set_auto_record" -> {
+                val on = if (a.has("enabled")) a.optBoolean("enabled") else true
+                if (on) "将打开无感记账（支付通知自动入账），并跳转到无感记账页。"
+                else "将关闭无感记账。"
+            }
             else -> "将执行 ${call.name}"
         }
+        val perm = permissionNoteOf(call.name)
+        return if (perm.isNullOrBlank()) body else "$body\n权限：$perm"
+    }
+
+    private suspend fun previewAdd(a: JSONObject): String {
+        val rawAmount = a.optString("amount").ifBlank {
+            val d = a.optDouble("amount")
+            if (d.isNaN()) "" else d.toString()
+        }
+        val fen = MoneyUtil.parseToFen(rawAmount) ?: MoneyUtil.parseChineseToFen(rawAmount)
+        val dir = if (a.optString("type").trim().lowercase() in listOf("income", "收入")) "收入" else "支出"
+        val dateRaw = a.optString("date").trim()
+        val timeRaw = a.optString("time").trim()
+        val spoken = com.simpleaccount.app.util.SpokenTimeParser.parse(
+            listOf(dateRaw, timeRaw).filter { it.isNotBlank() }.joinToString(" ")
+        )
+        val date = spoken.date ?: normalizeDate(dateRaw) ?: java.time.LocalDate.now().toString()
+        val timeLabel = spoken.time ?: if (timeRaw.isBlank()) "时刻待补" else timeRaw
+        val bits = listOf(
+            a.optString("merchant").trim(),
+            a.optString("product").trim(),
+            a.optString("category").trim().ifBlank { "自动分类" },
+            a.optString("sub_category").trim(),
+            "$date $timeLabel",
+        ).filter { it.isNotBlank() }.joinToString(" · ")
+        return "将记一笔：$dir ¥${if (fen == null) rawAmount.ifBlank { "?" } else MoneyUtil.fenToYuan(fen)} · $bits"
+    }
+
+    private suspend fun previewEdit(a: JSONObject): String {
+        val id = a.optLong("transaction_id", -1L)
+        val t = accountRepository.getById(id) ?: return "流水号 $id 不存在，无法编辑。"
+        val changes = mutableListOf<String>()
+        if (a.has("amount")) changes += "金额→¥${a.optDouble("amount")}"
+        if (a.has("date")) changes += "日期→${a.optString("date")}"
+        if (a.has("time")) changes += "时刻→${a.optString("time").ifBlank { "清空" }}"
+        if (a.has("merchant")) changes += "商家→${a.optString("merchant")}"
+        if (a.has("product")) changes += "商品→${a.optString("product")}"
+        if (a.has("note")) changes += "备注→${a.optString("note").take(20)}"
+        if (a.has("sub_category")) changes += "二级分类→${a.optString("sub_category")}"
+        if (changes.isEmpty()) return "流水号 $id 没有任何字段变更，无需执行。"
+        val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+        return "将编辑流水号 $id（$dir ¥${MoneyUtil.fenToYuan(t.amount)} · ${t.merchant.ifBlank { t.product.ifBlank { t.category } }}）：${changes.joinToString("；")}。"
     }
 
     // ---------------- 各工具实现 ----------------
@@ -393,6 +528,7 @@ class AgentTools @Inject constructor(
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val type = a.optString("type").trim().lowercase()
         val category = a.optString("category").trim()
+        val subCategory = a.optString("sub_category").trim()
         val keyword = a.optString("keyword").trim()
         val limit = a.optInt("limit", 100).coerceIn(1, 800)
         val offset = a.optInt("offset", 0).coerceAtLeast(0)
@@ -408,10 +544,12 @@ class AgentTools @Inject constructor(
             .filter { date.isNotEmpty() || month.isEmpty() || it.date.startsWith(month) }
             .filter { typeFilter == null || it.type == typeFilter }
             .filter { category.isEmpty() || it.category == category }
+            .filter { subCategory.isEmpty() || it.subCategory == subCategory }
             .filter {
                 keyword.isEmpty() ||
                     it.merchant.contains(keyword, ignoreCase = true) ||
-                    it.product.contains(keyword, ignoreCase = true)
+                    it.product.contains(keyword, ignoreCase = true) ||
+                    it.subCategory.contains(keyword, ignoreCase = true)
             }
             .sortedByDescending { it.date }
             .toList()
@@ -426,7 +564,9 @@ class AgentTools @Inject constructor(
         }
         all.forEach { t ->
             val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-            sb.appendLine("- (流水号:${t.id}) $dir ${MoneyUtil.fenToYuan(t.amount)}元 分类:${t.category} 商家:${t.merchant.ifEmpty { "-" }} 商品:${t.product.ifEmpty { "-" }} 日期:${t.date}")
+            val catLabel = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+            val timeLabel = if (t.time.isNotBlank()) " ${t.time}" else ""
+            sb.appendLine("- (流水号:${t.id}) $dir ${MoneyUtil.fenToYuan(t.amount)}元 分类:$catLabel 商家:${t.merchant.ifEmpty { "-" }} 商品:${t.product.ifEmpty { "-" }} 日期:${t.date}$timeLabel")
         }
         return sb.toString()
     }
@@ -493,15 +633,19 @@ class AgentTools @Inject constructor(
         return sb.toString()
     }
 
-    /** 记一笔：用户口语记账入口，落 transactions 主表（source=manual），返回流水号 */
+    /**
+     * 记一笔：用户口语记账入口，落 transactions 主表（source=manual），返回流水号。
+     *
+     * 时间维度铁律（[com.simpleaccount.app.util.SpokenTimeParser]）：date/time 各自独立解析，
+     * 时刻无依据时落空字符串（未知），**禁止默认 12:00**；模型应在回复里显式追问时刻。
+     */
     private suspend fun addTransaction(args: String): String {
         val a = parseArgs(args)
-        val amountFen = MoneyUtil.parseToFen(
-            a.optString("amount").ifBlank {
-                val d = a.optDouble("amount")
-                if (d.isNaN()) "" else d.toString()
-            }
-        )
+        val amountRaw = a.optString("amount").ifBlank {
+            val d = a.optDouble("amount")
+            if (d.isNaN()) "" else d.toString()
+        }
+        val amountFen = MoneyUtil.parseToFen(amountRaw) ?: MoneyUtil.parseChineseToFen(amountRaw)
         if (amountFen == null || amountFen <= 0) return "参数错误：amount 必须是大于 0 的金额（元）。"
         val merchant = a.optString("merchant").trim()
         val product = a.optString("product").trim()
@@ -509,22 +653,20 @@ class AgentTools @Inject constructor(
             "income", "收入" -> Transaction.TYPE_INCOME
             else -> Transaction.TYPE_EXPENSE
         }
-        val date = a.optString("date").trim().ifBlank {
-            java.time.LocalDate.now().toString()
-        }.let { raw ->
-            normalizeDate(raw)
-                ?: Regex("(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})").find(raw)?.let { mm ->
-                    "%04d-%02d-%02d".format(mm.groupValues[1].toInt(), mm.groupValues[2].toInt(), mm.groupValues[3].toInt())
-                }
-                ?: java.time.LocalDate.now().toString()
-        }
-        // 时间（HH:mm）：多模态端到端修复，支持 上午/下午/晚上/凌晨/中午/今天/昨天/前天 等语义
+        // 日期：显式/口语解析；整体无依据才默认今天（日期的自然缺省，时刻不适用此规则）
+        val dateRaw = a.optString("date").trim()
         val timeRaw = a.optString("time").trim()
-        val time = if (timeRaw.isNotBlank()) {
-            com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(timeRaw, a.optString("date"))
-        } else {
-            com.simpleaccount.app.util.DateResolver.resolveTimeOrPeriod(date)
-        }
+        val spoken = com.simpleaccount.app.util.SpokenTimeParser.parse(
+            listOf(dateRaw, timeRaw).filter { it.isNotBlank() }.joinToString(" ")
+        )
+        val date = spoken.date ?: normalizeDate(dateRaw)
+            ?: Regex("(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})").find(dateRaw)?.let { mm ->
+                "%04d-%02d-%02d".format(mm.groupValues[1].toInt(), mm.groupValues[2].toInt(), mm.groupValues[3].toInt())
+            }
+            ?: java.time.LocalDate.now().toString()
+        // 时刻：无依据 → 空字符串（未知），绝不默认 12:00
+        val time = spoken.time ?: normalizeTimeStrict(timeRaw).orEmpty()
+        val timeUnknown = time.isBlank()
 
         // 分类：显式指定且合法 → 直接用；否则 商家映射表 → 关键词规则 → 兜底（与导入同优先级）
         val valid = categoryRepository.getAll().map { it.name }.toSet()
@@ -540,10 +682,21 @@ class AgentTools @Inject constructor(
                     }
                 }
             } else null
-            mapped
-                ?: com.simpleaccount.app.util.KeywordRules.classify("$merchant $product")
+            val kw = com.simpleaccount.app.util.KeywordRules.classify("$merchant $product")
+                ?.takeIf { it in valid }
+            mapped?.takeIf { it in valid }
+                ?: kw
                 ?: (if (type == Transaction.TYPE_INCOME) com.simpleaccount.app.util.CategoryPresets.DEFAULT_INCOME_CATEGORY
                     else com.simpleaccount.app.util.CategoryPresets.DEFAULT_EXPENSE_CATEGORY)
+        }
+        // 二级分类：显式指定且属于该一级 → 用；否则关键词推断；无把握留空
+        val requestedSub = a.optString("sub_category").trim()
+        val knownSubs = runCatching { subCategoryRepository.getByParent(category).map { it.name }.toSet() }
+            .getOrDefault(emptySet())
+        val subCategory = when {
+            requestedSub.isNotEmpty() && (knownSubs.isEmpty() || requestedSub in knownSubs) -> requestedSub
+            else -> com.simpleaccount.app.util.KeywordRules.classifySub("$merchant $product", category)
+                ?.takeIf { knownSubs.isEmpty() || it in knownSubs }.orEmpty()
         }
 
         val id = accountRepository.insert(
@@ -551,6 +704,7 @@ class AgentTools @Inject constructor(
                 amount = amountFen,
                 type = type,
                 category = category,
+                subCategory = subCategory,
                 date = date,
                 time = time,
                 merchant = merchant,
@@ -561,11 +715,25 @@ class AgentTools @Inject constructor(
         val stored = accountRepository.getById(id)
         if (stored == null) return "失败 rows_affected=0。记账后读库失败（流水号 $id）。"
         val dir = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
+        val catLabel = if (subCategory.isNotBlank()) "$category/$subCategory" else category
+        val timeLabel = if (timeUnknown) "时刻未知" else time
         return "【账本已核验】rows_affected=1 已记账（流水号 $id）：$dir ${MoneyUtil.fenToYuan(amountFen)} 元 · " +
-            listOf(merchant, product, category, date).filter { it.isNotBlank() }.joinToString(" · ")
+            listOf(merchant, product, catLabel, "$date $timeLabel").filter { it.isNotBlank() }.joinToString(" · ") +
+            (if (timeUnknown) "（时刻无依据未落库：请在回复里追问用户几点，可再用 edit_transaction 补上）" else "")
     }
 
-    /** 撤回一笔账：有流水号按号删，否则删最新一笔。不二次确认。 */
+    /** 严格时刻解析：只认 HH:mm / H:mm；其它一律 null（不猜、不默认）。 */
+    private fun normalizeTimeStrict(v: String): String? {
+        val t = v.trim()
+        if (t.isEmpty()) return null
+        val m = Regex("^(\\d{1,2}):(\\d{2})$").find(t) ?: return null
+        val h = m.groupValues[1].toIntOrNull() ?: return null
+        val min = m.groupValues[2].toIntOrNull() ?: return null
+        if (h !in 0..23 || min !in 0..59) return null
+        return "%02d:%02d".format(h, min)
+    }
+
+    /** 撤回一笔账：有流水号按号删，否则删最新一笔（经确认闸门批准后执行）。 */
     private suspend fun withdrawTransaction(args: String): String {
         val a = parseArgs(args)
         val id = a.optLong("transaction_id", -1L)
@@ -732,28 +900,45 @@ class AgentTools @Inject constructor(
     /** 操控：编辑一笔账单的任意字段（只改传入的字段） */
     private suspend fun editTransaction(args: String): String {
         val a = parseArgs(args)
-        val id = a.optLong("transaction_id", -1L)
-        if (id <= 0) return "参数错误：transaction_id 必须是有效的流水号。"
-        val t = accountRepository.getById(id) ?: return "没有找到流水号 $id 的记录。"
+        val id = a.optLong("transaction_id")
+        if (id <= 0) return "参数错误：transaction_id 必须是流水号。"
+        val t = accountRepository.getById(id)
+            ?: return "失败 rows_affected=0。流水号 $id 不在账本里。"
         val newAmount = if (a.has("amount")) {
             val d = a.optDouble("amount")
             if (d.isNaN() || d <= 0) return "金额不合法（必须是大于 0 的元数）。"
             Math.round(d * 100)
         } else t.amount
-        val newDate = a.optString("date").trim().ifBlank { t.date }
+        val newDate = a.optString("date").trim().ifBlank { t.date }.let { raw ->
+            if (raw == t.date) raw else normalizeDate(raw) ?: raw
+        }
+        // 时刻：显式传参才动；传空字符串=清空时刻；不传=不动
+        val newTime = if (!a.has("time")) t.time
+        else {
+            val raw = a.optString("time").trim()
+            if (raw.isEmpty()) "" else {
+                val spoken = com.simpleaccount.app.util.SpokenTimeParser.parse(raw)
+                spoken.time ?: normalizeTimeStrict(raw) ?: return "参数错误：time 必须是 HH:mm（如 15:30），或 上午/下午/晚上 等时段词。"
+            }
+        }
+        val newSub = if (a.has("sub_category")) a.optString("sub_category").trim() else t.subCategory
         val updated = t.copy(
             amount = newAmount,
             date = newDate,
+            time = newTime,
             note = if (a.has("note")) a.optString("note") else t.note,
             merchant = if (a.has("merchant")) a.optString("merchant").trim() else t.merchant,
             product = if (a.has("product")) a.optString("product").trim() else t.product,
+            subCategory = newSub,
             updatedAt = System.currentTimeMillis()
         )
         accountRepository.update(updated)
         val now = accountRepository.getById(id) ?: return "失败 rows_affected=0。流水号 $id 写库后读不到。"
         val dir = if (updated.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
-        return "【账本已核验】rows_affected=1 已修改流水号 $id：$dir ${MoneyUtil.fenToYuan(now.amount)} 元 · ${now.date} · " +
-            listOf(now.merchant, now.product, now.category).filter { it.isNotBlank() }.joinToString(" · ") +
+        val catLabel = if (now.subCategory.isNotBlank()) "${now.category}/${now.subCategory}" else now.category
+        val timeLabel = if (now.time.isNotBlank()) " ${now.time}" else ""
+        return "【账本已核验】rows_affected=1 已修改流水号 $id：$dir ${MoneyUtil.fenToYuan(now.amount)} 元 · ${now.date}$timeLabel · " +
+            listOf(now.merchant, now.product, catLabel).filter { it.isNotBlank() }.joinToString(" · ") +
             (if (now.note.isNotBlank()) " · 备注：${now.note}" else "")
     }
 
@@ -793,7 +978,7 @@ class AgentTools @Inject constructor(
         return "已创建${if (type == com.simpleaccount.app.data.entity.Category.TYPE_INCOME) "收入" else "支出"}分类「$name」。"
     }
 
-    /** 操控：删除自定义分类（预置分类与在用分类拒绝删除） */
+    /** 操控：删除自定义分类（预置分类与在用分类拒绝删除；附带删除其二级分类） */
     private suspend fun deleteCategory(args: String): String {
         val a = parseArgs(args)
         val name = a.optString("name").trim()
@@ -805,7 +990,8 @@ class AgentTools @Inject constructor(
             return "分类「$name」还有账单在使用，先把这些账单改到其他分类（可以让我来改），再删除。"
         }
         categoryRepository.deleteById(cat.id)
-        return "已删除分类「$name」。"
+        runCatching { subCategoryRepository.deleteByParent(name) }
+        return "已删除分类「$name」（含其二级分类）。"
     }
 
     /** 操控：设置商家映射（以后该商家都归此类） */
