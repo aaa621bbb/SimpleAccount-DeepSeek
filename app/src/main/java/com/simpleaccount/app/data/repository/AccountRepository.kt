@@ -71,10 +71,11 @@ class AccountRepository @Inject constructor(
 
     suspend fun getLastDate(): String? = transactionDao.lastDate()
 
-    suspend fun monthSummary(monthPrefix: String): MonthSummary {
+suspend fun monthSummary(monthPrefix: String): MonthSummary {
         var expense = 0L
         var income = 0L
-        getAll().filter { it.date.startsWith(monthPrefix) }.forEach { t ->
+        // 草稿不计入汇总（与统计口径一致）
+        getAll().filter { it.source != Transaction.SOURCE_DRAFT && it.date.startsWith(monthPrefix) }.forEach { t ->
             if (t.type == Transaction.TYPE_EXPENSE) expense += t.amount else income += t.amount
         }
         return MonthSummary(expense, income)
@@ -83,13 +84,18 @@ class AccountRepository @Inject constructor(
     suspend fun allSummary(): MonthSummary {
         var expense = 0L
         var income = 0L
-        getAll().forEach { t ->
+        getAll().filter { it.source != Transaction.SOURCE_DRAFT }.forEach { t ->
             if (t.type == Transaction.TYPE_EXPENSE) expense += t.amount else income += t.amount
         }
         return MonthSummary(expense, income)
     }
 
-    suspend fun recent(limit: Int): List<Transaction> = getAll().take(limit)
+    suspend fun recent(limit: Int): List<Transaction> =
+        getAll().filter { it.source != Transaction.SOURCE_DRAFT }.take(limit)
+
+    /** 已确认流水（排除待确认草稿），供 AI/统计口径使用。 */
+    suspend fun getConfirmed(): List<Transaction> =
+        getAll().filter { it.source != Transaction.SOURCE_DRAFT }
 
     suspend fun getAllImport(): List<Transaction> = transactionDao.getAllImport(lid())
 

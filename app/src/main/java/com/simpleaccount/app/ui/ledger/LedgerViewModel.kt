@@ -124,12 +124,14 @@ class LedgerViewModel @Inject constructor(
                 )
             }
             val rows = base.map { RowUi(it, catMap[it.category]) }
-            val groups = rows.groupBy { it.transaction.date.take(7) }
+val groups = rows.groupBy { it.transaction.date.take(7) }
                 .toSortedMap(compareByDescending { it })
                 .map { (m, list) ->
                     var exp = 0L
                     var inc = 0L
+                    // 月头合计与统计同口径：草稿可见但不计入
                     list.forEach { row ->
+                        if (row.transaction.source == Transaction.SOURCE_DRAFT) return@forEach
                         when (row.transaction.type) {
                             Transaction.TYPE_EXPENSE -> exp += row.transaction.amount
                             Transaction.TYPE_INCOME -> inc += row.transaction.amount

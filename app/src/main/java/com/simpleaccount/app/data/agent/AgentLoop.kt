@@ -217,7 +217,9 @@ val intent = IntentGate.classify(userMessage)
         val needsLedgerCtx = IntentGate.needsLedger(intent) || intent == QueryIntent.NAV || intent == QueryIntent.MEMORY
         if (needsLedgerCtx || intent == QueryIntent.CHAT) {
             // CHAT 也允许可选注入轻量快照；强意图则完整快照
-            val allTx = if (IntentGate.needsLedger(intent)) accountRepository.getAll() else emptyList()
+            val allTx = if (IntentGate.needsLedger(intent)) {
+                settingsRepository.filterByLedgerScope(accountRepository.getAll())
+            } else emptyList()
             val coveredMonths = allTx.map { it.date.take(7) }.distinct().sorted()
             val snapshot = if (allTx.isNotEmpty()) buildSnapshot(allTx) else ""
             val memory = if (IntentGate.needsLedger(intent)) {

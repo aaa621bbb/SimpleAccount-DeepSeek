@@ -59,7 +59,8 @@ class LocalAccountant @Inject constructor(
 
         if (!IntentGate.needsLedger(IntentGate.classify(s))) return null
 
-        val all = accountRepository.getAll()
+// 只读快答排除草稿；体检与首页/统计同口径
+        val all = settingsRepository.filterByLedgerScope(accountRepository.getAll())
 
         daySpend(s, all)?.let { return it }
         monthSpend(s, all)?.let { return it }
@@ -190,8 +191,10 @@ class LocalAccountant @Inject constructor(
                 ?: return WriteProposal("流水号 $id 不在账本里（可能已经删了），无需撤回。") {
                     "失败 rows_affected=0。流水号 $id 不在账本里。"
                 }
-        } else {
-            accountRepository.getAll().maxByOrNull { it.id }
+} else {
+            // 优先撤回最近已确认流水；全是草稿时才落到草稿
+            accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
                 ?: return WriteProposal("账本是空的，没有可撤回的。") {
                     "失败 rows_affected=0。账本是空的，没有可撤回的。"
                 }
@@ -320,9 +323,10 @@ class LocalAccountant @Inject constructor(
                 preview = "将把流水号 $id（${t.merchant.ifBlank { t.product.ifBlank { t.category } }} ¥${MoneyUtil.fenToYuan(t.amount)}）从「${t.category}」改到「$category」。"
             ) { applyRecategorize(listOf(t), category) }
         }
-        if (Regex("刚才|最新").containsMatchIn(s)) {
+if (Regex("刚才|最新").containsMatchIn(s)) {
             val category = categoryIn(s) ?: return null
-            val t = accountRepository.getAll().maxByOrNull { it.id }
+            val t = accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
                 ?: return WriteProposal("账本是空的，没有可改的账单。") {
                     "失败 rows_affected=0。账本是空的。"
                 }
@@ -336,7 +340,9 @@ class LocalAccountant @Inject constructor(
         ).find(s)?.groupValues?.get(1)?.takeIf { it !in listOf("刚才", "这笔", "那笔") }
             ?: return null
 
-        val pool = accountRepository.getAll().filter { it.merchant.contains(merch) || it.product.contains(merch) }
+        val pool = accountRepository.getAll()
+            .filter { it.source != Transaction.SOURCE_DRAFT }
+            .filter { it.merchant.contains(merch) || it.product.contains(merch) }
         if (pool.isEmpty()) {
             return WriteProposal("没找到商家「$merch」的账单，无法改分类。") {
                 "失败 rows_affected=0。没找到商家「$merch」的账单。"

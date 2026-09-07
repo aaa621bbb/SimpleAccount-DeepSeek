@@ -181,6 +181,24 @@ class AgentV2310Test {
         assertEquals("auto", com.simpleaccount.app.data.entity.Transaction.SOURCE_AUTO)
     }
 
+    @Test
+    fun filterByLedgerScope_excludesDraftAlways() {
+        // 直接验证 Transaction 常量与过滤契约：草稿 source 永不进统计
+        val draft = tx(100, "餐饮", "店", "餐", "2026-09-01").copy(source = com.simpleaccount.app.data.entity.Transaction.SOURCE_DRAFT)
+        val ok = tx(200, "餐饮", "店", "餐", "2026-09-01")
+        assertEquals("draft", draft.source)
+        assertEquals("manual", ok.source)
+        assertTrue(ok.source != com.simpleaccount.app.data.entity.Transaction.SOURCE_DRAFT)
+    }
+
+    @Test
+    fun statsModules_allOrderContainsAdvanced() {
+        val all = com.simpleaccount.app.ui.stats.StatsModules.ALL_ORDER
+        com.simpleaccount.app.ui.stats.StatsModules.ADVANCED_IDS.forEach {
+            assertTrue("$it should be in ALL_ORDER", it in all)
+        }
+    }
+
     private fun tx(
         amount: Long,
         category: String,

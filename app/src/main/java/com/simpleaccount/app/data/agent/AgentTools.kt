@@ -33,6 +33,10 @@ class AgentTools @Inject constructor(
         const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
     }
 
+    /** 只读工具统一口径：排除草稿，并应用退款/投资开关。 */
+    private suspend fun scopedTxs(): List<Transaction> =
+        settingsRepository.filterByLedgerScope(accountRepository.getAll())
+
     /** 全部工具定义（提供给模型） */
     val specs: List<AgentToolSpec> = listOf(
         AgentToolSpec(
@@ -394,7 +398,8 @@ class AgentTools @Inject constructor(
             "withdraw_transaction" -> {
                 val id = a.optLong("transaction_id", -1L)
                 val t = if (id > 0) accountRepository.getById(id)
-                else accountRepository.getAll().maxByOrNull { it.id }
+                else accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                    ?: accountRepository.getAll().maxByOrNull { it.id }
                 if (t == null) "没有可撤回的记录。"
                 else {
                     val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
@@ -539,7 +544,7 @@ class AgentTools @Inject constructor(
             else -> null
         }
 
-        val matched = accountRepository.getAll().asSequence()
+val matched = scopedTxs().asSequence()
             .filter { date.isEmpty() || it.date == date }
             .filter { date.isNotEmpty() || month.isEmpty() || it.date.startsWith(month) }
             .filter { typeFilter == null || it.type == typeFilter }
@@ -579,7 +584,7 @@ class AgentTools @Inject constructor(
         // end 用"区间边界"（次月首日/次日），配合 date < boundary 天然包含结束日，
         // 修复旧实现 yyyy-MM-dd 会被拼成 "2026-03-15-31" 非法串的问题
         val endExcl = endBound?.second ?: ""
-        val all = accountRepository.getAll()
+val all = scopedTxs()
         val filtered = all.filter { t ->
             (startIncl.isEmpty() || t.date >= startIncl) && (endExcl.isEmpty() || t.date < endExcl)
         }
@@ -595,12 +600,16 @@ class AgentTools @Inject constructor(
         val endBound = monthBounds(a.optString("end"))
         val startIncl = startBound?.first ?: ""
         val endExcl = endBound?.second ?: ""
-        val all = accountRepository.getAll()
+        val all = scopedTxs()
             .filter { it.type == type }
             .filter { startIncl.isEmpty() || it.date >= startIncl }
             .filter { endExcl.isEmpty() || it.date < endExcl }
+        // 二级维度：有二级用「一级/二级」
         val byCat = mutableMapOf<String, Long>()
-        all.forEach { byCat[it.category] = byCat.getOrDefault(it.category, 0L) + it.amount }
+        all.forEach { t ->
+            val key = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+            byCat[key] = byCat.getOrDefault(key, 0L) + t.amount
+        }
         if (byCat.isEmpty()) return "没有该类型/区间的记录。"
         val label = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
         val sb = StringBuilder()
@@ -615,7 +624,7 @@ class AgentTools @Inject constructor(
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val type = a.optString("type").ifBlank { Transaction.TYPE_EXPENSE }
         val limit = a.optInt("limit", 10).coerceIn(1, 30)
-        val all = accountRepository.getAll()
+        val all = scopedTxs()
             .filter { it.type == type }
             .filter { month.isEmpty() || it.date.startsWith(month) }
         if (all.isEmpty()) return "没有符合条件的记录。"
@@ -740,7 +749,8 @@ class AgentTools @Inject constructor(
         val t = if (id > 0) {
             accountRepository.getById(id)
         } else {
-            accountRepository.getAll().maxByOrNull { it.id }
+            accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
         } ?: return if (id > 0) "没有找到流水号 $id 的记录（可能已删除）。" else "账本是空的，没有可撤回的。"
         accountRepository.delete(t.id)
         if (accountRepository.getById(t.id) != null) {
@@ -818,13 +828,15 @@ class AgentTools @Inject constructor(
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val date = normalizeDate(a.optString("date").trim()) ?: ""
         val amountFen = parseAmountFen(a)
+        // 改分类可命中草稿（用户可借此整理后确认），但默认按口径排除的只读汇总不走这里
         val all = accountRepository.getAll()
         return if (ids.isNotEmpty()) {
             val set = ids.toSet()
             all.filter { it.id in set }
         } else {
             all.filter {
-                (merchant.isEmpty() || it.merchant.contains(merchant) || it.product.contains(merchant)) &&
+                it.source != Transaction.SOURCE_DRAFT &&
+                    (merchant.isEmpty() || it.merchant.contains(merchant) || it.product.contains(merchant)) &&
                     (fromCat.isEmpty() || it.category == fromCat) &&
                     (month.isEmpty() || it.date.startsWith(month)) &&
                     (date.isEmpty() || it.date == date) &&
@@ -1051,8 +1063,8 @@ class AgentTools @Inject constructor(
     }
 
     /** 列出账本覆盖的所有月份及各月收支，供模型核对"某月有没有数据" */
-    private suspend fun listMonths(args: String): String {
-        val all = accountRepository.getAll()
+private suspend fun listMonths(args: String): String {
+        val all = scopedTxs()
         if (all.isEmpty()) return "账本还没有任何数据，请先在「导入」页导入微信/支付宝账单。"
         val byMonth = sortedMapOf<String, LongArray>()
         all.forEach {
@@ -1074,7 +1086,7 @@ class AgentTools @Inject constructor(
             ?: normalizeDate(a.optString("month").trim())?.take(7)
             ?: normalizeDate(a.optString("date").trim())?.take(7)
             ?: return "参数错误：month 必须是月份（yyyy-MM，如 2026-08；也接受 本月/上个月/昨天）。"
-        val all = accountRepository.getAll().filter { it.date.startsWith(month) }
+val all = scopedTxs().filter { it.date.startsWith(month) }
         if (all.isEmpty()) return "$month 没有记账记录。"
         val byDay = sortedMapOf<String, LongArray>()
         all.forEach {
@@ -1142,11 +1154,11 @@ class AgentTools @Inject constructor(
         return "已归类 $updated 个商家，$skipped 个因分类名无效跳过。"
     }
 
-    private suspend fun getInsights(args: String): String {
+private suspend fun getInsights(args: String): String {
         val a = parseArgs(args)
         val month = normalizeMonth(a.optString("month").trim()) ?: DateUtil.thisMonth()
         val health = InsightsEngine.compute(
-            accountRepository.getAll(),
+            scopedTxs(),
             settingsRepository.monthlyBudget(),
             month,
         )
