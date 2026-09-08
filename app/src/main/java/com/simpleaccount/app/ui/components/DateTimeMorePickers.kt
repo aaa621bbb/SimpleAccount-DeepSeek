@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -84,7 +85,7 @@ fun DateTimelineSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (In
     var selected by remember { mutableStateOf(parseYmd(initialDate)) }
     val reduce = LocalReduceMotion.current
     val window = remember(selected) { (-4..4).map { selected.plusDays(it.toLong()) } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             SheetHead("选日期 · 时间轴", { selected = LocalDate.now() }, "今天") {
                 onConfirm(selected.year, selected.monthValue, selected.dayOfMonth)
@@ -123,7 +124,7 @@ fun DateBeadsSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int, 
     var d by remember { mutableIntStateOf(parseYmd(initialDate).dayOfMonth) }
     val dim = java.time.YearMonth.of(y, m).lengthOfMonth()
     val day = minOf(d, dim)
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             SheetHead("选日期 · 算盘珠", {
                 y = today.year; m = today.monthValue; d = today.dayOfMonth
@@ -170,7 +171,7 @@ fun DateHorizonSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int
     var selected by remember { mutableStateOf(parseYmd(initialDate)) }
     val reduce = LocalReduceMotion.current
     val days = remember(selected) { (-3..3).map { selected.plusDays(it.toLong()) } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             SheetHead("选日期 · 地平", { selected = LocalDate.now() }, "今天") {
                 onConfirm(selected.year, selected.monthValue, selected.dayOfMonth)
@@ -207,7 +208,7 @@ fun DateHorizonSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int
 fun TimeBarsSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var hour by remember { mutableIntStateOf(parseHm(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm(initial).second) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             SheetHead("选时间 · 双柱", {
                 val n = java.time.LocalTime.now(); hour = n.hour; minute = n.minute
@@ -266,7 +267,7 @@ fun TimeOrbitSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -
     val accent = MaterialTheme.colorScheme.primary
     val hourCol = MaterialTheme.colorScheme.tertiary
     val track = MaterialTheme.colorScheme.surfaceVariant
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             SheetHead("选时间 · 双环", {
                 val n = java.time.LocalTime.now(); hour = n.hour; minute = n.minute
@@ -333,7 +334,7 @@ fun TimeRulerSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -
     var hour by remember { mutableIntStateOf(parseHm(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm(initial).second) }
     val accent = MaterialTheme.colorScheme.primary
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             SheetHead("选时间 · 直尺", {
                 val n = java.time.LocalTime.now(); hour = n.hour; minute = n.minute

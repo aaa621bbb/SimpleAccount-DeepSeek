@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -67,7 +68,7 @@ private fun parseHm2(initial: String): Pair<Int,Int> {
 fun DateCascadeSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int,Int,Int)->Unit) {
     var selected by remember { mutableStateOf(parseYmd2(initialDate)) }
     val years = (LocalDate.now().year - 5 .. LocalDate.now().year + 2).toList()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选日期 · 层叠瀑布", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -137,7 +138,7 @@ fun DateCascadeSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int
 @Composable
 fun DateSpiralSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int,Int,Int)->Unit) {
     var selected by remember { mutableStateOf(parseYmd2(initialDate)) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选日期 · 螺旋年轮", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -202,7 +203,7 @@ fun DateGridSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int,In
     var m by remember { mutableIntStateOf(parseYmd2(initialDate).monthValue) }
     var d by remember { mutableIntStateOf(parseYmd2(initialDate).dayOfMonth) }
     var showDays by remember { mutableStateOf(false) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选日期 · 九宫格", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -267,7 +268,7 @@ fun DateDialYearSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (In
     var selected by remember { mutableStateOf(parseYmd2(initialDate)) }
     var yearOffset by remember { mutableIntStateOf(0) } // 相对当前年的偏移
     val baseYear = LocalDate.now().year
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选日期 · 年轮转盘", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -359,7 +360,7 @@ fun DateDialYearSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (In
 fun DateWaveSheet(initialDate: String, onDismiss: () -> Unit, onConfirm: (Int,Int,Int)->Unit) {
     var selected by remember { mutableStateOf(parseYmd2(initialDate)) }
     val days = remember(selected) { (-6..6).map { selected.plusDays(it.toLong()) } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选日期 · 波浪", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -421,7 +422,7 @@ fun TimeWaveSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit
     var hour by remember { mutableIntStateOf(parseHm2(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm2(initial).second) }
     var focusingHour by remember { mutableStateOf(true) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选时间 · 波浪", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -478,7 +479,7 @@ fun TimeWaveSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit
 fun TimeDrumSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit) {
     var hour by remember { mutableIntStateOf(parseHm2(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm2(initial).second) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选时间 · 鼓面", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -554,7 +555,7 @@ fun TimeDrumSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit
 fun TimePieSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit) {
     var hour by remember { mutableIntStateOf(parseHm2(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm2(initial).second) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选时间 · 饼切", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -622,7 +623,7 @@ fun TimePieSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit)
 fun TimeBlocksSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit) {
     var hour by remember { mutableIntStateOf(parseHm2(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm2(initial).second) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选时间 · 方块", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -670,7 +671,7 @@ fun TimeBlocksSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Un
 fun TimeSpectrumSheet(initial: String, onDismiss: ()->Unit, onConfirm:(String)->Unit) {
     var hour by remember { mutableIntStateOf(parseHm2(initial).first) }
     var minute by remember { mutableIntStateOf(parseHm2(initial).second) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("选时间 · 色谱", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))

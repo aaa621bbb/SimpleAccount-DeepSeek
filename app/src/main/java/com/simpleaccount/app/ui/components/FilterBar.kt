@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -22,6 +26,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -95,7 +100,7 @@ fun CategoryPickerSheet(
     onDismiss: () -> Unit,
     onPick: (String?) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         androidx.compose.foundation.layout.Column(
             Modifier
                 .fillMaxWidth()
@@ -140,7 +145,8 @@ private fun CatCell(cat: Category?, label: String, selected: Boolean, onClick: (
     }
 }
 
-/** 多选月份：点选即时回调，无需「确定」。空集 = 全部。 */
+
+/** 多选月份：点选即时回调；全量直显，无半屏半遮罩。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MultiMonthPickerSheet(
@@ -149,33 +155,57 @@ fun MultiMonthPickerSheet(
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
 ) {
-    // 受控：外部 selected 变化同步；点选立刻 onConfirm
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         androidx.compose.foundation.layout.Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("月份（点选即时生效）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    "月份（点选即时生效）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
                 TextButton(onClick = { onConfirm(emptySet()) }) { Text("全部") }
                 TextButton(onClick = onDismiss) { Text("完成") }
             }
-            Text("点选即筛选，无需再点确定。多选取并集。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "点选即筛选，无需再点确定。多选取并集。",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(12.dp))
             months.chunked(3).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { m ->
                         val sel = m in selected
                         Box(
-                            Modifier.weight(1f).height(44.dp)
+                            Modifier
+                                .weight(1f)
+                                .height(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                .background(
+                                    if (sel) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
                                 .clickable {
                                     val next = if (sel) selected - m else selected + m
                                     onConfirm(next)
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(m, color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                            Text(
+                                m,
+                                color = if (sel) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 13.sp,
+                            )
                         }
                     }
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -187,8 +217,8 @@ fun MultiMonthPickerSheet(
 }
 
 /**
- * 多选分类：支持一级 + 二级（键为「一级」或「一级/二级」）。
- * 点选即时 onConfirm，无需确定。
+ * 多选分类：全量直显列表（一级 + 可展开二级），点选即时生效。
+ * skipPartiallyExpanded，避免半屏遮罩与上拉乱跳。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -197,102 +227,147 @@ fun MultiCategoryPickerSheet(
     selected: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
-    /** 一级名 → 二级名列表；空则仅一级 */
     subByParent: Map<String, List<String>> = emptyMap(),
 ) {
-    var openParent by remember { mutableStateOf<String?>(null) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    var openParents by remember { mutableStateOf(setOf<String>()) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         androidx.compose.foundation.layout.Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("分类（点选即时生效）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    "分类筛选",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
                 TextButton(onClick = { onConfirm(emptySet()) }) { Text("全部") }
                 TextButton(onClick = onDismiss) { Text("完成") }
             }
-            Text("一级可整类筛选；点 › 展开二级，点二级按「一级/二级」粒度筛。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(12.dp))
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.height(280.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            Text(
+                "点选即时生效。一级整类；右侧展开二级（键为 一级/二级）。",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.foundation.layout.Column(
+                Modifier
+                    .weight(1f, fill = true)
+                    .verticalScroll(rememberScrollState())
             ) {
-                items(categories, key = { it.id }) { c ->
-                    val sel = c.name in selected || selected.any { it.startsWith("${c.name}/") }
+                categories.forEach { c ->
+                    val parentSel = c.name in selected
+                    val childKeys = subByParent[c.name].orEmpty().map { "${c.name}/$it" }
+                    val anyChild = childKeys.any { it in selected }
+                    val open = c.name in openParents
                     val hasSub = subByParent[c.name].orEmpty().isNotEmpty()
-                    Box {
-                        CatCell(c, c.name, sel) {
-                            // 点一级：选中/取消一级；取消时清掉其下二级键
-                            val next = if (c.name in selected) {
-                                selected - c.name - selected.filter { it.startsWith("${c.name}/") }.toSet()
-                            } else {
-                                (selected - selected.filter { it.startsWith("${c.name}/") }.toSet()) + c.name
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                when {
+                                    parentSel -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                    anyChild -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                }
+                            )
+                            .clickable {
+                                val next = if (parentSel) {
+                                    selected - c.name - childKeys.toSet()
+                                } else {
+                                    (selected - childKeys.toSet()) + c.name
+                                }
+                                onConfirm(next)
                             }
-                            onConfirm(next)
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(parseColorSafe(c.colorHex)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                com.simpleaccount.app.util.IconMapper.map(c.iconName.ifBlank { "more_horiz" }),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            c.name,
+                            modifier = Modifier.weight(1f),
+                            fontWeight = if (parentSel || anyChild) FontWeight.Bold else FontWeight.Medium,
+                        )
+                        if (parentSel) {
+                            Text("整类", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                         }
                         if (hasSub) {
                             Text(
-                                if (openParent == c.name) "˅" else "›",
+                                if (open) "收起" else "二级",
                                 color = MaterialTheme.colorScheme.primary,
                                 fontSize = 12.sp,
                                 modifier = Modifier
-                                    .align(Alignment.TopEnd)
+                                    .clip(RoundedCornerShape(8.dp))
                                     .clickable {
-                                        openParent = if (openParent == c.name) null else c.name
+                                        openParents =
+                                            if (open) openParents - c.name else openParents + c.name
                                     }
-                                    .padding(2.dp),
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
                             )
                         }
                     }
-                }
-            }
-            val subs = openParent?.let { subByParent[it].orEmpty() }.orEmpty()
-            if (openParent != null && subs.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "「$openParent」二级（点选即时生效）",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                subs.chunked(4).forEach { row ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { sub ->
-                            val key = "$openParent/$sub"
+                    if (open && hasSub) {
+                        subByParent[c.name].orEmpty().forEach { sub ->
+                            val key = "${c.name}/$sub"
                             val sel = key in selected
-                            Box(
+                            Row(
                                 Modifier
-                                    .weight(1f)
-                                    .height(40.dp)
+                                    .fillMaxWidth()
+                                    .padding(start = 36.dp, top = 4.dp, bottom = 4.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(
                                         if (sel) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                     )
                                     .clickable {
-                                        // 选二级时去掉对应一级整类键，避免重复
-                                        val base = selected - openParent!!
+                                        val base = selected - c.name
                                         val next = if (sel) base - key else base + key
                                         onConfirm(next)
-                                    },
-                                contentAlignment = Alignment.Center,
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
                                     sub,
                                     color = if (sel) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f),
                                 )
                             }
                         }
-                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
     }
+}
+
+private fun parseColorSafe(hex: String): androidx.compose.ui.graphics.Color {
+    return runCatching {
+        val h = hex.removePrefix("#")
+        val v = h.toLong(16)
+        val argb = if (h.length <= 6) (0xFF000000 or v) else v
+        androidx.compose.ui.graphics.Color(argb.toInt())
+    }.getOrElse { androidx.compose.ui.graphics.Color(0xFF7A9AE3) }
 }

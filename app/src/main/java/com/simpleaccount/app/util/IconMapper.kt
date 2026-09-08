@@ -1,202 +1,140 @@
 package com.simpleaccount.app.util
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AcUnit
-import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.Analytics
-import androidx.compose.material.icons.filled.Apartment
-import androidx.compose.material.icons.filled.AssignmentReturn
-import androidx.compose.material.icons.filled.AttachMoney
-import androidx.compose.material.icons.filled.BeachAccess
-import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Cake
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CardGiftcard
-import androidx.compose.material.icons.filled.Casino
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.Celebration
-import androidx.compose.material.icons.filled.Chair
-import androidx.compose.material.icons.filled.Checkroom
-import androidx.compose.material.icons.filled.ChildCare
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.CreditCard
-import androidx.compose.material.icons.filled.CurrencyYen
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Diamond
-import androidx.compose.material.icons.filled.DirectionsBike
-import androidx.compose.material.icons.filled.DirectionsBoat
-import androidx.compose.material.icons.filled.DirectionsBus
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.DirectionsSubway
-import androidx.compose.material.icons.filled.DryCleaning
-import androidx.compose.material.icons.filled.ElectricalServices
-import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.Fastfood
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Flight
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Hotel
-import androidx.compose.material.icons.filled.Icecream
-import androidx.compose.material.icons.filled.Inventory
-import androidx.compose.material.icons.filled.Kitchen
-import androidx.compose.material.icons.filled.Lightbulb
-import androidx.compose.material.icons.filled.LocalAtm
-import androidx.compose.material.icons.filled.LocalBar
-import androidx.compose.material.icons.filled.LocalCafe
-import androidx.compose.material.icons.filled.LocalFlorist
-import androidx.compose.material.icons.filled.LocalGasStation
-import androidx.compose.material.icons.filled.LocalHospital
-import androidx.compose.material.icons.filled.LocalLaundryService
-import androidx.compose.material.icons.filled.LocalTaxi
-import androidx.compose.material.icons.filled.Medication
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Nightlife
-import androidx.compose.material.icons.filled.Paid
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Park
-import androidx.compose.material.icons.filled.Payments
-import androidx.compose.material.icons.filled.Pets
-import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.PointOfSale
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Receipt
-import androidx.compose.material.icons.filled.ReceiptLong
-import androidx.compose.material.icons.filled.Redeem
-import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.RequestQuote
-import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.Savings
-import androidx.compose.material.icons.filled.School
-import androidx.compose.material.icons.filled.Sell
-import androidx.compose.material.icons.filled.ShoppingBag
-import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.Spa
-import androidx.compose.material.icons.filled.SportsEsports
-import androidx.compose.material.icons.filled.SportsSoccer
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Store
-import androidx.compose.material.icons.filled.Storefront
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.TheaterComedy
-import androidx.compose.material.icons.filled.Train
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material.icons.filled.TwoWheeler
-import androidx.compose.material.icons.filled.Vaccines
-import androidx.compose.material.icons.filled.VolunteerActivism
-import androidx.compose.material.icons.filled.Watch
-import androidx.compose.material.icons.filled.WaterDrop
-import androidx.compose.material.icons.filled.Weekend
-import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.Work
+import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * 分类图标名 → ImageVector。支出 / 收入各 30+ 互不相同，自定义分类也能一眼看懂。
+ * 分类图标库：每个 name 全局唯一映射；带中文 label 供 AI / 用户选图。
+ * [nextFreeIcon] 优先返回语义贴合且未被占用的图标。
  */
 object IconMapper {
 
     data class IconChoice(val name: String, val label: String)
 
-    /** 支出可选图标（≥30，互不重复） */
+    /** 支出可选（≥80，互不重复 name） */
     val expenseIcons: List<IconChoice> = listOf(
         IconChoice("restaurant", "餐饮"),
-        IconChoice("local_cafe", "咖啡"),
+        IconChoice("free_breakfast", "早餐"),
+        IconChoice("lunch_dining", "午餐"),
+        IconChoice("dinner_dining", "晚餐"),
+        IconChoice("local_cafe", "奶茶咖啡"),
+        IconChoice("coffee", "咖啡"),
         IconChoice("local_bar", "酒水"),
-        IconChoice("fastfood", "快餐"),
+        IconChoice("fastfood", "快餐外卖"),
+        IconChoice("delivery_dining", "外卖"),
         IconChoice("icecream", "甜品"),
         IconChoice("cake", "蛋糕"),
+        IconChoice("cookie", "零食"),
+        IconChoice("nutrition", "水果"),
+        IconChoice("set_meal", "生鲜套餐"),
+        IconChoice("soup_kitchen", "火锅"),
+        IconChoice("outdoor_grill", "烧烤"),
         IconChoice("directions_car", "开车"),
         IconChoice("directions_bus", "公交"),
         IconChoice("directions_subway", "地铁"),
-        IconChoice("local_taxi", "出租"),
-        IconChoice("two_wheeler", "骑行"),
+        IconChoice("local_taxi", "打车"),
+        IconChoice("two_wheeler", "摩托"),
+        IconChoice("pedal_bike", "共享单车"),
+        IconChoice("directions_bike", "骑行"),
         IconChoice("flight", "飞机"),
         IconChoice("train", "火车"),
-        IconChoice("directions_boat", "轮船"),
+        IconChoice("directions_boat", "轮渡"),
         IconChoice("local_gas_station", "加油"),
-        IconChoice("directions_bike", "单车"),
+        IconChoice("local_parking", "停车"),
+        IconChoice("add_road", "高速"),
         IconChoice("shopping_cart", "购物"),
-        IconChoice("shopping_bag", "袋装"),
+        IconChoice("shopping_bag", "箱包"),
+        IconChoice("shopping_basket", "日用"),
         IconChoice("storefront", "店铺"),
-        IconChoice("checkroom", "服装"),
+        IconChoice("checkroom", "服饰"),
+        IconChoice("ice_skating", "鞋靴"),
         IconChoice("devices", "数码"),
         IconChoice("diamond", "珠宝"),
         IconChoice("pets", "宠物"),
         IconChoice("watch", "钟表"),
         IconChoice("headphones", "耳机"),
         IconChoice("camera_alt", "摄影"),
+        IconChoice("face", "美妆"),
+        IconChoice("child_care", "母婴"),
+        IconChoice("edit", "文具"),
+        IconChoice("kitchen", "电器"),
         IconChoice("movie", "电影"),
         IconChoice("sports_esports", "游戏"),
         IconChoice("music_note", "音乐"),
+        IconChoice("mic", "KTV"),
         IconChoice("sports_soccer", "运动"),
         IconChoice("casino", "娱乐"),
         IconChoice("celebration", "聚会"),
         IconChoice("theater_comedy", "演出"),
-        IconChoice("nightlife", "夜生活"),
-        IconChoice("local_hospital", "医院"),
+        IconChoice("nightlife", "夜宵夜生活"),
+        IconChoice("card_membership", "会员"),
+        IconChoice("luggage", "旅游"),
+        IconChoice("museum", "展览"),
+        IconChoice("groups", "聚会人群"),
+        IconChoice("local_hospital", "医院挂号"),
         IconChoice("medication", "药品"),
+        IconChoice("monitor_heart", "体检"),
+        IconChoice("dentistry", "牙科"),
+        IconChoice("visibility", "眼科"),
         IconChoice("fitness_center", "健身"),
-        IconChoice("spa", "美容"),
+        IconChoice("spa", "中医美容"),
         IconChoice("content_cut", "理发"),
         IconChoice("favorite", "健康"),
         IconChoice("vaccines", "疫苗"),
-        IconChoice("school", "教育"),
+        IconChoice("school", "学费教育"),
         IconChoice("menu_book", "书籍"),
-        IconChoice("child_care", "孩子"),
+        IconChoice("psychology", "培训"),
+        IconChoice("quiz", "考试"),
+        IconChoice("cast_for_education", "网课"),
         IconChoice("brush", "学习"),
-        IconChoice("palette", "爱好"),
-        IconChoice("home", "居住"),
+        IconChoice("palette", "爱好艺术"),
+        IconChoice("home", "居住物业"),
         IconChoice("apartment", "房租"),
-        IconChoice("chair", "家具"),
-        IconChoice("electrical_services", "电费"),
+        IconChoice("chair", "家居"),
+        IconChoice("weekend", "家具"),
+        IconChoice("electrical_services", "水电"),
         IconChoice("water_drop", "水费"),
+        IconChoice("local_fire_department", "燃气"),
         IconChoice("build", "维修"),
-        IconChoice("kitchen", "家电"),
         IconChoice("lightbulb", "电"),
         IconChoice("ac_unit", "空调"),
-        IconChoice("hotel", "住宿"),
+        IconChoice("hotel", "酒店住院"),
+        IconChoice("cleaning_services", "家政"),
         IconChoice("phone", "话费"),
-        IconChoice("wifi", "网费"),
+        IconChoice("wifi", "宽带"),
+        IconChoice("signal_cellular_alt", "流量"),
         IconChoice("computer", "电脑"),
-        IconChoice("router", "宽带"),
+        IconChoice("router", "月租网络"),
         IconChoice("swap_horiz", "转账"),
-        IconChoice("volunteer_activism", "捐赠"),
+        IconChoice("card_giftcard", "红包"),
+        IconChoice("payments", "代付月薪"),
+        IconChoice("account_balance", "还款利息"),
+        IconChoice("volunteer_activism", "捐赠补贴"),
         IconChoice("local_laundry_service", "洗衣"),
         IconChoice("dry_cleaning", "干洗"),
         IconChoice("park", "公园"),
-        IconChoice("beach_access", "旅行"),
+        IconChoice("beach_access", "旅行海滩"),
         IconChoice("local_florist", "花"),
         IconChoice("more_horiz", "其它"),
+        IconChoice("category", "类目"),
     )
 
-    /** 收入可选图标（≥30，与支出不共用同一套观感） */
     val incomeIcons: List<IconChoice> = listOf(
-        IconChoice("attach_money", "工资"),
-        IconChoice("payments", "到账"),
-        IconChoice("account_balance", "银行"),
+        IconChoice("attach_money", "其它收入"),
+        IconChoice("payments", "月薪"),
+        IconChoice("account_balance", "利息"),
         IconChoice("account_balance_wallet", "钱包"),
-        IconChoice("trending_up", "投资"),
-        IconChoice("show_chart", "理财"),
-        IconChoice("savings", "存款"),
-        IconChoice("paid", "报酬"),
-        IconChoice("currency_yen", "现金"),
-        IconChoice("work", "工作"),
-        IconChoice("card_giftcard", "奖金"),
-        IconChoice("redeem", "礼金"),
-        IconChoice("assignment_return", "退款"),
-        IconChoice("replay", "返还"),
+        IconChoice("trending_up", "基金"),
+        IconChoice("show_chart", "股票"),
+        IconChoice("savings", "年终储蓄"),
+        IconChoice("paid", "奖金"),
+        IconChoice("currency_yen", "日元"),
+        IconChoice("work", "劳务兼职"),
+        IconChoice("card_giftcard", "红包礼"),
+        IconChoice("redeem", "兑换"),
+        IconChoice("assignment_return", "购物退款"),
+        IconChoice("replay", "其它退款"),
         IconChoice("pie_chart", "分红"),
         IconChoice("analytics", "收益"),
         IconChoice("groups", "合伙"),
@@ -204,21 +142,66 @@ object IconMapper {
         IconChoice("local_atm", "取现"),
         IconChoice("credit_card", "信用卡"),
         IconChoice("request_quote", "报销"),
-        IconChoice("emoji_events", "奖金杯"),
-        IconChoice("star", "奖励"),
+        IconChoice("emoji_events", "绩效奖杯"),
+        IconChoice("star", "项目奖"),
         IconChoice("inventory", "货款"),
         IconChoice("sell", "出售"),
         IconChoice("point_of_sale", "收银"),
         IconChoice("qr_code", "收款码"),
         IconChoice("receipt_long", "账单入"),
         IconChoice("receipt", "票据"),
-        IconChoice("category", "其它收入"),
+        IconChoice("edit_note", "稿费"),
+        IconChoice("support_agent", "咨询"),
         IconChoice("weekend", "兼职"),
         IconChoice("apartment", "租金入"),
+        IconChoice("category", "其它类"),
+        IconChoice("more_horiz", "其它"),
     )
 
     fun allChoices(type: String): List<IconChoice> =
         if (type == "income") incomeIcons else expenseIcons
+
+    /** 已被占用的图标名集合（一级 + 二级）。 */
+    fun usedIconNames(primaryIcons: Collection<String>, subIcons: Collection<String> = emptyList()): Set<String> =
+        (primaryIcons + subIcons).map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    /**
+     * 为新分类选图标：优先 [preferred] 语义名，否则按 label 模糊匹配，再取第一个未占用。
+     */
+    fun nextFreeIcon(
+        type: String,
+        used: Set<String>,
+        preferred: String? = null,
+        hintName: String? = null,
+    ): String {
+        val pool = allChoices(type)
+        fun free(n: String) = n !in used || n == "more_horiz"
+        preferred?.trim()?.takeIf { it.isNotEmpty() }?.let { p ->
+            if (pool.any { it.name == p } && free(p)) return p
+            // 别名可能在 map 里
+            if (free(p)) return p
+        }
+        val hint = hintName.orEmpty()
+        if (hint.isNotEmpty()) {
+            pool.firstOrNull { free(it.name) && (it.label.contains(hint) || hint.contains(it.label.take(2))) }
+                ?.let { return it.name }
+            // 关键词
+            val kw = listOf(
+                "餐" to "restaurant", "早" to "free_breakfast", "午" to "lunch_dining", "晚" to "dinner_dining",
+                "咖啡" to "coffee", "奶茶" to "local_cafe", "水" to "nutrition", "果" to "nutrition",
+                "公交" to "directions_bus", "地铁" to "directions_subway", "打车" to "local_taxi",
+                "房租" to "apartment", "电" to "electrical_services", "药" to "medication",
+                "电影" to "movie", "游戏" to "sports_esports", "工资" to "payments", "奖金" to "emoji_events",
+                "股票" to "show_chart", "退" to "assignment_return", "红包" to "card_giftcard",
+            )
+            for ((k, ic) in kw) {
+                if (hint.contains(k) && free(ic)) return ic
+            }
+        }
+        return pool.firstOrNull { free(it.name) && it.name != "more_horiz" }?.name
+            ?: pool.firstOrNull { free(it.name) }?.name
+            ?: "more_horiz"
+    }
 
     fun map(name: String): ImageVector = when (name) {
         "restaurant" -> Icons.Filled.Restaurant
@@ -318,12 +301,13 @@ object IconMapper {
         "receipt_long" -> Icons.Filled.ReceiptLong
         "receipt" -> Icons.Filled.Receipt
         "category" -> Icons.Filled.Category
-"weekend" -> Icons.Filled.Weekend
-        // 二级类目扩容别名 → 已有 Material 图标
+        "weekend" -> Icons.Filled.Weekend
+        "edit" -> Icons.Filled.Edit
+        // 二级语义别名（各映射唯一 Material 图标，避免水果=冰淇淋）
         "free_breakfast" -> Icons.Filled.LocalCafe
         "coffee" -> Icons.Filled.LocalCafe
-        "cookie" -> Icons.Filled.Icecream
-        "nutrition" -> Icons.Filled.Icecream
+        "cookie" -> Icons.Filled.Cake
+        "nutrition" -> Icons.Filled.LocalFlorist
         "lunch_dining" -> Icons.Filled.Fastfood
         "dinner_dining" -> Icons.Filled.Restaurant
         "delivery_dining" -> Icons.Filled.Fastfood

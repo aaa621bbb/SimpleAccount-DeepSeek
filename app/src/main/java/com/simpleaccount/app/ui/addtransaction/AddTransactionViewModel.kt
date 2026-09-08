@@ -153,7 +153,7 @@ class AddTransactionViewModel @Inject constructor(
     // ---------------- 就地分类 CRUD（记一笔页，不跳设置） ----------------
 
     /** 新增一级分类并选中。 */
-    suspend fun addCategoryInPlace(name: String): Boolean {
+    suspend fun addCategoryInPlace(name: String, iconName: String? = null): Boolean {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) {
             _state.value = _state.value.copy(error = "分类名不能为空")
@@ -166,12 +166,17 @@ class AddTransactionViewModel @Inject constructor(
         val type = _state.value.type
         val list = categoryRepository.getByType(type)
         val maxOrder = (list.maxOfOrNull { it.sortOrder } ?: -1) + 1
+        val used = com.simpleaccount.app.util.IconMapper.usedIconNames(
+            categoryRepository.getAll().map { it.iconName },
+            subCategoryRepository.getAll().map { it.iconName },
+        )
+        val icon = com.simpleaccount.app.util.IconMapper.nextFreeIcon(type, used, iconName, trimmed)
         val cat = Category(
             name = trimmed,
             type = type,
             sortOrder = maxOrder,
             isPreset = false,
-            iconName = "more_horiz",
+            iconName = icon,
             colorHex = "#BDC3C7",
         )
         categoryRepository.add(cat)
@@ -238,7 +243,7 @@ class AddTransactionViewModel @Inject constructor(
     }
 
     /** 在当前一级下新增二级并选中。 */
-    suspend fun addSubInPlace(name: String): Boolean {
+    suspend fun addSubInPlace(name: String, iconName: String? = null): Boolean {
         val parent = _state.value.selectedCategory?.name ?: return false
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return false
@@ -248,12 +253,20 @@ class AddTransactionViewModel @Inject constructor(
             return false
         }
         val maxOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1
+        val used = com.simpleaccount.app.util.IconMapper.usedIconNames(
+            categoryRepository.getAll().map { it.iconName },
+            subCategoryRepository.getAll().map { it.iconName },
+        )
+        val preferred = iconName ?: com.simpleaccount.app.util.SubCategoryPresets.iconFor(trimmed).takeIf { it != "more_horiz" }
+        val icon = com.simpleaccount.app.util.IconMapper.nextFreeIcon(
+            com.simpleaccount.app.data.entity.Category.TYPE_EXPENSE, used, preferred, trimmed,
+        )
         subCategoryRepository.add(
             com.simpleaccount.app.data.entity.SubCategory(
                 parent = parent,
                 name = trimmed,
                 sortOrder = maxOrder,
-                iconName = com.simpleaccount.app.util.SubCategoryPresets.iconFor(trimmed),
+                iconName = icon,
             )
         )
         refreshSubs()

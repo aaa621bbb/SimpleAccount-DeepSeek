@@ -59,7 +59,7 @@ SettingsGroup(
         listOf(
             SettingsEntry("管家记忆", Icons.Filled.SmartToy, Routes.MEMORY),
             SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
-            SettingsEntry("端侧小模型（免费离线）", Icons.Filled.SmartToy, Routes.ONDEVICE_MODELS),
+            SettingsEntry("管理端侧模型（下载/选型）", Icons.Filled.SmartToy, Routes.ONDEVICE_MODELS),
         ),
     ),
 SettingsGroup(

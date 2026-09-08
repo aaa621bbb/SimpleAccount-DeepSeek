@@ -22,7 +22,7 @@ object WriteGate {
         "update_transaction_category",
         "reclassify_transactions",
         // 分类/映射写
-        "create_category",
+        "create_category", "create_sub_category",
         "delete_category",
         "set_merchant_category",
         "classify_merchants",

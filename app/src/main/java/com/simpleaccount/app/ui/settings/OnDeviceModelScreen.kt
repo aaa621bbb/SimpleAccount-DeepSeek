@@ -93,7 +93,7 @@ fun OnDeviceModelScreen(
     }
 
     Scaffold(
-        topBar = { SettingsSubToolbar("端侧小模型", onBack = { navController.popBackStack() }) }
+        topBar = { SettingsSubToolbar("管理端侧模型", onBack = { navController.popBackStack() }) }
     ) { padding ->
         Column(
             Modifier
@@ -181,19 +181,29 @@ fun OnDeviceModelScreen(
             )
             Spacer(Modifier.height(10.dp))
 
-            state.models.forEach { item ->
-                ModelCard(
-                    item = item,
-                    activeId = state.activeId,
-                    recommended = item.spec.id in state.recommendedIds,
-                    fits = item.spec.id in state.fitsIds,
-                    onDownload = { viewModel.download(item.spec.id) },
-                    onCancel = { viewModel.cancel(item.spec.id) },
-                    onDelete = { viewModel.delete(item.spec.id) },
-                    onActivate = { viewModel.activate(item.spec.id) },
-                    fmt = viewModel::fmtSize,
+            com.simpleaccount.app.data.ondevice.OnDeviceModelCatalog.TIER_GROUPS.forEach { (groupId, groupLabel) ->
+                val groupItems = state.models.filter { it.spec.tierGroup == groupId }
+                if (groupItems.isEmpty()) return@forEach
+                Text(
+                    groupLabel,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
                 )
-                Spacer(Modifier.height(10.dp))
+                groupItems.forEach { item ->
+                    ModelCard(
+                        item = item,
+                        activeId = state.activeId,
+                        recommended = item.spec.id in state.recommendedIds,
+                        fits = item.spec.id in state.fitsIds,
+                        onDownload = { viewModel.download(item.spec.id) },
+                        onCancel = { viewModel.cancel(item.spec.id) },
+                        onDelete = { viewModel.delete(item.spec.id) },
+                        onActivate = { viewModel.activate(item.spec.id) },
+                        fmt = viewModel::fmtSize,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
             }
 
             Spacer(Modifier.height(8.dp))

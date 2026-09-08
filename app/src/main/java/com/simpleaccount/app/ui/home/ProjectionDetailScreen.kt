@@ -102,7 +102,7 @@ fun ProjectionDetailScreen(
 
     Scaffold(
         topBar = {
-            SettingsSubToolbar("月底测算详情", onBack = { navController.popBackStack() })
+            SettingsSubToolbar("月底测算详情", onBack = { if (!navController.popBackStack()) navController.navigate(com.simpleaccount.app.ui.navigation.Routes.HOME) { launchSingleTop = true } })
         }
     ) { padding ->
         Column(

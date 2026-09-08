@@ -91,6 +91,7 @@ private fun providerIcon(name: String): ImageVector = when (name) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun AiSettingsScreen(
     navController: NavHostController,
     viewModel: AiSettingsViewModel = hiltViewModel(),
@@ -154,11 +155,28 @@ fun AiSettingsScreen(
                     Text(label, style = MaterialTheme.typography.bodyLarge)
                 }
             }
-            if (state.accountingEngine == SettingsRepository.ENGINE_ONDEVICE ||
-                state.accountingEngine == SettingsRepository.ENGINE_ONDEVICE_RULES
+            // 显性入口：无论当前引擎是否端侧，均可进入管理
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedCard(
+                onClick = { navController.navigate(com.simpleaccount.app.ui.navigation.Routes.ONDEVICE_MODELS) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
             ) {
-                TextButton(onClick = { navController.navigate(com.simpleaccount.app.ui.navigation.Routes.ONDEVICE_MODELS) }) {
-                    Text("管理端侧模型（下载 / 导入 / 基准）")
+                Row(
+                    Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.SmartToy, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("管理端侧模型", fontWeight = FontWeight.Bold)
+                        Text(
+                            "按内存档位选型 · 多镜像下载 · 导入 GGUF · 基准",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text("打开", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 }
             }
             Spacer(Modifier.height(16.dp))

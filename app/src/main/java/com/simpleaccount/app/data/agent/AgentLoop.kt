@@ -134,7 +134,7 @@ class AgentLoop @Inject constructor(
         return all.filter {
             it.name in setOf(
                 "get_summary", "get_insights", "list_months", "navigate", "query_transactions",
-                "add_transaction", "reclassify_transactions", "update_transaction_category",
+                "add_transaction", "reclassify_transactions", "update_transaction_category", "create_category", "create_sub_category",
                 "edit_transaction", "delete_transaction", "withdraw_transaction",
             )
         }
@@ -305,7 +305,7 @@ val intent = IntentGate.classify(userMessage)
                         messages.add(
                             ToolChatMessage(
                                 role = "user",
-                                content = "你还没有调用写账工具，账本没有任何改动（rows_affected=0）。立刻调用 reclassify_transactions / update_transaction_category / add_transaction / withdraw_transaction（调用后框架会弹确认卡片让用户批准，你只管把参数填准）。做不到只回复「无法执行」。禁止说已完成。",
+                                content = "你还没有调用写账工具，账本没有任何改动（rows_affected=0）。若能办理：立刻调用 reclassify_transactions / update_transaction_category / add_transaction / withdraw_transaction / create_category（写工具后框架会弹确认）。若缺关键信息或确实办不到：如实回复「无法执行」并说明缺什么/为什么，**严禁**说已完成/已改好。",
                             )
                         )
                         continue

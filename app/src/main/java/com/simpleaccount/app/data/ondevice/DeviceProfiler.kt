@@ -12,12 +12,14 @@ import javax.inject.Singleton
  * 为端侧模型推荐可流畅运行的量化规格。
  */
 enum class DeviceTier {
-    /** 入门：≤4GB RAM 或低端 SoC → 推荐 0.6B–0.8B Q4 */
+    /** 入门：约 4GB RAM → ≤1.7B */
     ENTRY,
-    /** 中端：4–6GB → 推荐 0.8B–1.2B Q4_K */
+    /** 标准：6–8GB → 3–4B（默认推荐） */
     MID,
-    /** 高端：≥6GB + 较新 SoC → 推荐 1.2B–1.5B Q5 / Q4_K */
+    /** 进阶：约 12GB → 7–8B */
     HIGH,
+    /** 旗舰：16GB+ → 12–14B */
+    FLAGSHIP,
 }
 
 data class DeviceProfile(
@@ -55,14 +57,16 @@ class DeviceProfiler @Inject constructor(
         val gpuLikely = Build.VERSION.SDK_INT >= 28 &&
             (abi.contains("arm64") || abi.contains("aarch64"))
         val tier = when {
-            totalMb >= 6144 -> DeviceTier.HIGH
-            totalMb >= 4096 -> DeviceTier.MID
+            totalMb >= 15360 -> DeviceTier.FLAGSHIP
+            totalMb >= 10240 -> DeviceTier.HIGH
+            totalMb >= 5632 -> DeviceTier.MID
             else -> DeviceTier.ENTRY
         }
         val tierLabel = when (tier) {
-            DeviceTier.ENTRY -> "入门档"
-            DeviceTier.MID -> "中端档"
-            DeviceTier.HIGH -> "高端档"
+            DeviceTier.ENTRY -> "入门档（≤1.7B）"
+            DeviceTier.MID -> "标准档（3–4B）"
+            DeviceTier.HIGH -> "进阶档（7–8B）"
+            DeviceTier.FLAGSHIP -> "旗舰档（12–14B）"
         }
         val accel = if (gpuLikely) "GPU 加速可用（Vulkan/OpenCL 路由）" else "建议 CPU 推理"
         val summary = "内存 ${totalMb}MB（可用 ${availMb}MB）· $soc · $abi · $tierLabel · $accel"

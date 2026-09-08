@@ -403,7 +403,7 @@ if (!state.enabled) {
 
     // ---------------- 会话列表抽屉 ----------------
     if (showSessions) {
-        ModalBottomSheet(onDismissRequest = { showSessions = false }) {
+        ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), onDismissRequest = { showSessions = false }) {
             Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 Row(
                     Modifier
@@ -487,7 +487,7 @@ if (!state.enabled) {
 
     // 截图识别结果预览：勾选后确认入账
     state.screenshotPending?.let { pending ->
-        ModalBottomSheet(
+        ModalBottomSheet(sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), 
             onDismissRequest = { viewModel.dismissScreenshot() },
             sheetState = screenshotSheetState
         ) {

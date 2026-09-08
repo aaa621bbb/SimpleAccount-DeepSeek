@@ -302,10 +302,10 @@ if (showTimeSheet) {
             selectedSub = state.subCategory,
             onSelect = { c -> vm.onCategorySelect(c); },
             onSelectSub = { vm.onSubCategorySelect(it) },
-            onAdd = { name -> scope.launch { if (vm.addCategoryInPlace(name)) { /* stay */ } } },
+            onAdd = { name, icon -> scope.launch { if (vm.addCategoryInPlace(name, icon)) { /* stay */ } } },
             onRename = { name -> scope.launch { vm.renameCategoryInPlace(name) } },
             onDelete = { scope.launch { vm.deleteCategoryInPlace() } },
-            onAddSub = { name -> scope.launch { vm.addSubInPlace(name) } },
+            onAddSub = { name, icon -> scope.launch { vm.addSubInPlace(name, iconName = icon) } },
             onRenameSub = { old, neu -> scope.launch { vm.renameSubInPlace(old, neu) } },
             onDeleteSub = { name -> scope.launch { vm.deleteSubInPlace(name) } },
             onDismiss = { showCatEditor = false },
@@ -352,10 +352,10 @@ private fun CategoryInPlaceSheet(
     selectedSub: String,
     onSelect: (com.simpleaccount.app.data.entity.Category) -> Unit,
     onSelectSub: (String) -> Unit,
-    onAdd: (String) -> Unit,
+    onAdd: (String, String?) -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onAddSub: (String) -> Unit,
+    onAddSub: (String, String?) -> Unit,
     onRenameSub: (String, String) -> Unit,
     onDeleteSub: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -363,6 +363,7 @@ private fun CategoryInPlaceSheet(
     var mode by remember { mutableStateOf("list") } // list | add | rename | addSub | renameSub
     var draft by remember { mutableStateOf("") }
     var renameTargetSub by remember { mutableStateOf("") }
+    var pickIcon by remember { mutableStateOf<String?>(null) }
     val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -398,16 +399,60 @@ private fun CategoryInPlaceSheet(
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("名称") },
                     )
+                    if (mode == "add" || mode == "addSub") {
+                        Spacer(Modifier.height(8.dp))
+                        Text("选择图标", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        val icons = com.simpleaccount.app.util.IconMapper.allChoices(
+                            selected?.type ?: com.simpleaccount.app.data.entity.Category.TYPE_EXPENSE
+                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            icons.take(48).forEach { ic ->
+                                val sel = pickIcon == ic.name
+                                Box(
+                                    Modifier
+                                        .padding(end = 6.dp)
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (sel) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                        .clickable { pickIcon = ic.name },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        com.simpleaccount.app.util.IconMapper.map(ic.name),
+                                        contentDescription = ic.label,
+                                        tint = if (sel) MaterialTheme.colorScheme.onPrimary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            pickIcon?.let { n -> icons.firstOrNull { it.name == n }?.label ?: n } ?: "未选则自动按名称配图",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Row {
                         TextButton(onClick = {
                             when (mode) {
-                                "add" -> onAdd(draft)
+                                "add" -> onAdd(draft, pickIcon)
                                 "rename" -> onRename(draft)
-                                "addSub" -> onAddSub(draft)
+                                "addSub" -> onAddSub(draft, pickIcon)
                                 "renameSub" -> onRenameSub(renameTargetSub, draft)
                             }
                             draft = ""
+                            pickIcon = null
                             mode = "list"
                         }) { Text("保存") }
                         TextButton(onClick = { mode = "list"; draft = "" }) { Text("取消") }

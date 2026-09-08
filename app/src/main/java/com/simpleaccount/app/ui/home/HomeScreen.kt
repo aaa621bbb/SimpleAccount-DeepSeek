@@ -128,14 +128,14 @@ fun HomeScreen(
                                 state, navController,
                                 onSetBudget = { showBudgetDialog = true },
                                 onOpenInsight = { showInsight = true },
-                                onOpenProjection = { navController.navigate(Routes.PROJECTION_DETAIL) },
+                                onOpenProjection = { try { navController.navigate(Routes.PROJECTION_DETAIL) { launchSingleTop = true } } catch (_: Exception) { } },
                             )
                         } else {
                             SimpleTop(
                                 state, navController,
                                 onSetBudget = { showBudgetDialog = true },
                                 onOpenInsight = { showInsight = true },
-                                onOpenProjection = { navController.navigate(Routes.PROJECTION_DETAIL) },
+                                onOpenProjection = { try { navController.navigate(Routes.PROJECTION_DETAIL) { launchSingleTop = true } } catch (_: Exception) { } },
                             )
                         }
                     }

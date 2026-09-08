@@ -88,7 +88,11 @@ class OnDeviceModelBackend @Inject constructor(
     override val id: String = SettingsRepository.BACKEND_ONDEVICE
     override val displayName: String = "端侧小模型"
     override val supportsTools: Boolean = true
-    override val compactPrompt: Boolean = true
+    /**
+     * 与云端共用完整系统提示 + 工具协议 + AgentLoop 规划管线，
+     * 仅替换推理后端；不再用「本地精简规划器」另起一套短提示。
+     */
+    override val compactPrompt: Boolean = false
 
     override suspend fun chat(
         messages: List<ToolChatMessage>,

@@ -193,12 +193,24 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "create_category",
-            description = "新建分类。type 为 expense(支出) 或 income(收入)。用户说「加一个xx分类」时调用。",
+            description = "新建一级分类。type=expense/income。可选 icon_name（图标库 name，须未占用；不传则按分类名语义自动选未占用图标）。",
             parameters = mapOf(
-                "name" to ("string" to "分类名（2-4字为佳）"),
+                "name" to ("string" to "分类名（1-8字）"),
                 "type" to ("string" to "'expense' 或 'income'"),
+                "icon_name" to ("string" to "可选：图标库 name，如 restaurant/nutrition；优先未占用"),
+                "color_hex" to ("string" to "可选：#RRGGBB"),
             ),
             required = listOf("name", "type"),
+        ),
+        AgentToolSpec(
+            name = "create_sub_category",
+            description = "在指定一级分类下新建二级。可选 icon_name（未占用）。用户说「在餐饮下加个早茶」时调用。",
+            parameters = mapOf(
+                "parent" to ("string" to "一级分类名"),
+                "name" to ("string" to "二级名"),
+                "icon_name" to ("string" to "可选图标 name"),
+            ),
+            required = listOf("parent", "name"),
         ),
         AgentToolSpec(
             name = "delete_category",
@@ -315,6 +327,7 @@ class AgentTools @Inject constructor(
                 "edit_transaction" -> editTransaction(call.arguments)
                 "delete_transaction" -> deleteTransaction(call.arguments)
                 "create_category" -> createCategory(call.arguments)
+                "create_sub_category" -> createSubCategory(call.arguments)
                 "delete_category" -> deleteCategory(call.arguments)
                 "set_merchant_category" -> setMerchantCategory(call.arguments)
                 "set_monthly_budget" -> setMonthlyBudget(call.arguments)
@@ -1033,7 +1046,7 @@ val all = scopedTxs()
             listOf(t.merchant, t.product, t.date).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
-    /** 操控：新建分类 */
+    /** 操控：新建一级分类（含图标语义分配） */
     private suspend fun createCategory(args: String): String {
         val a = parseArgs(args)
         val name = a.optString("name").trim()
@@ -1043,17 +1056,54 @@ val all = scopedTxs()
         }
         if (name.isEmpty() || name.length > 8) return "参数错误：分类名需 1-8 个字。"
         if (categoryRepository.getByName(name) != null) return "分类「$name」已经存在。"
+        val used = com.simpleaccount.app.util.IconMapper.usedIconNames(
+            categoryRepository.getAll().map { it.iconName },
+            subCategoryRepository.getAll().map { it.iconName },
+        )
+        val preferred = a.optString("icon_name").trim().ifBlank { null }
+        val icon = com.simpleaccount.app.util.IconMapper.nextFreeIcon(type, used, preferred, name)
+        val color = a.optString("color_hex").trim().ifBlank { "#7A9AE3" }
         categoryRepository.add(
             com.simpleaccount.app.data.entity.Category(
                 name = name,
                 type = type,
                 sortOrder = 99,
                 isPreset = false,
-                iconName = com.simpleaccount.app.util.IconMapper.allChoices(type).firstOrNull { it.name != "more_horiz" }?.name ?: "category",
-                colorHex = "#7A9AE3",
+                iconName = icon,
+                colorHex = color,
             )
         )
-        return "已创建${if (type == com.simpleaccount.app.data.entity.Category.TYPE_INCOME) "收入" else "支出"}分类「$name」。"
+        val kind = if (type == com.simpleaccount.app.data.entity.Category.TYPE_INCOME) "收入" else "支出"
+        return "【账本已核验】rows_affected=1 已创建${kind}分类「$name」（图标 $icon）。"
+    }
+
+    /** 操控：新建二级分类 */
+    private suspend fun createSubCategory(args: String): String {
+        val a = parseArgs(args)
+        val parent = a.optString("parent").trim()
+        val name = a.optString("name").trim()
+        if (parent.isEmpty() || name.isEmpty()) return "参数错误：parent 与 name 必填。"
+        if (name.length > 8) return "参数错误：二级名需 1-8 个字。"
+        if (categoryRepository.getByName(parent) == null) return "一级分类「$parent」不存在。"
+        val existing = subCategoryRepository.getByParent(parent)
+        if (existing.any { it.name == name }) return "「$parent/$name」已存在。"
+        val used = com.simpleaccount.app.util.IconMapper.usedIconNames(
+            categoryRepository.getAll().map { it.iconName },
+            subCategoryRepository.getAll().map { it.iconName },
+        )
+        val preferred = a.optString("icon_name").trim().ifBlank {
+            com.simpleaccount.app.util.SubCategoryPresets.iconFor(name).takeIf { it != "more_horiz" }
+        }
+        val icon = com.simpleaccount.app.util.IconMapper.nextFreeIcon(
+            com.simpleaccount.app.data.entity.Category.TYPE_EXPENSE, used, preferred, name,
+        )
+        val maxOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1
+        subCategoryRepository.add(
+            com.simpleaccount.app.data.entity.SubCategory(
+                parent = parent, name = name, sortOrder = maxOrder, isPreset = false, iconName = icon,
+            )
+        )
+        return "【账本已核验】rows_affected=1 已创建二级「$parent/$name」（图标 $icon）。"
     }
 
     /** 操控：删除自定义分类（预置分类与在用分类拒绝删除；附带删除其二级分类） */

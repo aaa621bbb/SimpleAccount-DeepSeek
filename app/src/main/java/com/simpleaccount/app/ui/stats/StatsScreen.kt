@@ -21,7 +21,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -146,6 +148,7 @@ val state by viewModel.uiState.collectAsState()
                 onShowAll = { legendShowAll = true },
                 onCollapse = { legendExpanded = false; legendShowAll = false },
                 onCategory = { categorySheet = it },
+                    onToggleSplit = { viewModel.setPieSplitSubs(it) },
                 onMonth = { viewModel.setMonth(it) },
                 viewModel = viewModel,
             ) }
@@ -177,6 +180,7 @@ val state by viewModel.uiState.collectAsState()
                     StatsModuleBlock(id, state, layout, pal, legendExpanded, legendShowAll,
                         onExpand = {}, onShowAll = {}, onCollapse = {},
                         onCategory = { categorySheet = it },
+                    onToggleSplit = { viewModel.setPieSplitSubs(it) },
                         onMonth = { viewModel.setMonth(it) },
                         viewModel = viewModel,
                     )
@@ -208,6 +212,7 @@ private fun StatsModuleBlock(
     onCollapse: () -> Unit,
     onCategory: (String) -> Unit,
     onMonth: (String) -> Unit,
+    onToggleSplit: (Boolean) -> Unit = {},
     viewModel: StatsViewModel,
 ) {
     when (id) {
@@ -220,6 +225,7 @@ private fun StatsModuleBlock(
             onShowAll = onShowAll,
             onCollapse = onCollapse,
             onCategory = onCategory,
+            onToggleSplit = onToggleSplit,
         )
         StatsModules.COMPARE -> if (state.total > 0) CompareCard(state)
         StatsModules.MERCHANTS -> if (state.topMerchants.isNotEmpty()) MerchantsCard(state)
@@ -278,6 +284,8 @@ private fun PieCard(
     onShowAll: () -> Unit,
     onCollapse: () -> Unit,
     onCategory: (String) -> Unit,
+    onToggleSplit: (Boolean) -> Unit = {},
+    categoryIconOf: (String) -> String = { "more_horiz" },
 ) {
     // 已展开二级的一级分类名
     var openParents by remember { mutableStateOf(setOf<String>()) }
@@ -293,11 +301,26 @@ private fun PieCard(
             modifier = Modifier.padding(start = 18.dp, top = 12.dp)
         )
         Text(
-            "一级占比；点右侧 › 展开二级，再点二级看账单明细。",
+            if (state.pieSplitSubs) "二级全拆细分；点分类看账单。可切换合并到一级。"
+            else "一级占比；点右侧 › 展开二级，再点二级看账单。可切换二级全拆。",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 18.dp, bottom = 4.dp)
+            modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 2.dp)
         )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (state.pieSplitSubs) "二级全拆" else "合并一级",
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = state.pieSplitSubs,
+                onCheckedChange = onToggleSplit,
+            )
+        }
         PieChartView(
             slices = state.slices,
             centerLabel = if (state.type == Transaction.TYPE_EXPENSE) "总支出" else "总收入",
@@ -650,6 +673,43 @@ private fun CategoryTxSheet(
                             Modifier.fillMaxWidth().padding(vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val iconName = run {
+                                val parent = t.category
+                                val sub = t.subCategory
+                                when {
+                                    sub.isNotBlank() -> com.simpleaccount.app.util.SubCategoryPresets.iconFor(sub)
+                                    parent == "餐饮" -> "restaurant"
+                                    parent == "交通" -> "directions_car"
+                                    parent == "购物" -> "shopping_cart"
+                                    parent == "娱乐" -> "movie"
+                                    parent == "医疗" -> "local_hospital"
+                                    parent == "教育" -> "school"
+                                    parent == "居住" -> "home"
+                                    parent == "通讯" -> "phone"
+                                    parent == "转账" -> "swap_horiz"
+                                    parent == "工资" -> "attach_money"
+                                    parent == "奖金" -> "card_giftcard"
+                                    parent == "投资" -> "trending_up"
+                                    parent == "兼职" -> "work"
+                                    parent == "退款" -> "assignment_return"
+                                    else -> "more_horiz"
+                                }
+                            }
+                            Box(
+                                Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(parseColor(state.categoryColorMap[t.category] ?: "#BDC3C7")),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    com.simpleaccount.app.util.IconMapper.map(iconName),
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
 Text(
                                     listOf(t.merchant, t.product).filter { it.isNotBlank() }

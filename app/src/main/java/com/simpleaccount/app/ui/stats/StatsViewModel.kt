@@ -80,6 +80,8 @@ data class StatsUiState(
     val flowIncome: List<FlowPart> = emptyList(),
     val flowExpense: List<FlowPart> = emptyList(),
     val radar: RadarUi = RadarUi(),
+    /** true=饼图按二级全拆；false=合并到一级（仍可展开看二级） */
+    val pieSplitSubs: Boolean = false,
 )
 
 @HiltViewModel
@@ -103,6 +105,7 @@ class StatsViewModel @Inject constructor(
 
     private val monthFlow = kotlinx.coroutines.flow.MutableStateFlow(DateUtil.thisMonth())
     private val typeFlow = kotlinx.coroutines.flow.MutableStateFlow(Transaction.TYPE_EXPENSE)
+    private val pieSplitFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val categoriesFlow = categoryRepository.observeAll()
 
     // 交易数据变更 Flow：任何增删改/清空都会重算统计
@@ -124,10 +127,11 @@ class StatsViewModel @Inject constructor(
 val uiState: StateFlow<StatsUiState> = combine(
         monthFlow,
         typeFlow,
+        pieSplitFlow,
         combine(transactionsFlow, settingsRepository.ledgerScopeVersionFlow) { txs, _ -> txs },
         categoriesFlow
-    ) { month, type, txs, cats ->
-        computeStats(month, type, txs, cats)
+    ) { month, type, pieSplit, txs, cats ->
+        computeStats(month, type, txs, cats, pieSplit)
     }
         // 大账本（1800+ 条）的分组/求和/排序都放 Default 线程，切月份不再卡主线程
         .flowOn(kotlinx.coroutines.Dispatchers.Default)
@@ -138,6 +142,7 @@ private fun computeStats(
         type: String,
         txsIn: List<Transaction>,
         cats: List<com.simpleaccount.app.data.entity.Category>,
+        pieSplitSubs: Boolean = false,
     ): StatsUiState {
         // 收支口径：按用户开关过滤退款/投资
         val txs = settingsRepository.filterByLedgerScope(txsIn)
@@ -193,6 +198,18 @@ private fun computeStats(
                 children = children,
             )
         }
+        val displaySlices = if (pieSplitSubs) {
+            // 二级全拆：所有有二级的展开为独立扇区；无二级的一级保留
+            val flat = mutableListOf<PieSlice>()
+            slices.forEach { p ->
+                if (p.children.isNotEmpty()) {
+                    p.children.filter { it.isSub }.forEach { flat += it }
+                    val rest = p.value - p.children.filter { it.isSub }.sumOf { it.value }
+                    if (rest > 0) flat += p.copy(value = rest, children = emptyList())
+                } else flat += p
+            }
+            flat.sortedByDescending { it.value }
+        } else slices
         val total = filtered.sumOf { it.amount }
 
         // 趋势：固定按最近 12 个连续月份（无数据的月为 0），与上方选择器的数据月份列表无关
@@ -222,7 +239,8 @@ calDayTx.getOrPut(day) { mutableListOf() }.add(
             month = month,
             months = months,
             total = total,
-            slices = slices,
+            slices = displaySlices,
+            pieSplitSubs = pieSplitSubs,
             type = type,
             trend = trend,
             categoryColorMap = colorMap,
@@ -316,6 +334,8 @@ calDayTx.getOrPut(day) { mutableListOf() }.add(
 fun setMonth(m: String) {
         monthFlow.value = m
     }
+
+    fun setPieSplitSubs(split: Boolean) { pieSplitFlow.value = split }
 
     fun setType(t: String) {
         typeFlow.value = t
