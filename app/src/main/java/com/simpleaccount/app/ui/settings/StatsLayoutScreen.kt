@@ -149,10 +149,10 @@ fun StatsLayoutScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            item(key = "header") {
+item(key = "header") {
                 Text("显示与顺序", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Text(
-                    "关掉的卡片不出现在统计页。长按把手直接拖动整序，支持大幅跨距移动；也可点箭头微调。拖入时高亮预览，超出边界松手自动回滚。",
+                    "关掉的卡片不出现在统计页。频次/结构演进/环比水位/集中度/弹性/帕累托等「高级分析」默认收纳在统计页底部展开区，这里仍可彻底关闭。长按把手拖动排序。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -212,9 +212,12 @@ fun StatsLayoutScreen(
                 ) {
                     Switch(checked = visible, onCheckedChange = { viewModel.toggle(id, it) })
                     Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
+Column(Modifier.weight(1f)) {
                         Text(StatsModules.title(id), fontWeight = if (visible) FontWeight.SemiBold else FontWeight.Normal, fontSize = 14.sp)
-                        if (!visible) Text("已隐藏", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        when {
+                            !visible -> Text("已隐藏", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            StatsModules.isAdvanced(id) -> Text("高级分析（默认折叠）", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                        }
                     }
                     // 把手：长按拖动
                     Box(

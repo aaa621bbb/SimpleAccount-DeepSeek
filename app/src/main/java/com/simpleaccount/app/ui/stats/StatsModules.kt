@@ -22,10 +22,20 @@ object StatsModules {
     const val FLOW = "flow"
     const val RADAR = "radar"
 
+/** 默认展示的主模块（不含低频高级分析）。 */
     val DEFAULT_ORDER = listOf(
         PIE, CALENDAR, BARS, WEEKDAY, HOURS, MERCHANTS, TREND, COMPARE,
-        FREQ, SHARE, MOM_DELTA, CONC, ELASTIC, PARETO, HEAT, SPARK, FLOW, RADAR,
+        HEAT, SPARK, FLOW, RADAR,
     )
+
+    /**
+     * 低频小众分析：默认隐藏，收纳进「高级分析」展开区。
+     * 频次曲线、结构演进、环比水位、商户集中度、类目弹性、帕累托累计。
+     */
+    val ADVANCED_IDS = listOf(FREQ, SHARE, MOM_DELTA, CONC, ELASTIC, PARETO)
+
+    /** 全量模块（布局编辑用）。 */
+    val ALL_ORDER = DEFAULT_ORDER + ADVANCED_IDS
 
     fun title(id: String): String = when (id) {
         PIE -> "分类构成（饼图）"
@@ -63,18 +73,26 @@ object StatsModules {
         else -> ""
     }
 
-    fun parseOrder(raw: String?): List<String> {
+fun parseOrder(raw: String?): List<String> {
         val parsed = raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        val known = parsed.filter { it in DEFAULT_ORDER }.distinct()
-        return known + DEFAULT_ORDER.filter { it !in known }
+        val universe = ALL_ORDER
+        val known = parsed.filter { it in universe }.distinct()
+        // 默认把高级分析模块放到末尾；用户自定义顺序优先
+        return known + universe.filter { it !in known }
     }
 
-    fun parseHidden(raw: String?): Set<String> =
-        raw.orEmpty().split(',').map { it.trim() }.filter { it in DEFAULT_ORDER }.toSet()
+    fun parseHidden(raw: String?): Set<String> {
+        val universe = ALL_ORDER.toSet()
+        // 高级分析不靠 hidden 默认藏——StatsScreen 会把它们收纳进「高级分析」展开区；
+        // 用户仍可在布局编辑里彻底关掉某一项。
+        return raw.orEmpty().split(',').map { it.trim() }.filter { it in universe }.toSet()
+    }
+
+    fun isAdvanced(id: String): Boolean = id in ADVANCED_IDS
 }
 
 data class StatsLayoutUi(
-    val order: List<String> = StatsModules.DEFAULT_ORDER,
+    val order: List<String> = StatsModules.ALL_ORDER,
     val hidden: Set<String> = emptySet(),
     val pieLegendCount: Int = 3,
 )

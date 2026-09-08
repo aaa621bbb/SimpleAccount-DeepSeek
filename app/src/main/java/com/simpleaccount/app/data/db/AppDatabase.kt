@@ -36,7 +36,7 @@ import com.simpleaccount.app.data.entity.Transaction
         com.simpleaccount.app.data.entity.Ledger::class,
         SubCategory::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -202,6 +202,34 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_sub_categories_parent` ON `sub_categories` (`parent`)")
                 db.execSQL("ALTER TABLE transactions ADD COLUMN `subCategory` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        /** v8 → v9：二级分类图标列 + 常见二级回填图标名。 */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE sub_categories ADD COLUMN `iconName` TEXT NOT NULL DEFAULT 'more_horiz'"
+                )
+                // 常见二级名回填（与 SubCategoryPresets.SUB_ICONS 对齐的子集）
+                val pairs = listOf(
+                    "早餐" to "free_breakfast", "午餐" to "lunch_dining", "晚餐" to "dinner_dining",
+                    "夜宵" to "nightlife", "奶茶" to "local_cafe", "咖啡" to "coffee",
+                    "零食" to "cookie", "水果" to "nutrition", "外卖" to "delivery_dining",
+                    "公交" to "directions_bus", "地铁" to "directions_subway", "打车" to "local_taxi",
+                    "火车" to "train", "飞机" to "flight", "加油" to "local_gas_station",
+                    "停车" to "local_parking", "骑行" to "directions_bike", "高速" to "add_road",
+                    "日用" to "shopping_basket", "服饰" to "checkroom", "数码" to "devices",
+                    "电影" to "movie", "游戏" to "sports_esports", "会员" to "card_membership",
+                    "房租" to "apartment", "水电" to "electrical_services", "话费" to "phone",
+                    "红包" to "card_giftcard", "月薪" to "payments", "股票" to "show_chart",
+                )
+                pairs.forEach { (name, icon) ->
+                    db.execSQL(
+                        "UPDATE sub_categories SET iconName = ? WHERE name = ? AND (iconName = '' OR iconName = 'more_horiz')",
+                        arrayOf(icon, name),
+                    )
+                }
             }
         }
     }

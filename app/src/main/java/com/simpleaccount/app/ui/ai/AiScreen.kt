@@ -196,7 +196,7 @@ fun AiScreen(
                 }
             }
 
-            if (!state.enabled) {
+if (!state.enabled) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -209,7 +209,7 @@ fun AiScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "AI 功能未开启，请到设置中开启并配置 API Key",
+                            "云端 AI 未开启。可配置 API Key，或到「端侧小模型」下载离线免费模型。",
                             modifier = Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             fontSize = 13.sp
@@ -699,11 +699,16 @@ private fun MessageBubble(
                     fontSize = 14.sp,
                     lineHeight = 21.sp
                 )
-            } else {
-                val (reply, cot) = com.simpleaccount.app.ui.components.unpackCot(msg.content)
+} else {
+                val (reply, cot, elapsed) = com.simpleaccount.app.ui.components.unpackCot(msg.content)
                 Column {
-                    if (!cot.isNullOrBlank()) {
-                        ReasoningFold(expanded = reasoningExpanded, text = cot, onToggle = onToggleReasoning)
+                    if (!cot.isNullOrBlank() || !elapsed.isNullOrBlank()) {
+                        ReasoningFold(
+                            expanded = reasoningExpanded,
+                            text = cot.orEmpty(),
+                            elapsedLabel = elapsed,
+                            onToggle = onToggleReasoning,
+                        )
                         Spacer(Modifier.height(6.dp))
                     }
                     MarkdownText(
@@ -837,17 +842,34 @@ private fun StreamingBubble(
 }
 
 @Composable
-private fun ReasoningFold(expanded: Boolean, text: String, onToggle: () -> Unit) {
+private fun ReasoningFold(
+    expanded: Boolean,
+    text: String,
+    elapsedLabel: String? = null,
+    onToggle: () -> Unit,
+) {
     Column {
-        Text(
-            if (expanded) "收起思考" else "思考过程（已折叠）",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.primary,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clickable(onClick = onToggle)
-                .padding(vertical = 2.dp)
-        )
-        if (expanded) {
+                .padding(vertical = 2.dp),
+        ) {
+            Text(
+                if (expanded) "收起思考" else "思考过程（已折叠）",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            if (!elapsedLabel.isNullOrBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    elapsedLabel,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                )
+            }
+        }
+        if (expanded && text.isNotBlank()) {
             Text(
                 com.simpleaccount.app.ui.components.coalesceReasoning(text),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),

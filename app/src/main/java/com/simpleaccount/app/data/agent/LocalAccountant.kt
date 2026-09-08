@@ -37,17 +37,24 @@ class LocalAccountant @Inject constructor(
     private val autoRecordRuntime: com.simpleaccount.app.auto.AutoRecordRuntime,
 ) {
 
-    /** 写提案：预览文案 + 用户批准后执行的落库动作。 */
+/**
+     * 写提案：预览文案 + 用户批准后执行的落库动作。
+     * [needsConfirm]=false 表示仅追问补齐信息（金额/时刻未明示），直接展示、不弹确认、不落库。
+     *
+     * 参数顺序固定为 (preview, needsConfirm, commit)，保证尾随 lambda 绑定到 commit，
+     * 而不是 Boolean。
+     */
     data class WriteProposal(
         val preview: String,
+        val needsConfirm: Boolean = true,
         val commit: suspend () -> String,
     )
 
-    /** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
+/** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
     suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
         if (s.isEmpty()) return null
-        val writeLike = WRITE_LIKE.containsMatchIn(s)
+        val writeLike = WRITE_LIKE.containsMatchIn(s) || IntentGate.isHighConfidenceSpend(s)
         if (writeLike) return null
         if (s.length > 80) return null
         if (s.length > 4000) return null
@@ -55,7 +62,8 @@ class LocalAccountant @Inject constructor(
 
         if (!IntentGate.needsLedger(IntentGate.classify(s))) return null
 
-        val all = accountRepository.getAll()
+// 只读快答排除草稿；体检与首页/统计同口径
+        val all = settingsRepository.filterByLedgerScope(accountRepository.getAll())
 
         daySpend(s, all)?.let { return it }
         monthSpend(s, all)?.let { return it }
@@ -78,7 +86,9 @@ class LocalAccountant @Inject constructor(
     suspend fun tryProposeWrite(userMessage: String): WriteProposal? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
         if (s.isEmpty() || s.length > 4000) return null
-        if (!WRITE_LIKE.containsMatchIn(s)) return null
+// 显式写指令，或高置信消费叙述（含时间+商户+消费动词，金额可缺）
+        val spendLike = IntentGate.isHighConfidenceSpend(s)
+        if (!WRITE_LIKE.containsMatchIn(s) && !spendLike) return null
         proposeAdd(s)?.let { return it }
         proposeWithdraw(s)?.let { return it }
         proposeRecategorize(s)?.let { return it }
@@ -186,8 +196,10 @@ class LocalAccountant @Inject constructor(
                 ?: return WriteProposal("流水号 $id 不在账本里（可能已经删了），无需撤回。") {
                     "失败 rows_affected=0。流水号 $id 不在账本里。"
                 }
-        } else {
-            accountRepository.getAll().maxByOrNull { it.id }
+} else {
+            // 优先撤回最近已确认流水；全是草稿时才落到草稿
+            accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
                 ?: return WriteProposal("账本是空的，没有可撤回的。") {
                     "失败 rows_affected=0。账本是空的，没有可撤回的。"
                 }
@@ -226,21 +238,33 @@ class LocalAccountant @Inject constructor(
         }
     }
 
-    /**
-     * 口语记账提案：语义解析（[UtteranceParser]）+ 时刻不默认。
-     * 金额缺失 → 返回 null（转云端 Agent 追问）；时刻缺失 → 预览注明"时刻待补"，
-     * 落库时刻留空，用户可在账本里编辑补上。
+/**
+     * 口语记账提案：语义解析（[UtteranceParser]）+ 时刻/金额不臆测。
+     * v2.31.0：金额缺失时返回追问提案（不落库）；补齐后再生成可落库提案。
+     * 时刻缺失 → 预览注明「时刻待补」，落库时刻留空。
      */
     private suspend fun proposeAdd(s: String): WriteProposal? {
         val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
-        if (!want) return null
-        if (s.contains("多少")) return null
+        val spendLike = IntentGate.isHighConfidenceSpend(s)
+        if (!want && !spendLike) return null
+        if (s.contains("多少") && !Regex("\\d").containsMatchIn(s) && !spendLike) return null
         val valid = categoryRepository.getAll().map { it.name }.toSet()
         val knownMerchants = accountRepository.getAll()
             .map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct()
         val p = UtteranceParser.parse(s, valid, knownMerchants)
-        val amountFen = p.amountFen ?: return null
-        if (amountFen <= 0) return null
+        // 金额未明示 → 必须先追问，禁止臆测填充（高置信消费同样追问，不降级闲聊）
+        val amountFen = p.amountFen
+        if (amountFen == null || amountFen <= 0) {
+            val hint = listOf(p.merchant, p.product).filter { it.isNotBlank() }.joinToString(" · ")
+            val whenHint = listOfNotNull(p.date, p.time).joinToString(" ").trim()
+            val ask = buildString {
+                if (hint.isNotBlank()) append("「$hint」")
+                if (whenHint.isNotBlank()) append("（$whenHint）")
+                if (isNotEmpty()) append(" ")
+                append("要记多少钱？说个金额我马上帮你记上。")
+            }
+            return WriteProposal(preview = ask, needsConfirm = false) { ask }
+        }
         val date = p.date ?: DateUtil.today()
         val time = p.time.orEmpty()
         val category = p.category
@@ -310,9 +334,10 @@ class LocalAccountant @Inject constructor(
                 preview = "将把流水号 $id（${t.merchant.ifBlank { t.product.ifBlank { t.category } }} ¥${MoneyUtil.fenToYuan(t.amount)}）从「${t.category}」改到「$category」。"
             ) { applyRecategorize(listOf(t), category) }
         }
-        if (Regex("刚才|最新").containsMatchIn(s)) {
+if (Regex("刚才|最新").containsMatchIn(s)) {
             val category = categoryIn(s) ?: return null
-            val t = accountRepository.getAll().maxByOrNull { it.id }
+            val t = accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
                 ?: return WriteProposal("账本是空的，没有可改的账单。") {
                     "失败 rows_affected=0。账本是空的。"
                 }
@@ -326,7 +351,9 @@ class LocalAccountant @Inject constructor(
         ).find(s)?.groupValues?.get(1)?.takeIf { it !in listOf("刚才", "这笔", "那笔") }
             ?: return null
 
-        val pool = accountRepository.getAll().filter { it.merchant.contains(merch) || it.product.contains(merch) }
+        val pool = accountRepository.getAll()
+            .filter { it.source != Transaction.SOURCE_DRAFT }
+            .filter { it.merchant.contains(merch) || it.product.contains(merch) }
         if (pool.isEmpty()) {
             return WriteProposal("没找到商家「$merch」的账单，无法改分类。") {
                 "失败 rows_affected=0。没找到商家「$merch」的账单。"

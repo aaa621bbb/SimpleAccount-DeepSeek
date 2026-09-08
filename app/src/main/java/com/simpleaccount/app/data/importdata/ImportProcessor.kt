@@ -107,7 +107,11 @@ class ImportProcessor @Inject constructor(
 
         // 先把普通行入账，同时收集付款候选（仅支出，非退款/转账）
         // 自动记账（无感抓取）的记录在导入时被同笔账单覆盖：以导入为准
-        val autoRows = transactionDao.getAllBySource(Transaction.SOURCE_AUTO).filter { it.ledgerId == lid }
+        // 自动入账 + 待确认草稿都可被导入账单覆盖补全（升为 import）
+        val autoRows = (
+            transactionDao.getAllBySource(Transaction.SOURCE_AUTO) +
+                transactionDao.getAllBySource(Transaction.SOURCE_DRAFT)
+            ).filter { it.ledgerId == lid }
         // 数据冲突优先级（用户可配）：
         // import=以导入账单为准（默认）：导入覆盖手动/截图/自动的同笔记录
         // manual=以手动·截图·AI记录为准：导入遇到同笔的 手动/自动 记录只跳过，不覆盖

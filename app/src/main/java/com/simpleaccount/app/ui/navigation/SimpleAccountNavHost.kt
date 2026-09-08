@@ -160,11 +160,20 @@ fun SimpleAccountNavHost() {
                 composable(Routes.IMPORT) {
                     ImportScreen(navController)
                 }
-                composable(Routes.AI_SETTINGS) {
+composable(Routes.AI_SETTINGS) {
                     AiSettingsScreen(navController)
+                }
+                composable(Routes.ONDEVICE_MODELS) {
+                    com.simpleaccount.app.ui.settings.OnDeviceModelScreen(navController)
+                }
+                composable(Routes.PROJECTION_DETAIL) {
+                    com.simpleaccount.app.ui.home.ProjectionDetailScreen(navController)
                 }
                 composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
+                }
+                composable(Routes.LEDGER_SCOPE) {
+                    com.simpleaccount.app.ui.settings.LedgerScopeScreen(navController)
                 }
                 composable(Routes.LEDGER_MANAGE) {
                     com.simpleaccount.app.ui.settings.LedgerManageScreen(navController)

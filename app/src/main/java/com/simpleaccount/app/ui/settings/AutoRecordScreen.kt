@@ -57,12 +57,16 @@ import javax.inject.Inject
 data class AutoRecordUiState(
     val enabled: Boolean = false,
     val listenerGranted: Boolean = false,
+    /** 与 AI 管家共用：confirm / auto */
+    val execAuth: String = SettingsRepository.EXEC_AUTH_CONFIRM,
+    val drafts: List<com.simpleaccount.app.data.entity.Transaction> = emptyList(),
 )
 
 @HiltViewModel
 class AutoRecordViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val simulator: com.simpleaccount.app.auto.AutoRecordSimulator,
+    private val autoRecordManager: com.simpleaccount.app.auto.AutoRecordManager,
     val runtime: AutoRecordRuntime,
 ) : ViewModel() {
 
@@ -78,7 +82,23 @@ class AutoRecordViewModel @Inject constructor(
             _state.value = AutoRecordUiState(
                 enabled = settingsRepository.isAutoRecordEnabled(),
                 listenerGranted = runtime.isListenerGranted(context),
+                execAuth = settingsRepository.agentExecAuth(),
+                drafts = autoRecordManager.listDrafts(),
             )
+        }
+    }
+
+    fun confirmDraft(id: Long) {
+        viewModelScope.launch {
+            autoRecordManager.confirmDraft(id)
+            _state.value = _state.value.copy(drafts = autoRecordManager.listDrafts())
+        }
+    }
+
+    fun discardDraft(id: Long) {
+        viewModelScope.launch {
+            autoRecordManager.discardDraft(id)
+            _state.value = _state.value.copy(drafts = autoRecordManager.listDrafts())
         }
     }
 
@@ -229,6 +249,62 @@ fun AutoRecordScreen(
                     }
                 }) { Text(if (health.batteryUnrestricted) "已忽略" else "去设置") }
             }
+HorizontalDivider(Modifier.padding(start = 16.dp))
+
+            // 待确认草稿
+            if (state.drafts.isNotEmpty()) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text("待确认草稿（${state.drafts.size}）", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "低置信解析，或执行授权为「每次确认」时，会先落草稿不进统计。确认后才计入流水。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    state.drafts.forEach { d ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "${d.merchant.ifBlank { d.category }} · ¥${"%.2f".format(d.amount / 100.0)}",
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "${d.date} ${d.time} · ${d.category}" +
+                                        if (d.subCategory.isNotBlank()) "/${d.subCategory}" else "",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { viewModel.confirmDraft(d.id) }) { Text("确认") }
+                            TextButton(onClick = { viewModel.discardDraft(d.id) }) {
+                                Text("丢弃", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(Modifier.padding(start = 16.dp))
+            }
+
+            // 执行授权提示
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("入账授权", fontWeight = FontWeight.SemiBold)
+                Text(
+                    when (state.execAuth) {
+                        SettingsRepository.EXEC_AUTH_AUTO ->
+                            "当前：自动执行。高置信通知直接入账；低置信仍进草稿。"
+                        else ->
+                            "当前：每次确认。所有无感记账先落草稿，需在上方确认后才计入统计。"
+                    } + "（与 AI 管家「执行授权」共用，可在 AI 辅助设置里改。）",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp,
+                )
+            }
             HorizontalDivider(Modifier.padding(start = 16.dp))
 
             val testOutput by viewModel.testOutput.collectAsState()
@@ -271,16 +347,17 @@ fun AutoRecordScreen(
                 HorizontalDivider(Modifier.padding(start = 16.dp))
             }
 
-            Column(Modifier.padding(16.dp)) {
-                Text("说明", fontWeight = FontWeight.SemiBold)
+Column(Modifier.padding(16.dp)) {
+                Text("说明与隐私", fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "· 监听微信/支付宝/云闪付/钱包的支付通知，自动解析金额入账；\n" +
-                        "· 必须同时打开「自动记账」开关，并授予通知使用权，否则通知来了也不会记；\n" +
-                        "· 进程被杀后会由开机广播、覆盖安装广播和前台保活重新拉起监听；\n" +
-                        "· 通知里一般只有金额，商家名可能不完整，导入账单时会自动覆盖补全；\n" +
-                        "· 60 秒内相同金额的重复通知只记一笔；不读取任何短信；\n" +
-                        "· 小米/华为请把本 App 加入后台白名单并关闭电池优化，否则服务会被清掉。",
+                    "· 监听范围：仅微信 / 支付宝 / 云闪付 / 系统钱包等支付类包名；聊天噪声会被过滤；\n" +
+                        "· 必须同时打开「自动记账」总开关，并授予通知使用权，否则通知来了也不会记；\n" +
+                        "· 本地-only：通知正文只在本机解析入账，不上传云端、不读短信、不读通讯录；\n" +
+                        "· 去重：60 秒窗口 + 当天同金额同商家（支付通知与后续到账通知合并）；\n" +
+                        "· 低置信或「每次确认」→ 草稿待确认，不进统计；确认后才计入流水；\n" +
+                        "· 授权引导只请求通知监听权限，范围限于支付通知；\n" +
+                        "· 进程被杀后由开机/安装广播与前台保活拉起；小米/华为请关电池优化。",
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

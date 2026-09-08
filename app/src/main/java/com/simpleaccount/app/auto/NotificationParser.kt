@@ -10,13 +10,19 @@ package com.simpleaccount.app.auto
  */
 object NotificationParser {
 
-    data class ParsedPayment(
+data class ParsedPayment(
         val amountFen: Long,
         /** "expense" | "income" */
         val type: String,
         val merchant: String,
         /** "wechat" | "alipay" | "unionpay" | "mipay" | "wallet" */
         val source: String,
+        /**
+         * 解析置信度 0f..1f。
+         * ≥0.75 视为高置信（可自动入账）；更低则进草稿待确认。
+         * 商家是兜底名（微信支付/支付宝支出等）或未知钱包会拉低。
+         */
+        val confidence: Float = 0.8f,
     )
 
     private val AMOUNT_YUAN = Regex("""(\d{1,7}(?:\.\d{1,2})?)\s*元""")
@@ -60,13 +66,15 @@ object NotificationParser {
         }
     }
 
-    private fun parseUnionPay(full: String, amountFen: Long): ParsedPayment? {
+private fun parseUnionPay(full: String, amountFen: Long): ParsedPayment? {
         val isIncome = full.contains("入账") || full.contains("收款") || full.contains("退款") || full.contains("收入")
+        val m = extractMerchant(full)
         return ParsedPayment(
             amountFen = amountFen,
             type = if (isIncome) "income" else "expense",
-            merchant = extractMerchant(full) ?: "云闪付",
+            merchant = m ?: "云闪付",
             source = "unionpay",
+            confidence = if (m != null) 0.85f else 0.55f,
         )
     }
 
@@ -74,23 +82,30 @@ object NotificationParser {
         val isIncome = full.contains("入账") || full.contains("转入") || full.contains("收款") ||
             full.contains("退款") || full.contains("工资")
         if (!PAY_HINTS.any { full.contains(it) } && !full.contains("人民币")) return null
+        val m = extractMerchant(full)
         return ParsedPayment(
             amountFen = amountFen,
             type = if (isIncome) "income" else "expense",
-            merchant = extractMerchant(full) ?: "银行卡",
+            merchant = m ?: "银行卡",
             source = "wallet",
+            confidence = if (m != null) 0.7f else 0.45f,
         )
     }
 
     private fun parseGenericWallet(full: String, amountFen: Long, source: String, fallback: String): ParsedPayment {
         val isIncome = full.contains("入账") || full.contains("收款") || full.contains("退款") || full.contains("收入")
+        val m = extractMerchant(full)
         return ParsedPayment(
             amountFen = amountFen,
             type = if (isIncome) "income" else "expense",
-            merchant = extractMerchant(full) ?: fallback,
+            merchant = m ?: fallback,
             source = source,
+            confidence = if (m != null) 0.65f else 0.4f,
         )
     }
+
+    private fun confFor(merchant: String, fallbacks: Set<String>, base: Float = 0.9f): Float =
+        if (merchant in fallbacks || merchant.endsWith("支付") || merchant.endsWith("支出")) 0.5f else base
 
     private fun extractAmountFen(full: String): Long? {
         val m = AMOUNT_SYMBOL.find(full)
@@ -129,42 +144,45 @@ object NotificationParser {
         // 纯聊天里偶尔出现数字，没有支付符号/关键词就丢掉
         if (!hasPayHint && !hasYen && !title.contains("微信")) return null
 
+val wxFallbacks = setOf("微信支付", "微信退款", "微信转账")
         return when {
-            isRefund -> ParsedPayment(amountFen, "income", extractMerchant(full) ?: "微信退款", "wechat")
-            isTransferIn -> ParsedPayment(
-                amountFen, "income",
-                Regex("""(\S{1,12})\s*向你(?:转账|收款)""").find(full)?.groupValues?.get(1) ?: "微信转账",
-                "wechat",
-            )
-            else -> ParsedPayment(
-                amountFen, "expense",
-                extractMerchant(full)
+            isRefund -> {
+                val m = extractMerchant(full) ?: "微信退款"
+                ParsedPayment(amountFen, "income", m, "wechat", confFor(m, wxFallbacks, 0.8f))
+            }
+            isTransferIn -> {
+                val m = Regex("""(\S{1,12})\s*向你(?:转账|收款)""").find(full)?.groupValues?.get(1) ?: "微信转账"
+                ParsedPayment(amountFen, "income", m, "wechat", confFor(m, wxFallbacks, 0.85f))
+            }
+            else -> {
+                val m = extractMerchant(full)
                     ?: title.takeIf { it.isNotBlank() && !it.contains("微信") && it.length in 2..24 }
-                    ?: "微信支付",
-                "wechat",
-            )
+                    ?: "微信支付"
+                ParsedPayment(amountFen, "expense", m, "wechat", confFor(m, wxFallbacks, 0.9f))
+            }
         }
     }
 
     /** 支付宝：包名已是支付宝，不再要求正文出现「支付宝」 */
     private fun parseAlipay(title: String, text: String, full: String, amountFen: Long): ParsedPayment? {
+        val aliFallbacks = setOf("支付宝退款", "支付宝收款", "支付宝支出")
         return when {
-            full.contains("退款") -> ParsedPayment(
-                amountFen, "income", extractMerchant(full) ?: "支付宝退款", "alipay",
-            )
+            full.contains("退款") -> {
+                val m = extractMerchant(full) ?: "支付宝退款"
+                ParsedPayment(amountFen, "income", m, "alipay", confFor(m, aliFallbacks, 0.8f))
+            }
             full.contains("成功收款") || full.contains("收款成功") ||
-                (full.contains("收款") && !full.contains("付款")) -> ParsedPayment(
-                amountFen, "income",
-                Regex("""来自\s*(\S{1,20})""").find(full)?.groupValues?.get(1) ?: extractMerchant(full) ?: "支付宝收款",
-                "alipay",
-            )
-            else -> ParsedPayment(
-                amountFen, "expense",
-                extractMerchant(full)
+                (full.contains("收款") && !full.contains("付款")) -> {
+                val m = Regex("""来自\s*(\S{1,20})""").find(full)?.groupValues?.get(1)
+                    ?: extractMerchant(full) ?: "支付宝收款"
+                ParsedPayment(amountFen, "income", m, "alipay", confFor(m, aliFallbacks, 0.85f))
+            }
+            else -> {
+                val m = extractMerchant(full)
                     ?: title.takeIf { it.isNotBlank() && !it.contains("支付宝") && it.length in 2..24 }
-                    ?: "支付宝支出",
-                "alipay",
-            )
+                    ?: "支付宝支出"
+                ParsedPayment(amountFen, "expense", m, "alipay", confFor(m, aliFallbacks, 0.9f))
+            }
         }
     }
 }

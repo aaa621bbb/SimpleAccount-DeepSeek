@@ -10,20 +10,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 记账 Agent 架构级循环（ReAct 风格）—— v2.31 架构重构版。
+ * 记账 Agent 架构级循环（ReAct 风格）—— v2.31.0。
  *
  * 管线职责：
- * - 撮合层：IntentGate → pickTools 收敛（无关 query 零 DB 往返、零工具挂载）
- * - 上下文管理层：[AgentContextBuilder] 检索式注入 + 摘要压缩 + 滑动截断，
- *   推理负载与会话长度解耦，长会话思考时延受控
- * - 模型后端层：[ModelBackendProvider] 可插拔（云端大模型 / 端侧小模型预留），
+ * - 撮合层：IntentGate → pickTools 收敛（无关 query 可不挂账本工具；模型仍可自主决策）
+ * - 上下文管理层：[AgentContextBuilder] 检索式注入 + 摘要压缩 + 滑动截断
+ * - 模型后端层：[ModelBackendProvider] 可插拔（云端大模型 / 端侧小模型），
  *   提示词按后端能力分 full/compact 两档（[AgentPromptBuilder]）
- * - 落库层：所有写操作经 [WriteGate] 用户确认后落库，回执以 rows_affected 为唯一依据；
- *   自洽校验拦截 fake-completion
- * - 可观测层：每次工具调用生成 [ToolExecutionRecord]（成功/失败、行数、权限、耗时），
- *   经 onTrace 实时展示，杜绝虚假完成与谎称无权
- * - 时间语义：时刻无依据不默认（[com.simpleaccount.app.util.SpokenTimeParser]），
- *   必须显式询问用户
+ * - 落库层：写操作按用户「执行授权」设置——每次确认 或 授权后自动执行；
+ *   回执以 rows_affected 为唯一依据，自洽校验拦截 fake-completion
+ * - 可观测层：每次工具调用生成 [ToolExecutionRecord]，杜绝虚假完成与谎称无权
+ * - 时间/金额语义：用户未明示不得臆测填充，必须先追问
  */
 @Singleton
 class AgentLoop @Inject constructor(
@@ -91,12 +88,12 @@ class AgentLoop @Inject constructor(
                 error.contains("connect", true) || error.contains("Unable to resolve", true)
     }
 
-    /**
-     * 按意图裁工具：无关 query 不挂账本工具，避免误打库。
-     * CHAT/NAV/MEMORY 各自收敛；LEDGER_* 按关键词精筛，绝不因 s.length>120 就全量挂载。
+/**
+     * 按意图裁工具：收敛 token，但 **不再对 CHAT 一刀切 emptyList**——
+     * 是否真正调用交由模型基于意图自主裁决（v2.31.0 可执行性优先）。
+     * CHAT 挂最小工具集（navigate + 只读摘要），模型可选择不用。
      */
     private fun pickTools(userMessage: String, intent: QueryIntent): List<AgentToolSpec> {
-        if (intent == QueryIntent.CHAT) return emptyList()
         val all = agentTools.specs
         val s = userMessage
         if (intent == QueryIntent.LEDGER_WRITE) {
@@ -105,10 +102,10 @@ class AgentLoop @Inject constructor(
                     "add_transaction", "withdraw_transaction", "delete_transaction",
                     "edit_transaction", "update_transaction_category", "reclassify_transactions",
                     "query_transactions", "list_merchants", "set_merchant_category",
+                    "create_category", "set_auto_record", "navigate",
                 )
             }
         }
-        // 长消息不直接回全量，仍按意图收敛以免 token 爆炸与空转 DB
         if (intent == QueryIntent.NAV) {
             return all.filter { it.name == "navigate" }
         }
@@ -127,14 +124,20 @@ class AgentLoop @Inject constructor(
             }
             if (Regex("体检|花哪|月报|环比|超支|预算|分析").containsMatchIn(s)) names += "get_insights"
             if (names.isEmpty()) names += setOf("get_summary", "get_insights", "get_category_totals")
-            // list_months 仅在可能需要核对月份时携带，不默认全量空转；其余情况按需调用
             if (Regex("月|月份|有没有数据|覆盖").containsMatchIn(s) || names.contains("get_summary")) {
                 names += "list_months"
             }
             return all.filter { it.name in names }
         }
-        // 回落兜底：LEDGER_READ 的最小可用集，不含写工具
-        return all.filter { it.name in setOf("get_summary", "get_insights", "list_months") }
+        // CHAT：挂只读 + 写账工具最小集，避免模型误以为「只能跳手动页」
+        // 含 reclassify，支持「商家+金额区间批量改分类」委托真正落库
+        return all.filter {
+            it.name in setOf(
+                "get_summary", "get_insights", "list_months", "navigate", "query_transactions",
+                "add_transaction", "reclassify_transactions", "update_transaction_category",
+                "edit_transaction", "delete_transaction", "withdraw_transaction",
+            )
+        }
     }
 
     private fun buildSnapshot(all: List<com.simpleaccount.app.data.entity.Transaction>): String {
@@ -184,16 +187,20 @@ class AgentLoop @Inject constructor(
         onReasoning: (String) -> Unit = {},
         onTrace: (String) -> Unit = {},
     ): AgentResult {
-        val backend = backends.current()
-        val enabled = settingsRepository.isAiEnabled()
-        if (!enabled) return AgentResult("", 0, "AI 功能未开启")
-        if (backend.id == SettingsRepository.BACKEND_CLOUD) {
+val backend = backends.current()
+        val onDevice = backend.id == SettingsRepository.BACKEND_ONDEVICE
+        // 端侧：模型就位即可用，不强制「AI 服务商」开关；云端仍需开启 + Key
+        if (!onDevice) {
+            if (!settingsRepository.isAiEnabled()) return AgentResult("", 0, "AI 功能未开启")
             val apiKey = settingsRepository.apiKey()
             if (apiKey.isBlank()) return AgentResult("", 0, "未配置 API Key")
         }
-        val intent = IntentGate.classify(userMessage)
+val intent = IntentGate.classify(userMessage)
         val writeFast = intent == QueryIntent.LEDGER_WRITE ||
+            IntentGate.isHighConfidenceSpend(userMessage) ||
             Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到|归类|归入|改分类|批量改").containsMatchIn(userMessage)
+        // 写操作授权：confirm=每次确认（默认）/ auto=授权后自动执行
+        val autoExecute = settingsRepository.isAgentAutoExecute()
         // 管线策略收敛过度思考：保留用户档位，写操作上限 LOW 而非一刀切 OFF
         val userLevel = settingsRepository.thinkingLevel()
         val thinkingLevel = if (writeFast) {
@@ -209,32 +216,37 @@ class AgentLoop @Inject constructor(
             if (backend.compactPrompt) it.take(8) else it
         }
         val cap = when (intent) {
-            QueryIntent.CHAT, QueryIntent.NAV -> 1
+            QueryIntent.CHAT, QueryIntent.NAV -> 2
             QueryIntent.LEDGER_WRITE -> maxOf(maxRounds, 4)
             else -> maxRounds
         }
 
         val messages = mutableListOf<ToolChatMessage>()
-        if (IntentGate.needsLedger(intent)) {
-            val allTx = accountRepository.getAll()
+        val needsLedgerCtx = IntentGate.needsLedger(intent) || intent == QueryIntent.NAV || intent == QueryIntent.MEMORY
+        if (needsLedgerCtx || intent == QueryIntent.CHAT) {
+            // CHAT 也允许可选注入轻量快照；强意图则完整快照
+            val allTx = if (IntentGate.needsLedger(intent)) {
+                settingsRepository.filterByLedgerScope(accountRepository.getAll())
+            } else emptyList()
             val coveredMonths = allTx.map { it.date.take(7) }.distinct().sorted()
-            val snapshot = buildSnapshot(allTx)
-            val memory = runCatching { memoryStore.injectForNewSession() }.getOrDefault("")
-            runCatching { memoryStore.maybeCaptureFromUser(userMessage) }
+            val snapshot = if (allTx.isNotEmpty()) buildSnapshot(allTx) else ""
+            val memory = if (IntentGate.needsLedger(intent)) {
+                runCatching { memoryStore.injectForNewSession() }.getOrDefault("")
+            } else ""
+            if (IntentGate.needsLedger(intent)) {
+                runCatching { memoryStore.maybeCaptureFromUser(userMessage) }
+            }
             val ledgerName = runCatching { ledgerRepository.getCurrent()?.name }.getOrNull() ?: "主账本"
-            val system = if (backend.compactPrompt) {
-                AgentPromptBuilder.systemCompact(coveredMonths, snapshot, ledgerName) + "\n\n" + memory
-            } else {
-                AgentPromptBuilder.systemFull(coveredMonths, snapshot, ledgerName) + "\n\n" + memory
+            val system = when {
+                IntentGate.needsLedger(intent) && backend.compactPrompt ->
+                    AgentPromptBuilder.systemCompact(coveredMonths, snapshot, ledgerName, autoExecute) + "\n\n" + memory
+                IntentGate.needsLedger(intent) ->
+                    AgentPromptBuilder.systemFull(coveredMonths, snapshot, ledgerName, autoExecute) + "\n\n" + memory
+                else -> AgentPromptBuilder.systemChatLite()
             }
             messages.add(ToolChatMessage("system", system))
         } else {
-            messages.add(
-                ToolChatMessage(
-                    "system",
-                    "你是记账 App 里的管家。用户这句和账本无关，直接简短回答，不要调用工具、不要编造账单数字。回答写成连贯段落，禁止一字一行。",
-                )
-            )
+            messages.add(ToolChatMessage("system", AgentPromptBuilder.systemChatLite()))
         }
         // 上下文管理层：检索式注入 + 摘要压缩 + 滑动截断（负载与会话长度解耦）
         val ctx = AgentContextBuilder.build(history, userMessage)
@@ -318,7 +330,8 @@ class AgentLoop @Inject constructor(
                     onTrace("✗ ${tc.name} 已拦截：检测到重复调用循环（未执行，未落库）")
                     check.message ?: "拦截：检测到重复调用循环，已阻止本轮执行，请直接基于已有信息回答。"
                 } else {
-                    val executed = agentTools.execute(tc)
+// 自动执行模式：跳过确认闸门直接落库；否则经 WriteGate 弹确认
+                    val executed = agentTools.execute(tc, confirmed = autoExecute)
                     if (executed.content.startsWith(AgentTools.NEED_CONFIRM_PREFIX)) {
                         val summary = executed.content.removePrefix(AgentTools.NEED_CONFIRM_PREFIX)
                         onTrace("⏳ ${tc.name} 待用户确认（确认闸门拦截，未落库）")

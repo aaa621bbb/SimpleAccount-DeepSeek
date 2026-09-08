@@ -99,15 +99,57 @@ class SettingsRepository @Inject constructor(
         const val HOME_SIMPLE = "simple"
         const val HOME_DENSE = "dense"
 
-        /** 模型后端：cloud 云端大模型 / ondevice 端侧小模型（预留）。 */
+/** 模型后端：cloud 云端大模型 / ondevice 端侧小模型。 */
         const val KEY_MODEL_BACKEND = "model_backend"
         const val BACKEND_CLOUD = "cloud"
         const val BACKEND_ONDEVICE = "ondevice"
 
-        /** 思考深度：off / low / medium / high */
+        /**
+         * 记账识别引擎模式（互斥/级联，由用户明确选择）：
+         * - api：仅云端 API Agent
+         * - ondevice：仅端侧模型
+         * - rules：仅本地规则（LocalAccountant / UtteranceParser）
+         * - api_rules：规则优先，吃不准再 API
+         * - ondevice_rules：规则优先，吃不准再端侧
+         */
+        const val KEY_ACCOUNTING_ENGINE = "accounting_engine"
+        const val ENGINE_API = "api"
+        const val ENGINE_ONDEVICE = "ondevice"
+        const val ENGINE_RULES = "rules"
+        const val ENGINE_API_RULES = "api_rules"
+        const val ENGINE_ONDEVICE_RULES = "ondevice_rules"
+
+        /**
+         * 智能体执行授权：
+         * - confirm：每次写操作前需用户确认（默认）
+         * - auto：授权后自动执行，写工具直接落库
+         */
+        const val KEY_AGENT_EXEC_AUTH = "agent_exec_auth"
+        const val EXEC_AUTH_CONFIRM = "confirm"
+        const val EXEC_AUTH_AUTO = "auto"
+
+        /** 最近活跃的 AI 会话 id（退出后自动续接） */
+        const val KEY_LAST_CONVERSATION_ID = "last_conversation_id"
+
+        /** 端侧模型：当前启用的本地模型 id（目录名） */
+        const val KEY_ONDEVICE_MODEL_ID = "ondevice_model_id"
+
+        /**
+         * 收支口径：退款/投资分红/投资支出是否计入流水统计与预算。
+         * 默认均计入（true）；用户可逐项关闭。
+         */
+        const val KEY_INCLUDE_REFUND = "include_refund_in_stats"
+        const val KEY_INCLUDE_INVEST_DIVIDEND = "include_invest_dividend_in_stats"
+        const val KEY_INCLUDE_INVEST_EXPENSE = "include_invest_expense_in_stats"
+
+        /** 统计页是否展开「高级分析」（频次/结构演进/帕累托等默认折叠） */
+        const val KEY_STATS_ADVANCED_OPEN = "stats_advanced_open"
+
+        /** 日期 / 时间选择器样式 */
         const val KEY_DATE_PICKER = "date_picker_style"
         const val KEY_TIME_PICKER = "time_picker_style"
 
+        /** 思考深度：off / low / medium / high */
         const val KEY_THINKING_LEVEL = "thinking_level"
         const val THINKING_OFF = "off"
         const val THINKING_LOW = "low"
@@ -265,7 +307,7 @@ class SettingsRepository @Inject constructor(
         _homeLayout.value = norm
     }
 
-    // ---------------- 智能体模型后端（云端/端侧预留） ----------------
+    // ---------------- 智能体模型后端（云端/端侧） ----------------
 
     private val _modelBackend = MutableStateFlow(modelBackend())
     val modelBackendFlow: StateFlow<String> = _modelBackend.asStateFlow()
@@ -279,6 +321,157 @@ class SettingsRepository @Inject constructor(
         val norm = if (v == BACKEND_ONDEVICE) BACKEND_ONDEVICE else BACKEND_CLOUD
         setSetting(KEY_MODEL_BACKEND, norm)
         _modelBackend.value = norm
+    }
+
+    // ---------------- 记账识别引擎模式 ----------------
+
+    private val _accountingEngine = MutableStateFlow(accountingEngine())
+    val accountingEngineFlow: StateFlow<String> = _accountingEngine.asStateFlow()
+
+    fun accountingEngine(): String {
+        val v = readSetting(KEY_ACCOUNTING_ENGINE)
+        return when (v) {
+            ENGINE_API, ENGINE_ONDEVICE, ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> v
+            else -> {
+                // 兼容旧 model_backend：端侧 → ondevice_rules；云端 → api_rules
+                if (modelBackend() == BACKEND_ONDEVICE) ENGINE_ONDEVICE_RULES else ENGINE_API_RULES
+            }
+        }
+    }
+
+    suspend fun setAccountingEngine(v: String) {
+        val norm = when (v) {
+            ENGINE_API, ENGINE_ONDEVICE, ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> v
+            else -> ENGINE_API_RULES
+        }
+        setSetting(KEY_ACCOUNTING_ENGINE, norm)
+        _accountingEngine.value = norm
+        // 同步 model_backend，供既有 AgentLoop / OnDevice 路径读取
+        val backend = when (norm) {
+            ENGINE_ONDEVICE, ENGINE_ONDEVICE_RULES -> BACKEND_ONDEVICE
+            else -> BACKEND_CLOUD
+        }
+        setModelBackend(backend)
+    }
+
+    /** 当前模式是否允许规则引擎先吃。 */
+    fun engineAllowsRules(): Boolean = when (accountingEngine()) {
+        ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> true
+        else -> false
+    }
+
+    /** 当前模式是否允许模型（API 或端侧）兜底。 */
+    fun engineAllowsModel(): Boolean = accountingEngine() != ENGINE_RULES
+
+    /** 当前模式是否走端侧（纯端侧或端侧×规则）。 */
+    fun engineUsesOnDevice(): Boolean = when (accountingEngine()) {
+        ENGINE_ONDEVICE, ENGINE_ONDEVICE_RULES -> true
+        else -> false
+    }
+
+    // ---------------- 智能体执行授权（每次确认 / 授权后自动执行） ----------------
+
+    private val _agentExecAuth = MutableStateFlow(agentExecAuth())
+    val agentExecAuthFlow: StateFlow<String> = _agentExecAuth.asStateFlow()
+
+    fun agentExecAuth(): String {
+        val v = readSetting(KEY_AGENT_EXEC_AUTH)
+        return if (v == EXEC_AUTH_AUTO) EXEC_AUTH_AUTO else EXEC_AUTH_CONFIRM
+    }
+
+    /** 是否授权后自动执行写操作（跳过确认卡片）。默认 false=每次确认。 */
+    fun isAgentAutoExecute(): Boolean = agentExecAuth() == EXEC_AUTH_AUTO
+
+    suspend fun setAgentExecAuth(v: String) {
+        val norm = if (v == EXEC_AUTH_AUTO) EXEC_AUTH_AUTO else EXEC_AUTH_CONFIRM
+        setSetting(KEY_AGENT_EXEC_AUTH, norm)
+        _agentExecAuth.value = norm
+    }
+
+    // ---------------- 会话续接：记住最近活跃会话 ----------------
+
+    fun lastConversationId(): String = readSetting(KEY_LAST_CONVERSATION_ID).orEmpty()
+
+    suspend fun setLastConversationId(id: String) {
+        setSetting(KEY_LAST_CONVERSATION_ID, id)
+    }
+
+    // ---------------- 端侧模型选择 ----------------
+
+    fun onDeviceModelId(): String = readSetting(KEY_ONDEVICE_MODEL_ID).orEmpty()
+
+    suspend fun setOnDeviceModelId(id: String) {
+        setSetting(KEY_ONDEVICE_MODEL_ID, id)
+    }
+
+    // ---------------- 收支口径（退款 / 投资是否计入流水） ----------------
+
+    /** 退款是否计入统计与预算（默认 true）。 */
+    fun includeRefund(): Boolean = readSetting(KEY_INCLUDE_REFUND) != "false"
+    suspend fun setIncludeRefund(v: Boolean) {
+        setSetting(KEY_INCLUDE_REFUND, v.toString())
+        bumpLedgerScope()
+    }
+
+    /** 投资分红是否计入收入统计（默认 true）。 */
+    fun includeInvestDividend(): Boolean = readSetting(KEY_INCLUDE_INVEST_DIVIDEND) != "false"
+    suspend fun setIncludeInvestDividend(v: Boolean) {
+        setSetting(KEY_INCLUDE_INVEST_DIVIDEND, v.toString())
+        bumpLedgerScope()
+    }
+
+    /** 投资支出是否计入支出统计（默认 true）。 */
+    fun includeInvestExpense(): Boolean = readSetting(KEY_INCLUDE_INVEST_EXPENSE) != "false"
+    suspend fun setIncludeInvestExpense(v: Boolean) {
+        setSetting(KEY_INCLUDE_INVEST_EXPENSE, v.toString())
+        bumpLedgerScope()
+    }
+
+    /** 口径变更版本号，供首页/统计 combine 触发重算。 */
+    private val _ledgerScopeVersion = MutableStateFlow(0)
+    val ledgerScopeVersionFlow: StateFlow<Int> = _ledgerScopeVersion.asStateFlow()
+    private fun bumpLedgerScope() {
+        _ledgerScopeVersion.value = _ledgerScopeVersion.value + 1
+    }
+
+    /**
+     * 统计口径过滤器：
+     * 1) 草稿（SOURCE_DRAFT）永不计入统计/预算；
+     * 2) 按用户开关剔除退款/投资类流水。
+     */
+    fun filterByLedgerScope(txs: List<com.simpleaccount.app.data.entity.Transaction>): List<com.simpleaccount.app.data.entity.Transaction> {
+        val keepRefund = includeRefund()
+        val keepDiv = includeInvestDividend()
+        val keepInvExp = includeInvestExpense()
+        return txs.filter { t ->
+            if (t.source == com.simpleaccount.app.data.entity.Transaction.SOURCE_DRAFT) return@filter false
+            if (keepRefund && keepDiv && keepInvExp) return@filter true
+            val cat = t.category
+            val product = t.product
+            val note = t.note
+            val isRefund = cat == "退款" || product.contains("退款") || note.contains("退款") ||
+                t.merchant.contains("退款")
+            val isDiv = cat == "投资" && t.type == com.simpleaccount.app.data.entity.Transaction.TYPE_INCOME
+            val isInvExp = cat == "投资" && t.type == com.simpleaccount.app.data.entity.Transaction.TYPE_EXPENSE
+            when {
+                isRefund && !keepRefund -> false
+                isDiv && !keepDiv -> false
+                isInvExp && !keepInvExp -> false
+                else -> true
+            }
+        }
+    }
+
+    // ---------------- 统计高级分析展开 ----------------
+
+    private val _statsAdvancedOpen = MutableStateFlow(statsAdvancedOpen())
+    val statsAdvancedOpenFlow: StateFlow<Boolean> = _statsAdvancedOpen.asStateFlow()
+
+    fun statsAdvancedOpen(): Boolean = readSetting(KEY_STATS_ADVANCED_OPEN) == "true"
+
+    suspend fun setStatsAdvancedOpen(open: Boolean) {
+        setSetting(KEY_STATS_ADVANCED_OPEN, open.toString())
+        _statsAdvancedOpen.value = open
     }
 
     // ---------------- 每月预算 ----------------

@@ -56,9 +56,13 @@ class AgentRegressionTest {
             "帮我记一笔 15 元",
             "批量把这 500 笔改到居住",
             "撤回刚才那笔",
+            // v2.31.1：时间+商户+消费动词，无金额也应高置信写意图
+            "今天上午9:25在蜜雪冰城买了个雪糕",
+            "昨天在瑞幸点了杯拿铁",
         )
         cases.forEach { q ->
-            assertEquals(QueryIntent.LEDGER_WRITE, IntentGate.classify(q))
+            assertEquals("「$q」应为 LEDGER_WRITE", QueryIntent.LEDGER_WRITE, IntentGate.classify(q))
+            assertTrue(IntentGate.isHighConfidenceSpend(q) || IntentGate.classify(q) == QueryIntent.LEDGER_WRITE)
         }
     }
 
@@ -91,7 +95,7 @@ class AgentRegressionTest {
         assertTrue(true)
     }
 
-    @Test
+@Test
     fun rowsAffected_verifiable() {
         // 500 条批量后抽查：reclassify 返回必须含 rows_affected 与核验
         // 此为契约测试：保证 AgentTools.reclassifyTransactions 的返回格式稳定
@@ -99,5 +103,4 @@ class AgentRegressionTest {
         assertTrue(Regex("rows_affected=\\d+").containsMatchIn(sampleReturn))
         assertTrue(sampleReturn.contains("【账本已核验】"))
     }
-
-
+}

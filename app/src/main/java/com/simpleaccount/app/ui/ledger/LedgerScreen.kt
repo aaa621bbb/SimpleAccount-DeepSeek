@@ -159,7 +159,8 @@ fun LedgerScreen(
                     categories = cats,
                     selected = filter.categories,
                     onDismiss = { showCat = false },
-                    onConfirm = { viewModel.setCategories(it) }
+                    onConfirm = { viewModel.setCategories(it) },
+                    subByParent = state.subByParent,
                 )
             }
 

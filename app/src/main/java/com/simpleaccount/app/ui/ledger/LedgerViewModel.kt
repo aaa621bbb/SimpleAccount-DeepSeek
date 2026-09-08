@@ -26,6 +26,7 @@ import javax.inject.Inject
 /**
  * 多值布尔筛选：同一维度内 OR，维度之间 AND。
  * 例：月份={6月,8月} ∧ 分类={餐饮,交通} ∧ 类型=支出。
+ * categories 可含一级名，或「一级/二级」粒度键。
  */
 data class LedgerFilter(
     val months: Set<String> = emptySet(),
@@ -48,6 +49,16 @@ data class LedgerFilter(
         categories.size == 1 -> categories.first()
         else -> "${categories.size} 个分类"
     }
+
+    /** 账单是否命中分类筛选（一级 或 一级/二级）。 */
+    fun matchesCategory(t: Transaction): Boolean {
+        if (categories.isEmpty()) return true
+        val dim = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+        if (dim in categories) return true
+        if (t.category in categories) return true
+        // 选了「餐饮/早餐」时不匹配其它二级；选「餐饮」匹配该一级全部
+        return false
+    }
 }
 
 data class LedgerMonthGroup(
@@ -61,6 +72,8 @@ data class LedgerUiState(
     val filter: LedgerFilter,
     val months: List<String> = DateUtil.recentMonths(12),
     val categories: List<Category> = emptyList(),
+    /** 一级名 → 二级名列表（供筛选面板） */
+    val subByParent: Map<String, List<String>> = emptyMap(),
     val rows: List<RowUi> = emptyList(),
     val groups: List<LedgerMonthGroup> = emptyList(),
     val sortByAmount: Boolean = false,
@@ -72,6 +85,7 @@ data class LedgerUiState(
 class LedgerViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val categoryRepository: CategoryRepository,
+    private val subCategoryRepository: com.simpleaccount.app.data.repository.SubCategoryRepository,
     settingsRepository: com.simpleaccount.app.data.repository.SettingsRepository,
 ) : ViewModel() {
 
@@ -82,6 +96,7 @@ class LedgerViewModel @Inject constructor(
     val filter: StateFlow<LedgerFilter> = _filter.asStateFlow()
 
     private val categoriesFlow = categoryRepository.observeAll()
+    private val subsFlow = subCategoryRepository.observeAll()
 
     private val allMonthsFlow = accountRepository.observeAll()
         .map { list -> list.map { it.date.take(7) }.distinct().sortedDescending() }
@@ -97,7 +112,8 @@ class LedgerViewModel @Inject constructor(
             accountRepository.observeAll(),
             categoriesFlow,
             allMonthsFlow,
-            _filter.debounce(160).distinctUntilChanged(),
+            // 筛选即时生效：短 debounce 防抖，不点「确定」
+            _filter.debounce(80).distinctUntilChanged(),
             amountSortFlow,
         ) { all, cats, allMonths, f, byAmount ->
             val catMap = cats.associateBy { it.name }
@@ -105,12 +121,13 @@ class LedgerViewModel @Inject constructor(
             val matched = all.filter { t ->
                 (f.type == null || t.type == f.type) &&
                     (f.months.isEmpty() || t.date.take(7) in f.months) &&
-                    (f.categories.isEmpty() || t.category in f.categories) &&
+                    f.matchesCategory(t) &&
                     (q.isEmpty() ||
                         t.merchant.contains(q, true) ||
                         t.product.contains(q, true) ||
                         t.note.contains(q, true) ||
-                        t.category.contains(q, true))
+                        t.category.contains(q, true) ||
+                        t.subCategory.contains(q, true))
             }
             val base = if (byAmount) {
                 matched.sortedWith(
@@ -130,6 +147,7 @@ class LedgerViewModel @Inject constructor(
                     var exp = 0L
                     var inc = 0L
                     list.forEach { row ->
+                        if (row.transaction.source == Transaction.SOURCE_DRAFT) return@forEach
                         when (row.transaction.type) {
                             Transaction.TYPE_EXPENSE -> exp += row.transaction.amount
                             Transaction.TYPE_INCOME -> inc += row.transaction.amount
@@ -137,10 +155,18 @@ class LedgerViewModel @Inject constructor(
                     }
                     LedgerMonthGroup(m, list, exp, inc)
                 }
+            // 二级列表由另一流合并；此处先空，下方 combine 补
             LedgerUiState(
                 filter = f, months = allMonths, categories = cats,
                 rows = rows, groups = groups, sortByAmount = byAmount, loading = false,
             )
+        }.let { baseFlow ->
+            combine(baseFlow, subsFlow) { state, subs ->
+                state.copy(
+                    subByParent = subs.groupBy { it.parent }
+                        .mapValues { e -> e.value.sortedBy { it.sortOrder }.map { it.name } },
+                )
+            }
         }
             .flowOn(kotlinx.coroutines.Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LedgerUiState(filter = LedgerFilter()))

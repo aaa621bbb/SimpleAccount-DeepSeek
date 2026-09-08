@@ -241,8 +241,10 @@ fun CalendarCard(viewModel: StatsViewModel, state: StatsUiState) {
                                         .background(parseColor(state.categoryColorMap[t.category] ?: "#BDC3C7"))
                                 )
                                 Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(t.category, style = MaterialTheme.typography.bodyMedium)
+Column(Modifier.weight(1f)) {
+                                    val catLabel = if (t.subCategory.isNotBlank())
+                                        "${t.category}/${t.subCategory}" else t.category
+                                    Text(catLabel, style = MaterialTheme.typography.bodyMedium)
                                     val detail = listOf(t.merchant, t.product)
                                         .filter { it.isNotBlank() }
                                         .joinToString(" · ")

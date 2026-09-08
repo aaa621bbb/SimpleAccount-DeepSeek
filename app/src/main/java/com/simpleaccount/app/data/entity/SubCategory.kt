@@ -25,4 +25,6 @@ data class SubCategory(
     val sortOrder: Int = 0,
     /** 是否为预置二级分类（预置可删——二级不锁死，删后由用户自建）。 */
     val isPreset: Boolean = false,
+    /** Material 图标名（与 [Category.iconName] 同一套 IconMapper）。 */
+    val iconName: String = "more_horiz",
 )

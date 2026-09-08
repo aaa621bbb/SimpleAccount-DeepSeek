@@ -38,7 +38,7 @@ data class Transaction(
     val merchantOrderNo: String = "",
     /** 所属账本。默认主账本，查询/AI 都按当前账本隔离。 */
     val ledgerId: Long = 1L,
-    /** "manual" 手动 | "import" 导入 | "auto" 无感记账自动抓取 */
+/** "manual" 手动 | "import" 导入 | "auto" 无感记账 | "draft" 待确认草稿 */
     val source: String,
     /** 导入批次 ID，手动记录为 null */
     val importBatchId: String? = null,
@@ -51,7 +51,13 @@ data class Transaction(
         const val SOURCE_MANUAL = "manual"
         const val SOURCE_IMPORT = "import"
 
-        /** 无感记账自动抓取（通知监听） */
+/** 无感记账自动抓取（通知监听，已确认入账） */
         const val SOURCE_AUTO = "auto"
+
+        /**
+         * 待确认草稿：低置信解析或「每次确认」执行授权下，
+         * 不计入统计/预算，等用户确认后升为 SOURCE_AUTO 或 SOURCE_MANUAL。
+         */
+        const val SOURCE_DRAFT = "draft"
     }
 }
