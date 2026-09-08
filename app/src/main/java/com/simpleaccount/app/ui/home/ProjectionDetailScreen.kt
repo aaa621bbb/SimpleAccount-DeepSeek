@@ -56,23 +56,38 @@ class ProjectionDetailViewModel @Inject constructor(
 
     fun load() {
         viewModelScope.launch {
-            val month = DateUtil.thisMonth()
-            val all = settingsRepository.filterByLedgerScope(accountRepository.getAll())
-            val monthTx = all.filter {
-                it.date.startsWith(month) && it.source != Transaction.SOURCE_DRAFT
+            breakdown = runCatching {
+                val month = DateUtil.thisMonth()
+                val all = runCatching {
+                    settingsRepository.filterByLedgerScope(accountRepository.getAll())
+                }.getOrElse {
+                    accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }
+                }
+                val monthTx = all.filter { it.date.startsWith(month) }
+                val day = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
+                val days = java.time.YearMonth.now().lengthOfMonth()
+                InsightsEngine.projectMonthEndBreakdown(
+                    monthTx = monthTx,
+                    dayOfMonth = day,
+                    daysInMonth = days,
+                    month = month,
+                    budgetFen = runCatching { settingsRepository.monthlyBudget() }.getOrDefault(0L),
+                    includeRefund = runCatching { settingsRepository.includeRefund() }.getOrDefault(true),
+                    includeInvestIncome = runCatching { settingsRepository.includeInvestDividend() }.getOrDefault(true),
+                    includeInvestExpense = runCatching { settingsRepository.includeInvestExpense() }.getOrDefault(true),
+                )
+            }.getOrElse { e ->
+                InsightsEngine.ProjectionBreakdown(
+                    month = DateUtil.thisMonth(),
+                    dayOfMonth = java.time.LocalDate.now().dayOfMonth,
+                    daysInMonth = java.time.YearMonth.now().lengthOfMonth(),
+                    spentFen = 0, oneShotFen = 0, recurringSpentFen = 0, recurringProjectedFen = 0,
+                    projectedFen = 0, budgetFen = 0,
+                    includeRefund = true, includeInvestIncome = true, includeInvestExpense = true,
+                    clusters = emptyList(),
+                    formula = "测算暂不可用：${e.message ?: e.javaClass.simpleName}",
+                )
             }
-            val day = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
-            val days = java.time.YearMonth.now().lengthOfMonth()
-            breakdown = InsightsEngine.projectMonthEndBreakdown(
-                monthTx = monthTx,
-                dayOfMonth = day,
-                daysInMonth = days,
-                month = month,
-                budgetFen = settingsRepository.monthlyBudget(),
-                includeRefund = settingsRepository.includeRefund(),
-                includeInvestIncome = settingsRepository.includeInvestDividend(),
-                includeInvestExpense = settingsRepository.includeInvestExpense(),
-            )
         }
     }
 }

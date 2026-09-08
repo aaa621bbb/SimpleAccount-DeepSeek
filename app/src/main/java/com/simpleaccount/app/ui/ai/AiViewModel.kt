@@ -471,20 +471,25 @@ fun switchTo(conversationId: String) {
             return
         }
         val totalSec = ((System.currentTimeMillis() - startedAt) / 1000.0)
-        val elapsedFooter = if (totalSec >= 0.5) {
+        // 耗时挂在「思考过程」旁，不进回答末尾
+        val elapsedLabel = if (totalSec >= 0.5) {
             val toolHint = if (result.toolRounds > 0) " · ${result.toolRounds} 轮工具" else ""
-            "\n\n—— 总耗时 ${"%.1f".format(totalSec)}s（推理+工具$toolHint）"
-        } else ""
+            "总耗时 ${"%.1f".format(totalSec)}s（推理+工具$toolHint）"
+        } else null
         if (result.error != null) {
+            val packedErr = com.simpleaccount.app.ui.components.packCot(
+                result.error, null, elapsedLabel,
+            )
             conversationManager.addMessage(
-                conversationId, AiMessage.ROLE_ASSISTANT, result.error + elapsedFooter,
+                conversationId, AiMessage.ROLE_ASSISTANT, packedErr,
                 status = AiMessage.STATUS_ERROR
             )
             _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, error = result.error, reasoning = null)
         } else {
             val packed = com.simpleaccount.app.ui.components.packCot(
-                result.reply.ifBlank { "（模型未返回内容）" } + elapsedFooter,
+                result.reply.ifBlank { "（模型未返回内容）" },
                 _state.value.reasoning,
+                elapsedLabel,
             )
             conversationManager.addMessage(
                 conversationId, AiMessage.ROLE_ASSISTANT, packed

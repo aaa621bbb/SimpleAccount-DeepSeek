@@ -140,7 +140,7 @@ private fun CatCell(cat: Category?, label: String, selected: Boolean, onClick: (
     }
 }
 
-/** 多选月份：同一维度 OR。空集 = 全部。 */
+/** 多选月份：点选即时回调，无需「确定」。空集 = 全部。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MultiMonthPickerSheet(
@@ -149,27 +149,30 @@ fun MultiMonthPickerSheet(
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
 ) {
-    var pick by remember { mutableStateOf(selected) }
+    // 受控：外部 selected 变化同步；点选立刻 onConfirm
     ModalBottomSheet(onDismissRequest = onDismiss) {
         androidx.compose.foundation.layout.Column(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("月份（可多选）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { pick = emptySet() }) { Text("全部") }
-                TextButton(onClick = { onConfirm(pick); onDismiss() }) { Text("确定") }
+                Text("月份（点选即时生效）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onConfirm(emptySet()) }) { Text("全部") }
+                TextButton(onClick = onDismiss) { Text("完成") }
             }
-            Text("点选多个月份取并集。和分类交叉时是「这些月里的这些类」。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("点选即筛选，无需再点确定。多选取并集。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
             months.chunked(3).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { m ->
-                        val sel = m in pick
+                        val sel = m in selected
                         Box(
                             Modifier.weight(1f).height(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { pick = if (sel) pick - m else pick + m },
+                                .clickable {
+                                    val next = if (sel) selected - m else selected + m
+                                    onConfirm(next)
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(m, color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
@@ -183,7 +186,10 @@ fun MultiMonthPickerSheet(
     }
 }
 
-/** 多选分类：同一维度 OR。空集 = 全部。 */
+/**
+ * 多选分类：支持一级 + 二级（键为「一级」或「一级/二级」）。
+ * 点选即时 onConfirm，无需确定。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MultiCategoryPickerSheet(
@@ -191,28 +197,100 @@ fun MultiCategoryPickerSheet(
     selected: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
+    /** 一级名 → 二级名列表；空则仅一级 */
+    subByParent: Map<String, List<String>> = emptyMap(),
 ) {
-    var pick by remember { mutableStateOf(selected) }
+    var openParent by remember { mutableStateOf<String?>(null) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         androidx.compose.foundation.layout.Column(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("分类（可多选）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { pick = emptySet() }) { Text("全部") }
-                TextButton(onClick = { onConfirm(pick); onDismiss() }) { Text("确定") }
+                Text("分类（点选即时生效）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onConfirm(emptySet()) }) { Text("全部") }
+                TextButton(onClick = onDismiss) { Text("完成") }
             }
+            Text("一级可整类筛选；点 › 展开二级，点二级按「一级/二级」粒度筛。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
-                modifier = Modifier.height(360.dp),
+                modifier = Modifier.height(280.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(categories, key = { it.id }) { c ->
-                    CatCell(c, c.name, c.name in pick) {
-                        pick = if (c.name in pick) pick - c.name else pick + c.name
+                    val sel = c.name in selected || selected.any { it.startsWith("${c.name}/") }
+                    val hasSub = subByParent[c.name].orEmpty().isNotEmpty()
+                    Box {
+                        CatCell(c, c.name, sel) {
+                            // 点一级：选中/取消一级；取消时清掉其下二级键
+                            val next = if (c.name in selected) {
+                                selected - c.name - selected.filter { it.startsWith("${c.name}/") }.toSet()
+                            } else {
+                                (selected - selected.filter { it.startsWith("${c.name}/") }.toSet()) + c.name
+                            }
+                            onConfirm(next)
+                        }
+                        if (hasSub) {
+                            Text(
+                                if (openParent == c.name) "˅" else "›",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 12.sp,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .clickable {
+                                        openParent = if (openParent == c.name) null else c.name
+                                    }
+                                    .padding(2.dp),
+                            )
+                        }
                     }
+                }
+            }
+            val subs = openParent?.let { subByParent[it].orEmpty() }.orEmpty()
+            if (openParent != null && subs.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "「$openParent」二级（点选即时生效）",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                subs.chunked(4).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { sub ->
+                            val key = "$openParent/$sub"
+                            val sel = key in selected
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (sel) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                    .clickable {
+                                        // 选二级时去掉对应一级整类键，避免重复
+                                        val base = selected - openParent!!
+                                        val next = if (sel) base - key else base + key
+                                        onConfirm(next)
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    sub,
+                                    color = if (sel) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                    Spacer(Modifier.height(6.dp))
                 }
             }
         }

@@ -279,19 +279,21 @@ private fun PieCard(
     onCollapse: () -> Unit,
     onCategory: (String) -> Unit,
 ) {
+    // 已展开二级的一级分类名
+    var openParents by remember { mutableStateOf(setOf<String>()) }
     SoftCard(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
-Text(
-            "分类构成（含二级）",
+        Text(
+            "分类构成",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 18.dp, top = 12.dp)
         )
         Text(
-            "有二级分类时按「一级/二级」统计，否则按一级。点条目可看对应账单。",
+            "一级占比；点右侧 › 展开二级，再点二级看账单明细。",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 18.dp, bottom = 4.dp)
@@ -330,9 +332,31 @@ Text(
                         showAll || preview == 0 -> state.slices
                         else -> state.slices.take(preview)
                     }
-                    Column(Modifier.height((shown.size * 48).dp)) {
-                        shown.forEach { s ->
-                            PieLegendRow(s, state.total) { onCategory(s.categoryName) }
+                    shown.forEach { s ->
+                        val open = s.categoryName in openParents
+                        PieLegendRow(
+                            s = s,
+                            total = state.total,
+                            hasChildren = s.children.isNotEmpty(),
+                            childrenOpen = open,
+                            onToggleChildren = {
+                                openParents = if (open) openParents - s.categoryName
+                                else openParents + s.categoryName
+                            },
+                            onClick = { onCategory(s.categoryName) },
+                        )
+                        if (open && s.children.isNotEmpty()) {
+                            s.children.forEach { child ->
+                                PieLegendRow(
+                                    s = child,
+                                    total = state.total,
+                                    hasChildren = false,
+                                    childrenOpen = false,
+                                    indented = true,
+                                    onToggleChildren = {},
+                                    onClick = { onCategory(child.categoryName) },
+                                )
+                            }
                         }
                     }
                     Row(
@@ -345,7 +369,10 @@ Text(
                             }
                         }
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onCollapse) {
+                        TextButton(onClick = {
+                            openParents = emptySet()
+                            onCollapse()
+                        }) {
                             Text("收起", fontSize = 13.sp)
                         }
                     }
@@ -356,21 +383,33 @@ Text(
 }
 
 @Composable
-private fun PieLegendRow(s: PieSlice, total: Long, onClick: () -> Unit) {
+private fun PieLegendRow(
+    s: PieSlice,
+    total: Long,
+    hasChildren: Boolean = false,
+    childrenOpen: Boolean = false,
+    indented: Boolean = false,
+    onToggleChildren: () -> Unit = {},
+    onClick: () -> Unit,
+) {
     val percent = if (total > 0) s.value.toFloat() / total else 0f
     Column(
         Modifier
             .fillMaxWidth()
-            .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp, horizontal = 2.dp)
+            .padding(start = if (indented) 18.dp else 0.dp)
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).clip(CircleShape).background(parseColor(s.colorHex)))
             Spacer(Modifier.width(10.dp))
-            Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.weight(1f))
+            Text(
+                if (indented && s.isSub) s.categoryName.substringAfter('/') else s.categoryName,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
             Text(
                 "%.0f%%".format(percent * 100),
                 style = MaterialTheme.typography.bodySmall,
@@ -382,6 +421,19 @@ private fun PieLegendRow(s: PieSlice, total: Long, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold
             )
+            if (hasChildren) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (childrenOpen) "˅" else "›",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onToggleChildren)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         Box(

@@ -249,7 +249,12 @@ class AddTransactionViewModel @Inject constructor(
         }
         val maxOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1
         subCategoryRepository.add(
-            com.simpleaccount.app.data.entity.SubCategory(parent = parent, name = trimmed, sortOrder = maxOrder)
+            com.simpleaccount.app.data.entity.SubCategory(
+                parent = parent,
+                name = trimmed,
+                sortOrder = maxOrder,
+                iconName = com.simpleaccount.app.util.SubCategoryPresets.iconFor(trimmed),
+            )
         )
         refreshSubs()
         onSubCategorySelect(trimmed)

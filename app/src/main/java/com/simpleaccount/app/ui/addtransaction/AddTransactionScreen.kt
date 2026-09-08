@@ -203,6 +203,15 @@ Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             FilterChip(
                                 selected = selected,
                                 onClick = { vm.onSubCategorySelect(sub.name) },
+                                leadingIcon = {
+                                    Icon(
+                                        com.simpleaccount.app.util.IconMapper.map(
+                                            sub.iconName.ifBlank { "more_horiz" }
+                                        ),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
                                 label = { Text(sub.name) },
                                 modifier = Modifier.padding(end = 8.dp)
                             )
@@ -446,6 +455,15 @@ private fun CategoryInPlaceSheet(
                                     FilterChip(
                                         selected = selectedSub == sub.name,
                                         onClick = { onSelectSub(sub.name) },
+                                        leadingIcon = {
+                                            Icon(
+                                                com.simpleaccount.app.util.IconMapper.map(
+                                                    sub.iconName.ifBlank { "more_horiz" }
+                                                ),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        },
                                         label = { Text(sub.name) },
                                     )
                                     Spacer(Modifier.weight(1f))

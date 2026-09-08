@@ -20,13 +20,17 @@ import javax.inject.Inject
 /** 趋势点 */
 data class TrendPoint(val month: String, val expense: Long, val income: Long)
 
-/** 饼图扇区（categoryName 可为「一级」或「一级/二级」） */
+/** 饼图扇区：默认一级；展开后可挂二级 children。 */
 data class PieSlice(
     val categoryName: String,
     val colorHex: String,
     val value: Long,
     /** 一级分类名（用于取色与点选） */
     val parentCategory: String = categoryName.substringBefore('/'),
+    /** 二级扇区（仅一级聚合行有值） */
+    val children: List<PieSlice> = emptyList(),
+    /** 是否为二级行 */
+    val isSub: Boolean = categoryName.contains('/'),
 )
 
 /** 日历某天的收支合计 */
@@ -141,7 +145,7 @@ private fun computeStats(
         val months = txs.map { it.date.take(7) }.distinct().sortedDescending()
             .ifEmpty { DateUtil.recentMonths(12) }
 
-        // 饼图 & 总数：二级分类维度（有二级用 一级/二级，无二级退回一级）
+        // 饼图：一级为主；每项挂二级 children 供图例展开下钻
         val colorMap = cats.associate { it.name to it.colorHex }
         val filtered = when {
             month == "all" -> txs.filter { it.type == type }
@@ -149,13 +153,45 @@ private fun computeStats(
         }
         fun dimKey(t: Transaction): String =
             if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
-        val byCat = filtered.groupBy { dimKey(it) }
+        // 一级聚合
+        val byParent = filtered.groupBy { it.category }
             .mapValues { (_, list) -> list.sumOf { it.amount } }
             .toList()
             .sortedByDescending { it.second }
-        val slices = byCat.map { (cat, total) ->
-            val parent = cat.substringBefore('/')
-            PieSlice(cat, colorMap[parent] ?: "#BDC3C7", total, parent)
+        val slices = byParent.map { (parent, parentTotal) ->
+            val subs = filtered.filter { it.category == parent && it.subCategory.isNotBlank() }
+                .groupBy { it.subCategory }
+                .mapValues { it.value.sumOf { t -> t.amount } }
+                .toList()
+                .sortedByDescending { it.second }
+                .map { (sub, amt) ->
+                    PieSlice(
+                        categoryName = "$parent/$sub",
+                        colorHex = colorMap[parent] ?: "#BDC3C7",
+                        value = amt,
+                        parentCategory = parent,
+                        isSub = true,
+                    )
+                }
+            // 无二级的金额并入「未细分」
+            val unsub = filtered.filter { it.category == parent && it.subCategory.isBlank() }
+                .sumOf { it.amount }
+            val children = if (unsub > 0 && subs.isNotEmpty()) {
+                subs + PieSlice(
+                    categoryName = parent,
+                    colorHex = colorMap[parent] ?: "#BDC3C7",
+                    value = unsub,
+                    parentCategory = parent,
+                    isSub = false,
+                )
+            } else subs
+            PieSlice(
+                categoryName = parent,
+                colorHex = colorMap[parent] ?: "#BDC3C7",
+                value = parentTotal,
+                parentCategory = parent,
+                children = children,
+            )
         }
         val total = filtered.sumOf { it.amount }
 
@@ -194,11 +230,20 @@ calDayTx.getOrPut(day) { mutableListOf() }.add(
             calMonthNum = calMonth.monthValue,
             calDayTotals = calDayTotals,
             calDayTx = calDayTx,
-            // 明细按二级维度键索引（一级/二级 或 一级）
-            catTx = filtered.groupBy { dimKey(it) }.mapValues { (_, list) ->
-                list.sortedByDescending { it.date }.map {
-                    CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date, it.subCategory)
+            // 明细：一级键 + 二级键（一级/二级）均可点开
+            catTx = buildMap {
+                filtered.groupBy { it.category }.forEach { (parent, list) ->
+                    put(parent, list.sortedByDescending { it.date }.map {
+                        CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date, it.subCategory)
+                    })
                 }
+                filtered.filter { it.subCategory.isNotBlank() }
+                    .groupBy { dimKey(it) }
+                    .forEach { (key, list) ->
+                        put(key, list.sortedByDescending { it.date }.map {
+                            CalDayTx(it.type, it.amount, it.category, it.merchant, it.product, it.date, it.subCategory)
+                        })
+                    }
             },
             topMerchants = filtered.filter { it.merchant.isNotBlank() }
                 .groupBy { it.merchant }

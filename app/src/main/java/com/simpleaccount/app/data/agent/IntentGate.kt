@@ -69,11 +69,12 @@ object IntentGate {
 
         if (Regex("记住这个|写入记忆|记到记忆").containsMatchIn(s)) return QueryIntent.MEMORY
 
-        // 显式记账/改账指令
+        // 显式记账/改账/批量按金额归类
         if (Regex(
                 "记(?:一笔|上|账)|帮我记|入账|撤回|撤销|删掉|删除|" +
                     "改成|改到|改归|改分类|改一下|重分类|归类|归入|归到|" +
                     "映射|记到|算作|算成|调成|调到|批量改|批量归|" +
+                    "按金额|按商家|小于|大于|不足|不少于|" +
                     "把.{0,40}(?:改|归|算)",
             ).containsMatchIn(s)
         ) return QueryIntent.LEDGER_WRITE

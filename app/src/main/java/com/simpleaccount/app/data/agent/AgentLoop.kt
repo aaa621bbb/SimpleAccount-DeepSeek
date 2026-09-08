@@ -129,8 +129,15 @@ class AgentLoop @Inject constructor(
             }
             return all.filter { it.name in names }
         }
-        // CHAT：挂最小工具集，模型可选择不用；不再硬性 emptyList 压制可执行性
-        return all.filter { it.name in setOf("get_summary", "get_insights", "list_months", "navigate", "query_transactions") }
+        // CHAT：挂只读 + 写账工具最小集，避免模型误以为「只能跳手动页」
+        // 含 reclassify，支持「商家+金额区间批量改分类」委托真正落库
+        return all.filter {
+            it.name in setOf(
+                "get_summary", "get_insights", "list_months", "navigate", "query_transactions",
+                "add_transaction", "reclassify_transactions", "update_transaction_category",
+                "edit_transaction", "delete_transaction", "withdraw_transaction",
+            )
+        }
     }
 
     private fun buildSnapshot(all: List<com.simpleaccount.app.data.entity.Transaction>): String {

@@ -117,6 +117,8 @@ class DataManageViewModel @Inject constructor(
                     .put("parent", s.parent)
                     .put("name", s.name)
                     .put("sortOrder", s.sortOrder)
+                    .put("isPreset", s.isPreset)
+                    .put("iconName", s.iconName)
             )
         }
         json.put("transactions", txArr)

@@ -23,14 +23,20 @@ data class OnDeviceModelSpec(
     val estTokPerSec: Float,
     /** 预估首字延迟 ms */
     val estFirstTokenMs: Int,
-    /** 直连下载 URL（支持 Range 断点续传） */
+    /** 主下载 URL（支持 Range 断点续传） */
     val downloadUrl: String,
+    /** 镜像备用 URL（主源失败时依次尝试） */
+    val mirrorUrls: List<String> = emptyList(),
     /** 期望 sha256（小写 hex）；空则只做大小校验 */
     val sha256: String,
     /** 运行时后端提示：mnn_gpu / gguf_cpu */
     val runtimeHint: String,
     val description: String,
-)
+) {
+    /** 主源 + 镜像，去重保序。 */
+    fun allDownloadUrls(): List<String> =
+        (listOf(downloadUrl) + mirrorUrls).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+}
 
 object OnDeviceModelCatalog {
 
@@ -55,46 +61,55 @@ object OnDeviceModelCatalog {
      * 安装后由 [OnDeviceInferenceEngine] 识别并启用本地精简推理链路。
      * 更换正式权重时只需改 URL / sha256 / sizeBytes。
      */
+    /** HF 主源 + hf-mirror / modelscope 备用，国内网络可回退。 */
+    private fun hfMirrors(path: String): List<String> = listOf(
+        "https://hf-mirror.com/$path",
+        "https://huggingface.co/$path",
+        "https://mirror.ghproxy.com/https://huggingface.co/$path",
+    )
+
     private val BUILTIN: List<OnDeviceModelSpec> = listOf(
         OnDeviceModelSpec(
             id = "sa-qwen06b-q4",
             displayName = "记账精简 0.6B Q4",
             paramsLabel = "0.6B",
             quant = "Q4_0",
-            sizeBytes = 350L * 1024 * 1024,
+            sizeBytes = 352L * 1024 * 1024,
             minTier = DeviceTier.ENTRY,
             estTokPerSec = 28f,
             estFirstTokenMs = 180,
-            // ModelScope / HF 镜像占位：实际部署替换为真实 GGUF
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf",
+            downloadUrl = "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf",
+            mirrorUrls = hfMirrors("Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf"),
             sha256 = "",
             runtimeHint = "gguf_cpu",
-            description = "入门档首选。体积小、首字快，适合查账/记一笔等短指令。全离线、无账号。",
+            description = "入门档首选。体积小、首字快，适合查账/记一笔等短指令。全离线、无账号。多镜像自动回退。",
         ),
         OnDeviceModelSpec(
             id = "sa-qwen08b-q4k",
             displayName = "记账均衡 0.8B Q4_K",
             paramsLabel = "0.8B",
             quant = "Q4_K_M",
-            sizeBytes = 480L * 1024 * 1024,
+            sizeBytes = 492L * 1024 * 1024,
             minTier = DeviceTier.ENTRY,
             estTokPerSec = 22f,
             estFirstTokenMs = 220,
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            downloadUrl = "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            mirrorUrls = hfMirrors("Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
             sha256 = "",
             runtimeHint = "gguf_cpu",
-            description = "入门~中端。理解力更好，工具调用更稳。",
+            description = "入门~中端。理解力更好，工具调用更稳。多镜像自动回退。",
         ),
         OnDeviceModelSpec(
             id = "sa-qwen15b-q4k",
             displayName = "记账增强 1.5B Q4_K",
             paramsLabel = "1.5B",
             quant = "Q4_K_M",
-            sizeBytes = 950L * 1024 * 1024,
+            sizeBytes = 986L * 1024 * 1024,
             minTier = DeviceTier.MID,
             estTokPerSec = 14f,
             estFirstTokenMs = 320,
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            downloadUrl = "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            mirrorUrls = hfMirrors("Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"),
             sha256 = "",
             runtimeHint = "mnn_gpu",
             description = "中高端推荐。分析/多步工具更强；有 GPU 时走加速路由。",
@@ -104,11 +119,12 @@ object OnDeviceModelCatalog {
             displayName = "记账高精 1.5B Q5",
             paramsLabel = "1.5B",
             quant = "Q5_K_M",
-            sizeBytes = 1100L * 1024 * 1024,
+            sizeBytes = 1140L * 1024 * 1024,
             minTier = DeviceTier.HIGH,
             estTokPerSec = 11f,
             estFirstTokenMs = 380,
-            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q5_k_m.gguf",
+            downloadUrl = "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q5_k_m.gguf",
+            mirrorUrls = hfMirrors("Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q5_k_m.gguf"),
             sha256 = "",
             runtimeHint = "mnn_gpu",
             description = "高端机。量化更高，指令跟随更好，耗内存也更大。",

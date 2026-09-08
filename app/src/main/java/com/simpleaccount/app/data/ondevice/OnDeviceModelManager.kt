@@ -47,10 +47,13 @@ class OnDeviceModelManager @Inject constructor(
     private val profiler: DeviceProfiler,
 ) {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS) // 大文件不设全局 call 超时
         .followRedirects(true)
+        .followSslRedirects(true)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val rootDir: File by lazy {
@@ -159,12 +162,13 @@ class OnDeviceModelManager @Inject constructor(
     }
 
     /**
-     * 下载模型：磁盘预检 → Range 断点续传 → 指数退避重试 → sha256 校验 → 落盘就绪。
+     * 下载模型：多镜像轮询 → 磁盘预检 → Range 断点续传 → 指数退避 → sha256 → 落盘。
+     * 主源（hf-mirror）失败自动切 huggingface / ghproxy，不经业务 API。
      */
-    suspend fun download(id: String, maxRetries: Int = 4): Boolean = withContext(Dispatchers.IO) {
+    suspend fun download(id: String, maxRetries: Int = 3): Boolean = withContext(Dispatchers.IO) {
         val spec = OnDeviceModelCatalog.byId(id) ?: return@withContext false
-        if (spec.downloadUrl.isBlank()) {
-            // 本地导入模型无下载地址：若已就绪直接成功，否则提示改走导入
+        val urls = spec.allDownloadUrls()
+        if (urls.isEmpty()) {
             val final = File(rootDir, "$id.bin")
             if (final.exists() && final.length() > 0) {
                 patch(id) {
@@ -189,7 +193,6 @@ class OnDeviceModelManager @Inject constructor(
         }
         cancelFlags[id] = false
 
-        // 磁盘空间预检（1.15x + 50MB 余量）
         val need = spec.sizeBytes * 115 / 100 + 50L * 1024 * 1024
         val free = freeDiskBytes()
         if (free in 1 until need) {
@@ -218,119 +221,147 @@ class OnDeviceModelManager @Inject constructor(
             return@withContext true
         }
 
-        var attempt = 0
         var lastError: String? = null
-        while (attempt <= maxRetries) {
+        // 外层：镜像轮询；内层：每镜像重试
+        for ((urlIdx, url) in urls.withIndex()) {
             if (cancelFlags[id] == true) {
                 patch(id) { it.copy(status = ModelLocalState.Status.NOT_DOWNLOADED, error = "已取消") }
                 return@withContext false
             }
-            attempt++
-            patch(id) {
-                it.copy(
-                    status = ModelLocalState.Status.DOWNLOADING,
-                    error = if (attempt > 1) "重试 $attempt/$maxRetries…" else null,
-                )
-            }
-            try {
-                val existing = if (part.exists()) part.length() else 0L
-                val reqBuilder = Request.Builder().url(spec.downloadUrl).header("User-Agent", "SimpleAccount/2.31")
-                if (existing > 0) reqBuilder.header("Range", "bytes=$existing-")
-                val resp = client.newCall(reqBuilder.build()).execute()
-                if (!resp.isSuccessful && resp.code != 206) {
-                    resp.close()
-                    throw IOException("HTTP ${resp.code}")
-                }
-                val body = resp.body ?: throw IOException("空响应")
-                val totalFromHeader = resp.header("Content-Range")
-                    ?.substringAfter("/")
-                    ?.toLongOrNull()
-                    ?: (if (resp.code == 206) existing + (body.contentLength().takeIf { it > 0 } ?: 0)
-                    else body.contentLength().takeIf { it > 0 } ?: spec.sizeBytes)
-                val append = resp.code == 206 && existing > 0
-                if (!append && part.exists()) part.delete()
-
-                RandomAccessFile(part, "rw").use { raf ->
-                    if (append) raf.seek(existing) else raf.setLength(0)
-                    val buf = ByteArray(64 * 1024)
-                    var downloaded = if (append) existing else 0L
-                    body.byteStream().use { input ->
-                        while (true) {
-                            if (cancelFlags[id] == true) throw IOException("已取消")
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            raf.write(buf, 0, n)
-                            downloaded += n
-                            val total = totalFromHeader.coerceAtLeast(downloaded)
-                            val p = (downloaded.toFloat() / total).coerceIn(0f, 0.99f)
-                            patch(id) {
-                                it.copy(
-                                    status = ModelLocalState.Status.DOWNLOADING,
-                                    downloadedBytes = downloaded,
-                                    totalBytes = total,
-                                    progress = p,
-                                    error = null,
-                                )
-                            }
-                        }
-                    }
-                }
-                resp.close()
-
-                // 完整性校验
-                patch(id) { it.copy(status = ModelLocalState.Status.VERIFYING, progress = 0.99f) }
-                if (spec.sha256.isNotBlank()) {
-                    val actual = sha256Of(part)
-                    if (!actual.equals(spec.sha256, ignoreCase = true)) {
-                        part.delete()
-                        throw IOException("完整性校验失败（sha256 不匹配）")
-                    }
-                } else if (part.length() < 1024) {
-                    // 无 sha 时至少要求不是空/错误页
-                    part.delete()
-                    throw IOException("下载文件过小，可能不是有效模型包")
-                }
-
-                if (final.exists()) final.delete()
-                if (!part.renameTo(final)) {
-                    part.copyTo(final, overwrite = true)
-                    part.delete()
-                }
-                patch(id) {
-                    it.copy(
-                        status = ModelLocalState.Status.READY,
-                        progress = 1f,
-                        downloadedBytes = final.length(),
-                        totalBytes = final.length(),
-                        filePath = final.absolutePath,
-                        error = null,
-                    )
-                }
-                setActive(id)
-                return@withContext true
-            } catch (e: Exception) {
-                lastError = e.message ?: "下载失败"
-                if (cancelFlags[id] == true || lastError == "已取消") {
+            var attempt = 0
+            while (attempt <= maxRetries) {
+                if (cancelFlags[id] == true) {
                     patch(id) { it.copy(status = ModelLocalState.Status.NOT_DOWNLOADED, error = "已取消") }
                     return@withContext false
                 }
-                // 指数退避：1s, 2s, 4s, 8s
-                val backoff = (1L shl (attempt - 1).coerceAtMost(4)) * 1000L
+                attempt++
+                val hostHint = runCatching { java.net.URI(url).host }.getOrNull() ?: "源${urlIdx + 1}"
                 patch(id) {
                     it.copy(
                         status = ModelLocalState.Status.DOWNLOADING,
-                        error = "$lastError，${backoff / 1000}s 后重试…",
+                        error = "源 $hostHint · 尝试 $attempt/${maxRetries + 1}" +
+                            if (urlIdx > 0) "（镜像 ${urlIdx + 1}/${urls.size}）" else "",
                     )
                 }
                 try {
-                    Thread.sleep(backoff)
-                } catch (_: InterruptedException) {
-                    break
+                    val existing = if (part.exists()) part.length() else 0L
+                    val reqBuilder = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "Mozilla/5.0 SimpleAccount/2.31.1 (Android; on-device model)")
+                        .header("Accept", "*/*")
+                    if (existing > 0) reqBuilder.header("Range", "bytes=$existing-")
+                    val resp = client.newCall(reqBuilder.build()).execute()
+                    if (!resp.isSuccessful && resp.code != 206) {
+                        val code = resp.code
+                        resp.close()
+                        // 4xx 换镜像；5xx/网络重试
+                        if (code in 400..499 && code != 408 && code != 429) {
+                            throw IOException("HTTP $code@$hostHint（换源）")
+                        }
+                        throw IOException("HTTP $code@$hostHint")
+                    }
+                    val body = resp.body ?: throw IOException("空响应@$hostHint")
+                    val totalFromHeader = resp.header("Content-Range")
+                        ?.substringAfter("/")
+                        ?.toLongOrNull()
+                        ?: (if (resp.code == 206) existing + (body.contentLength().takeIf { it > 0 } ?: 0)
+                        else body.contentLength().takeIf { it > 0 } ?: spec.sizeBytes)
+                    val append = resp.code == 206 && existing > 0
+                    if (!append && part.exists()) part.delete()
+
+                    RandomAccessFile(part, "rw").use { raf ->
+                        if (append) raf.seek(existing) else raf.setLength(0)
+                        val buf = ByteArray(128 * 1024)
+                        var downloaded = if (append) existing else 0L
+                        body.byteStream().use { input ->
+                            while (true) {
+                                if (cancelFlags[id] == true) throw IOException("已取消")
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                raf.write(buf, 0, n)
+                                downloaded += n
+                                val total = totalFromHeader.coerceAtLeast(downloaded)
+                                val p = (downloaded.toFloat() / total).coerceIn(0f, 0.99f)
+                                patch(id) {
+                                    it.copy(
+                                        status = ModelLocalState.Status.DOWNLOADING,
+                                        downloadedBytes = downloaded,
+                                        totalBytes = total,
+                                        progress = p,
+                                        error = hostHint,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    resp.close()
+
+                    patch(id) { it.copy(status = ModelLocalState.Status.VERIFYING, progress = 0.99f) }
+                    if (spec.sha256.isNotBlank()) {
+                        val actual = sha256Of(part)
+                        if (!actual.equals(spec.sha256, ignoreCase = true)) {
+                            part.delete()
+                            throw IOException("完整性校验失败（sha256 不匹配）")
+                        }
+                    } else if (part.length() < 1024L * 100) {
+                        // 无 sha 时至少要求不是 HTML 错误页（模型至少百 KB）
+                        val head = part.inputStream().use { it.readBytes().take(64).toByteArray() }
+                        val headStr = String(head, Charsets.ISO_8859_1)
+                        if (headStr.contains("<html", ignoreCase = true) || headStr.contains("<!DOCTYPE", ignoreCase = true)) {
+                            part.delete()
+                            throw IOException("下载到的是网页而非模型包（@$hostHint）")
+                        }
+                        if (part.length() < 1024) {
+                            part.delete()
+                            throw IOException("下载文件过小，可能不是有效模型包")
+                        }
+                    }
+
+                    if (final.exists()) final.delete()
+                    if (!part.renameTo(final)) {
+                        part.copyTo(final, overwrite = true)
+                        part.delete()
+                    }
+                    patch(id) {
+                        it.copy(
+                            status = ModelLocalState.Status.READY,
+                            progress = 1f,
+                            downloadedBytes = final.length(),
+                            totalBytes = final.length(),
+                            filePath = final.absolutePath,
+                            error = null,
+                        )
+                    }
+                    setActive(id)
+                    return@withContext true
+                } catch (e: Exception) {
+                    lastError = e.message ?: "下载失败"
+                    if (cancelFlags[id] == true || lastError == "已取消") {
+                        patch(id) { it.copy(status = ModelLocalState.Status.NOT_DOWNLOADED, error = "已取消") }
+                        return@withContext false
+                    }
+                    // 换源信号：直接 break 内层去下一镜像
+                    if (lastError?.contains("换源") == true) break
+                    val backoff = (1L shl (attempt - 1).coerceAtMost(3)) * 1000L
+                    patch(id) {
+                        it.copy(
+                            status = ModelLocalState.Status.DOWNLOADING,
+                            error = "$lastError，${backoff / 1000}s 后重试…",
+                        )
+                    }
+                    try {
+                        Thread.sleep(backoff)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
                 }
             }
         }
         patch(id) {
-            it.copy(status = ModelLocalState.Status.FAILED, error = lastError ?: "下载失败")
+            it.copy(
+                status = ModelLocalState.Status.FAILED,
+                error = (lastError ?: "下载失败") + "。可换网络后重试，或「从本机导入」GGUF。",
+            )
         }
         false
     }
