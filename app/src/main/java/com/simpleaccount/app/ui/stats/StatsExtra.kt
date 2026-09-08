@@ -76,10 +76,14 @@ object StatsExtra {
         }.takeLast(31)
     }
 
+private fun dimKey(t: Transaction): String =
+        if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+
     private fun share(txs: List<Transaction>, type: String): List<ShareMonth> {
         val months = DateUtil.recentMonths(6).reversed()
         val typed = txs.filter { it.type == type }
-        val top = typed.groupBy { it.category }
+        // 结构演进：二级分类维度
+        val top = typed.groupBy { dimKey(it) }
             .mapValues { it.value.sumOf { t -> t.amount } }
             .toList()
             .sortedByDescending { it.second }
@@ -89,7 +93,7 @@ object StatsExtra {
         return months.map { m ->
             val slice = typed.filter { it.date.startsWith(m) }
             val tot = slice.sumOf { it.amount }.coerceAtLeast(1L)
-            val by = slice.groupBy { it.category }.mapValues { it.value.sumOf { t -> t.amount } }
+            val by = slice.groupBy { dimKey(it) }.mapValues { it.value.sumOf { t -> t.amount } }
             val parts = top.map { c -> c to ((by[c] ?: 0L).toFloat() / tot) }
             val other = (1f - parts.sumOf { it.second.toDouble() }.toFloat()).coerceAtLeast(0f)
             ShareMonth(m, parts + ("其他" to other))
@@ -124,13 +128,13 @@ object StatsExtra {
         return ConcUi(cr1, cr3, hhi, by.size, lorenz)
     }
 
-    private fun elastic(
+private fun elastic(
         thisTx: List<Transaction>,
         lastTx: List<Transaction>,
         type: String,
     ): List<ElasticPoint> {
         fun byCat(list: List<Transaction>) = list.filter { it.type == type }
-            .groupBy { it.category }
+            .groupBy { dimKey(it) }
             .mapValues { it.value.sumOf { t -> t.amount } }
         val now = byCat(thisTx)
         val prev = byCat(lastTx)
@@ -188,8 +192,8 @@ object StatsExtra {
         return (1..days).map { d -> SparkPoint(d, by[d] ?: 0L) }
     }
 
-    private fun flow(list: List<Transaction>): List<FlowPart> {
-        return list.groupBy { it.category.ifBlank { "未分类" } }
+private fun flow(list: List<Transaction>): List<FlowPart> {
+        return list.groupBy { dimKey(it).ifBlank { "未分类" } }
             .mapValues { it.value.sumOf { t -> t.amount } }
             .toList()
             .sortedByDescending { it.second }
@@ -198,7 +202,7 @@ object StatsExtra {
     }
 
     private fun radar(now: List<Transaction>, prev: List<Transaction>): RadarUi {
-        fun byCat(list: List<Transaction>) = list.groupBy { it.category }
+        fun byCat(list: List<Transaction>) = list.groupBy { dimKey(it) }
             .mapValues { it.value.sumOf { t -> t.amount } }
         val a = byCat(now)
         val b = byCat(prev)

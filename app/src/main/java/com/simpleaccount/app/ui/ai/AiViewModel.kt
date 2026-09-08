@@ -97,22 +97,22 @@ class AiViewModel @Inject constructor(
     /** 本地写提案待执行的落库动作（用户在确认卡片上点"确认执行"后运行）。 */
     private var pendingLocalCommit: (suspend () -> String)? = null
 
-    private val welcomeText =
-        "你好，我是 AI 记账管家。查实数（昨天花了多少、本月花了多少）本地秒回，数字跟账本一致；分析、建议、体检、怎么办交给模型写，不会用模板截胡。记账、改账、删除都会先弹确认卡片，经你手动批准才落库；我说不清几点时会直接问你，绝不瞎猜。"
+private val welcomeText =
+        "你好，我是 AI 记账管家。查实数本地秒回；分析、建议、体检交给模型。记账/改账可在设置里选「每次确认」或「授权后自动执行」；金额和时刻说不清时我会先问你，绝不瞎猜。每次进入默认开新会话，历史对话仍在左上角菜单可切换。"
 
     init {
         viewModelScope.launch {
-            val enabled = settingsRepository.isAiEnabled()
+            val engineReady = settingsRepository.engineAllowsModel() && (
+                settingsRepository.engineUsesOnDevice() && settingsRepository.onDeviceModelId().isNotBlank() ||
+                    settingsRepository.isAiEnabled()
+                )
+            val rulesOnly = settingsRepository.accountingEngine() == SettingsRepository.ENGINE_RULES
+            val enabled = engineReady || rulesOnly || settingsRepository.engineAllowsRules()
             _state.value = _state.value.copy(enabled = enabled)
             refreshPendingCount()
             if (_state.value.currentConversationId.isEmpty()) {
-                val conv = conversationManager.ensureCurrentConversation()
-                ensureWelcome(conv.id)
-                _state.value = _state.value.copy(
-                    currentConversationId = conv.id,
-                    currentTitle = conv.title
-                )
-                observeMessages(conv.id)
+                // v2.31.1：进入 AI 管家默认新建会话；历史仍可在列表切换
+                createConversationInternal()
             }
         }
         // 会话列表：删除当前会话后自动切到最新会话
@@ -167,18 +167,25 @@ class AiViewModel @Inject constructor(
         _state.value = _state.value.copy(input = v)
     }
 
-    /** 进入 AI 页时刷新启用状态，避免设置页开关后返回时缓存陈旧 */
+/** 进入 AI 页时刷新启用状态，避免设置页开关后返回时缓存陈旧。
+     * 规则/端侧/API 任一就绪即视为可用。 */
     fun refreshEnabled() {
-        val cur = settingsRepository.isAiEnabled()
+        val engineReady = settingsRepository.engineAllowsModel() && (
+            settingsRepository.engineUsesOnDevice() && settingsRepository.onDeviceModelId().isNotBlank() ||
+                settingsRepository.isAiEnabled()
+            )
+        val rulesOnly = settingsRepository.accountingEngine() == SettingsRepository.ENGINE_RULES
+        val cur = engineReady || rulesOnly || settingsRepository.engineAllowsRules()
         if (cur != _state.value.enabled) {
             _state.value = _state.value.copy(enabled = cur)
         }
     }
 
-    fun switchTo(conversationId: String) {
+fun switchTo(conversationId: String) {
         if (conversationId == _state.value.currentConversationId) return
         viewModelScope.launch {
             val conv = conversationManager.getConversation(conversationId) ?: return@launch
+            conversationManager.touchActive(conv.id)
             _state.value = _state.value.copy(
                 currentConversationId = conv.id,
                 currentTitle = conv.title,
@@ -269,44 +276,89 @@ class AiViewModel @Inject constructor(
                 input = "", typing = true, phase = "正在办理…", error = null,
                 streamingText = null, pendingConfirm = null, traces = emptyList(), reasoning = null
             )
-            val modelOn = settingsRepository.isAiEnabled() && settingsRepository.apiKey().isNotBlank()
-            val local = runCatching { localAccountant.tryAnswer(trimmed, modelOn) }.getOrNull()
-            if (local != null) {
-                conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, local)
-                _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
-                return@launch
+            // 记账引擎模式：规则 / API / 端侧 / 混用（互斥，禁止双引擎抢同一输入）
+            val allowsRules = settingsRepository.engineAllowsRules()
+            val allowsModel = settingsRepository.engineAllowsModel()
+            val onDevice = settingsRepository.engineUsesOnDevice()
+            val onDeviceReady = onDevice && settingsRepository.onDeviceModelId().isNotBlank()
+            val modelOn = allowsModel && (
+                onDeviceReady ||
+                    (settingsRepository.isAiEnabled() && settingsRepository.apiKey().isNotBlank())
+                )
+
+            if (allowsRules) {
+                val local = runCatching { localAccountant.tryAnswer(trimmed, modelOn) }.getOrNull()
+                if (local != null) {
+                    conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, local)
+                    _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+                    return@launch
+                }
+                // 本地写提案（规则引擎）
+                val proposal = runCatching { localAccountant.tryProposeWrite(trimmed) }.getOrNull()
+                if (proposal != null) {
+                    if (!proposal.needsConfirm) {
+                        conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, proposal.preview)
+                        _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+                    } else if (settingsRepository.isAgentAutoExecute()) {
+                        _state.value = _state.value.copy(typing = true, phase = "正在执行…")
+                        val text = runCatching { proposal.commit() }.getOrNull()
+                            ?: "失败 rows_affected=0。这次操作未能落库。"
+                        conversationManager.addMessage(convId, AiMessage.ROLE_ASSISTANT, text)
+                        _state.value = _state.value.copy(typing = false, phase = null, streamingText = null)
+                    } else {
+                        pendingLocalCommit = proposal.commit
+                        conversationManager.addMessage(
+                            convId, AiMessage.ROLE_ASSISTANT,
+                            "这项操作会改账本，点「确认执行」后才落库：\n\n${proposal.preview}"
+                        )
+                        _state.value = _state.value.copy(
+                            typing = false, phase = null, streamingText = null,
+                            pendingConfirm = PendingConfirmUi(LOCAL_WRITE_TOOL, "", proposal.preview)
+                        )
+                    }
+                    return@launch
+                }
             }
-            // 本地写提案（不依赖云端模型）：只生成预览，经确认卡片批准后才落库
-            val proposal = runCatching { localAccountant.tryProposeWrite(trimmed) }.getOrNull()
-            if (proposal != null) {
-                pendingLocalCommit = proposal.commit
+
+            // 纯规则模式：规则吃不了就明确告知，不调模型
+            if (!allowsModel) {
                 conversationManager.addMessage(
                     convId, AiMessage.ROLE_ASSISTANT,
-                    "这项操作会改账本，点「确认执行」后才落库：\n\n${proposal.preview}"
-                )
-                _state.value = _state.value.copy(
-                    typing = false, phase = null, streamingText = null,
-                    pendingConfirm = PendingConfirmUi(LOCAL_WRITE_TOOL, "", proposal.preview)
-                )
-                return@launch
-            }
-            if (!settingsRepository.isAiEnabled()) {
-                conversationManager.addMessage(
-                    convId, AiMessage.ROLE_ASSISTANT,
-                    "AI 功能未开启，请到设置中开启并配置。常见问题（昨天花了多少、本月体检）即使不开 AI 也能直接答。",
-                    status = AiMessage.STATUS_ERROR
+                    "当前为「纯规则」模式，这条我还解析不了。可换个说法（含金额/时间/商户），或到「AI 设置 → 记账引擎」切换到混用/纯 API/纯端侧。",
                 )
                 _state.value = _state.value.copy(typing = false, phase = null)
                 return@launch
             }
-            val apiKey = settingsRepository.apiKey()
-            if (apiKey.isBlank()) {
-                conversationManager.addMessage(
-                    convId, AiMessage.ROLE_ASSISTANT, "未配置 API Key，请先到「AI 辅助设置」填写。",
-                    status = AiMessage.STATUS_ERROR
-                )
-                _state.value = _state.value.copy(typing = false, phase = null)
-                return@launch
+
+            if (onDevice) {
+                if (!onDeviceReady) {
+                    conversationManager.addMessage(
+                        convId, AiMessage.ROLE_ASSISTANT,
+                        "端侧模型未就绪。请到「AI 设置 → 端侧模型」下载或导入本地模型包。",
+                        status = AiMessage.STATUS_ERROR
+                    )
+                    _state.value = _state.value.copy(typing = false, phase = null)
+                    return@launch
+                }
+            } else {
+                if (!settingsRepository.isAiEnabled()) {
+                    conversationManager.addMessage(
+                        convId, AiMessage.ROLE_ASSISTANT,
+                        "AI 功能未开启，请到设置中开启并配置。常见问题即使不开 AI，在规则/混用模式下也能直接答。",
+                        status = AiMessage.STATUS_ERROR
+                    )
+                    _state.value = _state.value.copy(typing = false, phase = null)
+                    return@launch
+                }
+                if (settingsRepository.apiKey().isBlank()) {
+                    conversationManager.addMessage(
+                        convId, AiMessage.ROLE_ASSISTANT,
+                        "未配置 API Key，请先到「AI 辅助设置」填写；或切换到端侧/纯规则模式。",
+                        status = AiMessage.STATUS_ERROR
+                    )
+                    _state.value = _state.value.copy(typing = false, phase = null)
+                    return@launch
+                }
             }
             runAgentTurn(convId, trimmed)
         }
@@ -418,9 +470,18 @@ class AiViewModel @Inject constructor(
             _state.value = _state.value.copy(typing = false, phase = null, reasoning = null)
             return
         }
+        val totalSec = ((System.currentTimeMillis() - startedAt) / 1000.0)
+        // 耗时挂在「思考过程」旁，不进回答末尾
+        val elapsedLabel = if (totalSec >= 0.5) {
+            val toolHint = if (result.toolRounds > 0) " · ${result.toolRounds} 轮工具" else ""
+            "总耗时 ${"%.1f".format(totalSec)}s（推理+工具$toolHint）"
+        } else null
         if (result.error != null) {
+            val packedErr = com.simpleaccount.app.ui.components.packCot(
+                result.error, null, elapsedLabel,
+            )
             conversationManager.addMessage(
-                conversationId, AiMessage.ROLE_ASSISTANT, result.error,
+                conversationId, AiMessage.ROLE_ASSISTANT, packedErr,
                 status = AiMessage.STATUS_ERROR
             )
             _state.value = _state.value.copy(typing = false, phase = null, streamingText = null, error = result.error, reasoning = null)
@@ -428,6 +489,7 @@ class AiViewModel @Inject constructor(
             val packed = com.simpleaccount.app.ui.components.packCot(
                 result.reply.ifBlank { "（模型未返回内容）" },
                 _state.value.reasoning,
+                elapsedLabel,
             )
             conversationManager.addMessage(
                 conversationId, AiMessage.ROLE_ASSISTANT, packed

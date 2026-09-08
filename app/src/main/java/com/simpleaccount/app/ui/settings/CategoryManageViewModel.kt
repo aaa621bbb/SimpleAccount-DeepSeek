@@ -112,7 +112,14 @@ class CategoryManageViewModel @Inject constructor(
         val existing = subCategoryRepository.getByParent(parent)
         if (existing.any { it.name == trimmed }) return false
         val maxOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1
-        subCategoryRepository.add(SubCategory(parent = parent, name = trimmed, sortOrder = maxOrder))
+subCategoryRepository.add(
+            SubCategory(
+                parent = parent,
+                name = trimmed,
+                sortOrder = maxOrder,
+                iconName = com.simpleaccount.app.util.SubCategoryPresets.iconFor(trimmed),
+            )
+        )
         return true
     }
 

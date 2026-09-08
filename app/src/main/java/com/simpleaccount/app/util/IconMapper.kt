@@ -318,7 +318,39 @@ object IconMapper {
         "receipt_long" -> Icons.Filled.ReceiptLong
         "receipt" -> Icons.Filled.Receipt
         "category" -> Icons.Filled.Category
-        "weekend" -> Icons.Filled.Weekend
+"weekend" -> Icons.Filled.Weekend
+        // 二级类目扩容别名 → 已有 Material 图标
+        "free_breakfast" -> Icons.Filled.LocalCafe
+        "coffee" -> Icons.Filled.LocalCafe
+        "cookie" -> Icons.Filled.Icecream
+        "nutrition" -> Icons.Filled.Icecream
+        "lunch_dining" -> Icons.Filled.Fastfood
+        "dinner_dining" -> Icons.Filled.Restaurant
+        "delivery_dining" -> Icons.Filled.Fastfood
+        "soup_kitchen" -> Icons.Filled.Restaurant
+        "set_meal" -> Icons.Filled.Fastfood
+        "outdoor_grill" -> Icons.Filled.Restaurant
+        "local_parking" -> Icons.Filled.DirectionsCar
+        "add_road" -> Icons.Filled.DirectionsCar
+        "pedal_bike" -> Icons.Filled.DirectionsBike
+        "shopping_basket" -> Icons.Filled.ShoppingCart
+        "face" -> Icons.Filled.Spa
+        "ice_skating" -> Icons.Filled.Checkroom
+        "card_membership" -> Icons.Filled.Star
+        "luggage" -> Icons.Filled.Flight
+        "mic" -> Icons.Filled.MusicNote
+        "museum" -> Icons.Filled.Palette
+        "monitor_heart" -> Icons.Filled.Favorite
+        "dentistry" -> Icons.Filled.LocalHospital
+        "visibility" -> Icons.Filled.LocalHospital
+        "quiz" -> Icons.Filled.School
+        "cast_for_education" -> Icons.Filled.School
+        "edit_note" -> Icons.Filled.MenuBook
+        "psychology" -> Icons.Filled.School
+        "cleaning_services" -> Icons.Filled.Home
+        "signal_cellular_alt" -> Icons.Filled.Phone
+        "support_agent" -> Icons.Filled.Work
+        "local_fire_department" -> Icons.Filled.LocalGasStation
         else -> Icons.Filled.MoreHoriz
     }
 }

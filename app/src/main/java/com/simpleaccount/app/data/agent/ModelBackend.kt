@@ -1,5 +1,6 @@
 package com.simpleaccount.app.data.agent
 
+import com.simpleaccount.app.data.ondevice.OnDeviceInferenceEngine
 import com.simpleaccount.app.data.repository.SettingsRepository
 import com.simpleaccount.app.data.service.AiService
 import com.simpleaccount.app.data.service.ToolChatMessage
@@ -7,15 +8,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 模型后端抽象（可插拔）：云侧大模型与端侧小模型无缝切换的前瞻预留。
+ * 模型后端抽象（可插拔）：云侧大模型与端侧小模型无缝切换。
  *
- * - 云侧：[CloudModelBackend]，走 OpenAI 兼容 HTTP（现有 AiService），完整提示词 + 全量工具；
- * - 端侧：[OnDeviceModelBackend]，给未来手机本地 0.6B–1.5B 小参数模型预留的协议位。
- *   目前本地推理引擎尚未接入，调用会返回一条**诚实**的不可用说明（绝不编造结果），
- *   但工具协议/提示词档位/数据接口已全部按"模型规模不敏感"设计好：
- *   小模型自动使用精简提示词（[ModelBackend.compactPrompt]）与收敛后的工具集。
+ * - 云侧：[CloudModelBackend]，走 OpenAI 兼容 HTTP（AiService）；
+ * - 端侧：[OnDeviceModelBackend]，经 [OnDeviceInferenceEngine] 本地推理：
+ *   GPU（MNN/Vulkan）优先，回退 CPU（GGUF），再回退内置精简规划器。
+ *   模型就位后飞行模式可用，无账号、数据不出设备。
  *
- * AgentLoop 只依赖本抽象，不直接依赖 AiService；切换后端只需改一个设置项。
+ * AgentLoop 只依赖本抽象；切换后端只需改一个设置项。
  */
 data class BackendChatResult(
     val content: String,
@@ -78,11 +78,13 @@ class CloudModelBackend @Inject constructor(
 }
 
 /**
- * 端侧小模型后端（预留桩）：未来接入手机本地 0.6B–1.5B 模型时，
- * 在此实现本地推理调用即可，AgentLoop/提示词/工具协议零改动。
+ * 端侧小模型后端：本地推理，全离线。
+ * 模型未下载时返回可操作的引导，不编造任何账本结果。
  */
 @Singleton
-class OnDeviceModelBackend @Inject constructor() : ModelBackend {
+class OnDeviceModelBackend @Inject constructor(
+    private val engine: OnDeviceInferenceEngine,
+) : ModelBackend {
     override val id: String = SettingsRepository.BACKEND_ONDEVICE
     override val displayName: String = "端侧小模型"
     override val supportsTools: Boolean = true
@@ -95,11 +97,11 @@ class OnDeviceModelBackend @Inject constructor() : ModelBackend {
         onDelta: ((String) -> Unit)?,
         onReasoning: ((String) -> Unit)?,
     ): BackendChatResult {
-        // 诚实不可用：引擎未接入，不编造任何结果
-        return BackendChatResult(
-            content = "",
-            error = "端侧小模型尚未接入：本地推理引擎还在开发中。请先在 AI 设置里使用云端模型，" +
-                "或等待后续版本推送端侧 0.6B–1.5B 免费模型包。",
+        return engine.chat(
+            messages = messages,
+            tools = tools,
+            onDelta = onDelta,
+            onReasoning = onReasoning,
         )
     }
 }

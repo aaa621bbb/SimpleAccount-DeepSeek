@@ -54,18 +54,20 @@ private val groups = listOf(
             SettingsEntry("统计页图表", Icons.Filled.BarChart, Routes.STATS_LAYOUT),
         ),
     ),
-    SettingsGroup(
+SettingsGroup(
         "管家",
         listOf(
             SettingsEntry("管家记忆", Icons.Filled.SmartToy, Routes.MEMORY),
             SettingsEntry("AI 辅助设置", Icons.Filled.SmartToy, Routes.AI_SETTINGS),
+            SettingsEntry("端侧小模型（免费离线）", Icons.Filled.SmartToy, Routes.ONDEVICE_MODELS),
         ),
     ),
-    SettingsGroup(
+SettingsGroup(
         "账本",
         listOf(
             SettingsEntry("账本管理", Icons.Filled.Storage, Routes.LEDGER_MANAGE),
             SettingsEntry("分类管理", Icons.Filled.Category, Routes.CATEGORY_MANAGE),
+            SettingsEntry("收支口径（退款/投资）", Icons.Filled.BarChart, Routes.LEDGER_SCOPE),
             SettingsEntry("商家归类管理", Icons.Filled.Store, Routes.MERCHANT_MANAGE),
             SettingsEntry("无感记账（自动记账）", Icons.Filled.NotificationsActive, Routes.AUTO_RECORD),
         ),

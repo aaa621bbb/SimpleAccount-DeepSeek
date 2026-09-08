@@ -163,13 +163,20 @@ fun CategoryManageScreen(
                         }
                         if (isOpen) {
                             Column(Modifier.padding(start = 56.dp, end = 8.dp, bottom = 6.dp)) {
-                                subs.forEach { sub ->
+subs.forEach { sub ->
                                     Row(
                                         Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        Icon(
+                                            IconMapper.map(sub.iconName.ifBlank { "more_horiz" }),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Spacer(Modifier.width(8.dp))
                                         Text(
-                                            "· ${sub.name}",
+                                            sub.name,
                                             style = MaterialTheme.typography.bodyMedium,
                                             modifier = Modifier.weight(1f).padding(vertical = 8.dp)
                                         )

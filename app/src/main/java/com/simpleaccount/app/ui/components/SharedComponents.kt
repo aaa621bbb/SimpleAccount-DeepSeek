@@ -134,6 +134,7 @@ fun TransactionRow(
     }
     val other = if (titleField == "product") transaction.merchant else transaction.product
     val secondary = buildList {
+        if (transaction.source == Transaction.SOURCE_DRAFT) add("待确认")
         if (subLabel.isNotBlank() && subLabel != title) add(subLabel)
         if (other.isNotBlank() && other != title) add(other)
     }.joinToString(" · ")

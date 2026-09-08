@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -31,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -78,11 +80,13 @@ fun AddTransactionScreen(
     val focus = LocalFocusManager.current
     val reduce = LocalReduceMotion.current
 
-    var showDateSheet by remember { mutableStateOf(false) }
+var showDateSheet by remember { mutableStateOf(false) }
     var showTimeSheet by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var success by remember { mutableStateOf(false) }
+    var showCatEditor by remember { mutableStateOf(false) }
+    var showAddSub by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -167,32 +171,51 @@ fun AddTransactionScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            Text("分类", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
+Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("分类", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showCatEditor = true }) {
+                    Text("管理", fontSize = 12.sp)
+                }
+            }
             CategoryCarousel(
                 categories = categories,
                 selected = state.selectedCategory,
                 onSelect = vm::onCategorySelect,
             )
-            // 二级分类（可选，不选=不细分；再点一次取消）
-            if (state.selectedCategory != null && subOptions.isNotEmpty()) {
+            // 二级分类（可选，不选=不细分；再点一次取消）+ 就地新增
+            if (state.selectedCategory != null) {
                 Spacer(Modifier.height(4.dp))
-                Text("细分（可选）", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    subOptions.forEach { sub ->
-                        val selected = state.subCategory == sub.name
-                        FilterChip(
-                            selected = selected,
-                            onClick = { vm.onSubCategorySelect(sub.name) },
-                            label = { Text(sub.name) },
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("细分（可选）", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { showAddSub = true }) {
+                        Text("+ 二级", fontSize = 12.sp)
+                    }
+                }
+                if (subOptions.isNotEmpty()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        subOptions.forEach { sub ->
+                            val selected = state.subCategory == sub.name
+                            FilterChip(
+                                selected = selected,
+                                onClick = { vm.onSubCategorySelect(sub.name) },
+                                leadingIcon = {
+                                    Icon(
+                                        com.simpleaccount.app.util.IconMapper.map(
+                                            sub.iconName.ifBlank { "more_horiz" }
+                                        ),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                label = { Text(sub.name) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -258,7 +281,7 @@ fun AddTransactionScreen(
         )
     }
 
-    if (showTimeSheet) {
+if (showTimeSheet) {
         TimePickerByStyle(
             style = timeStyle,
             initial = state.time,
@@ -268,6 +291,199 @@ fun AddTransactionScreen(
                 showTimeSheet = false
             },
         )
+    }
+
+    // 就地分类管理：新增/改名/删除一级；二级增删改
+    if (showCatEditor) {
+        CategoryInPlaceSheet(
+            categories = categories,
+            selected = state.selectedCategory,
+            subOptions = subOptions,
+            selectedSub = state.subCategory,
+            onSelect = { c -> vm.onCategorySelect(c); },
+            onSelectSub = { vm.onSubCategorySelect(it) },
+            onAdd = { name -> scope.launch { if (vm.addCategoryInPlace(name)) { /* stay */ } } },
+            onRename = { name -> scope.launch { vm.renameCategoryInPlace(name) } },
+            onDelete = { scope.launch { vm.deleteCategoryInPlace() } },
+            onAddSub = { name -> scope.launch { vm.addSubInPlace(name) } },
+            onRenameSub = { old, neu -> scope.launch { vm.renameSubInPlace(old, neu) } },
+            onDeleteSub = { name -> scope.launch { vm.deleteSubInPlace(name) } },
+            onDismiss = { showCatEditor = false },
+        )
+    }
+    if (showAddSub) {
+        var draft by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddSub = false },
+            title = { Text("新增二级分类") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        if (vm.addSubInPlace(draft)) showAddSub = false
+                    }
+                }) { Text("添加") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddSub = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/**
+ * 记一笔页就地分类编辑底栏：一级增删改 + 当前一级下二级增删改。
+ * 不跳转到设置页分类管理。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryInPlaceSheet(
+    categories: List<com.simpleaccount.app.data.entity.Category>,
+    selected: com.simpleaccount.app.data.entity.Category?,
+    subOptions: List<com.simpleaccount.app.data.entity.SubCategory>,
+    selectedSub: String,
+    onSelect: (com.simpleaccount.app.data.entity.Category) -> Unit,
+    onSelectSub: (String) -> Unit,
+    onAdd: (String) -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onAddSub: (String) -> Unit,
+    onRenameSub: (String, String) -> Unit,
+    onDeleteSub: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var mode by remember { mutableStateOf("list") } // list | add | rename | addSub | renameSub
+    var draft by remember { mutableStateOf("") }
+    var renameTargetSub by remember { mutableStateOf("") }
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text("分类管理", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "在记一笔里直接增删改一级/二级，不用跳到设置。",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            when (mode) {
+                "add", "rename", "addSub", "renameSub" -> {
+                    val title = when (mode) {
+                        "add" -> "新一级分类"
+                        "rename" -> "重命名「${selected?.name.orEmpty()}」"
+                        "addSub" -> "新二级（${selected?.name.orEmpty()}）"
+                        else -> "重命名二级「$renameTargetSub」"
+                    }
+                    Text(title, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("名称") },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        TextButton(onClick = {
+                            when (mode) {
+                                "add" -> onAdd(draft)
+                                "rename" -> onRename(draft)
+                                "addSub" -> onAddSub(draft)
+                                "renameSub" -> onRenameSub(renameTargetSub, draft)
+                            }
+                            draft = ""
+                            mode = "list"
+                        }) { Text("保存") }
+                        TextButton(onClick = { mode = "list"; draft = "" }) { Text("取消") }
+                    }
+                }
+                else -> {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("一级", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { mode = "add"; draft = "" }) { Text("+ 新增") }
+                        if (selected != null && !selected.isPreset) {
+                            TextButton(onClick = { mode = "rename"; draft = selected.name }) { Text("改名") }
+                            TextButton(onClick = onDelete) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        categories.forEach { c ->
+                            FilterChip(
+                                selected = selected?.id == c.id,
+                                onClick = { onSelect(c) },
+                                label = { Text(c.name) },
+                                modifier = Modifier.padding(end = 6.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    if (selected != null) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("二级 · ${selected.name}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { mode = "addSub"; draft = "" }) { Text("+ 新增") }
+                        }
+                        if (subOptions.isEmpty()) {
+                            Text("暂无二级，可点上方新增。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            subOptions.forEach { sub ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    FilterChip(
+                                        selected = selectedSub == sub.name,
+                                        onClick = { onSelectSub(sub.name) },
+                                        leadingIcon = {
+                                            Icon(
+                                                com.simpleaccount.app.util.IconMapper.map(
+                                                    sub.iconName.ifBlank { "more_horiz" }
+                                                ),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        },
+                                        label = { Text(sub.name) },
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = {
+                                        renameTargetSub = sub.name
+                                        draft = sub.name
+                                        mode = "renameSub"
+                                    }) { Text("改名", fontSize = 12.sp) }
+                                    TextButton(onClick = { onDeleteSub(sub.name) }) {
+                                        Text("删", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("完成") }
+                }
+            }
+        }
     }
 }
 

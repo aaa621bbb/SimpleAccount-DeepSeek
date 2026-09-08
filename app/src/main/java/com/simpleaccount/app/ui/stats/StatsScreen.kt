@@ -42,18 +42,24 @@ import com.simpleaccount.app.ui.components.LineTrendView
 import com.simpleaccount.app.ui.components.PieChartView
 import com.simpleaccount.app.ui.components.SoftCard
 import com.simpleaccount.app.ui.components.parseColor
+import com.simpleaccount.app.ui.theme.AppPalette
 import com.simpleaccount.app.ui.theme.LocalAppPalette
 import com.simpleaccount.app.util.MoneyUtil
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen(viewModel: StatsViewModel) {
-    val state by viewModel.uiState.collectAsState()
+val state by viewModel.uiState.collectAsState()
     val layout by viewModel.layout.collectAsState()
     val pal = LocalAppPalette.current
     var categorySheet by remember { mutableStateOf<String?>(null) }
     var legendExpanded by remember { mutableStateOf(false) }
     var legendShowAll by remember { mutableStateOf(false) }
+    var advancedOpen by remember { mutableStateOf(false) }
+    // 与设置里的展开偏好同步（首次进入读一次）
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        advancedOpen = viewModel.advancedOpenInitially()
+    }
     val categorySheetState = androidx.compose.material3.rememberModalBottomSheetState()
 
     Scaffold(
@@ -128,62 +134,52 @@ fun StatsScreen(viewModel: StatsViewModel) {
                 )
             }
 
-            layout.order.filter { it !in layout.hidden }.forEach { id ->
-                when (id) {
-                    StatsModules.PIE -> PieCard(
-                        state = state,
-                        previewCount = layout.pieLegendCount,
-                        expanded = legendExpanded,
-                        showAll = legendShowAll,
-                        onExpand = { legendExpanded = true },
-                        onShowAll = { legendShowAll = true },
-                        onCollapse = { legendExpanded = false; legendShowAll = false },
-                        onCategory = { categorySheet = it },
-                    )
-                    StatsModules.COMPARE -> if (state.total > 0) CompareCard(state)
-                    StatsModules.MERCHANTS -> if (state.topMerchants.isNotEmpty()) MerchantsCard(state)
-                    StatsModules.CALENDAR -> CalendarCard(viewModel, state)
-                    StatsModules.TREND -> TrendCard(state, pal.expense, pal.income) { viewModel.setMonth(it) }
-                    StatsModules.BARS -> if (state.trend.any { it.expense > 0 || it.income > 0 }) {
-                        SoftCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                            Text("近 12 个月柱", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 18.dp, top = 14.dp))
-                            Text("点一根看那个月。和上面的曲线不是同一件事：这里比高低，曲线比走势。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 18.dp))
-                            com.simpleaccount.app.ui.components.BarChartView(state.trend, pal.expense, pal.income) { viewModel.setMonth(it) }
+// 主模块 inline；高级分析一律收纳进下方展开区（默认不占主列表）
+            val mainIds = layout.order.filter { it !in layout.hidden && !StatsModules.isAdvanced(it) }
+            val advancedIds = layout.order.filter { StatsModules.isAdvanced(it) && it !in layout.hidden }
+                .ifEmpty {
+                    // 顺序里还没有高级项时（旧配置），补全默认高级列表
+                    StatsModules.ADVANCED_IDS.filter { it !in layout.hidden }
+                }
+            mainIds.forEach { id -> StatsModuleBlock(id, state, layout, pal, legendExpanded, legendShowAll,
+                onExpand = { legendExpanded = true },
+                onShowAll = { legendShowAll = true },
+                onCollapse = { legendExpanded = false; legendShowAll = false },
+                onCategory = { categorySheet = it },
+                onMonth = { viewModel.setMonth(it) },
+                viewModel = viewModel,
+            ) }
+            // 高级分析展开区（默认折叠，不占主列表）
+            SoftCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            advancedOpen = !advancedOpen
+                            viewModel.persistAdvancedOpen(advancedOpen)
                         }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("高级分析", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text(
+                            "频次曲线 · 结构演进 · 环比水位 · 商户集中度 · 类目弹性 · 帕累托累计",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                    StatsModules.WEEKDAY -> if (state.weekdayTotals.any { it.second > 0 }) DimBarCard("星期分布", "按账单日期的星期几合计，不是猜测你周末更浪。", state.weekdayTotals, pal.expense)
-                    StatsModules.HOURS -> if (state.hourBuckets.any { it.second > 0 }) DimBarCard("时段分布", "按账单上的时刻归入五个时段。没填时间的不算。", state.hourBuckets, pal.expense)
-                    StatsModules.FREQ -> if (state.freqPoints.size >= 2) PerspectiveCard(id = StatsModules.FREQ) {
-                        com.simpleaccount.app.ui.components.FreqCurveView(state.freqPoints, pal.expense)
-                    }
-                    StatsModules.SHARE -> if (state.shareMonths.size >= 2) PerspectiveCard(id = StatsModules.SHARE) {
-                        com.simpleaccount.app.ui.components.ShareAreaView(state.shareMonths)
-                    }
-                    StatsModules.MOM_DELTA -> if (state.momDeltas.any { it.deltaFen != 0L }) PerspectiveCard(id = StatsModules.MOM_DELTA) {
-                        com.simpleaccount.app.ui.components.MomWaterView(state.momDeltas, pal.expense, pal.income)
-                    }
-                    StatsModules.CONC -> if (state.conc.merchantCount > 0) PerspectiveCard(id = StatsModules.CONC) {
-                        com.simpleaccount.app.ui.components.ConcNumbers(state.conc)
-                        com.simpleaccount.app.ui.components.LorenzView(state.conc, pal.expense)
-                    }
-                    StatsModules.ELASTIC -> if (state.elastic.size >= 2) PerspectiveCard(id = StatsModules.ELASTIC) {
-                        com.simpleaccount.app.ui.components.ScatterElasticView(state.elastic, pal.expense)
-                    }
-                    StatsModules.PARETO -> if (state.pareto.size >= 2) PerspectiveCard(id = StatsModules.PARETO) {
-                        com.simpleaccount.app.ui.components.ParetoCurveView(state.pareto, pal.expense)
-                    }
-                    StatsModules.HEAT -> if (state.heat.isNotEmpty()) PerspectiveCard(id = StatsModules.HEAT) {
-                        com.simpleaccount.app.ui.components.HeatGridView(state.heat, pal.expense)
-                    }
-                    StatsModules.SPARK -> if (state.spark.any { it.amount > 0 }) PerspectiveCard(id = StatsModules.SPARK) {
-                        com.simpleaccount.app.ui.components.SparklineView(state.spark, pal.expense)
-                    }
-                    StatsModules.FLOW -> if (state.flowIncome.isNotEmpty() || state.flowExpense.isNotEmpty()) PerspectiveCard(id = StatsModules.FLOW) {
-                        com.simpleaccount.app.ui.components.FlowColumnsView(state.flowIncome, state.flowExpense, pal.income, pal.expense)
-                    }
-                    StatsModules.RADAR -> if (state.radar.labels.size >= 3) PerspectiveCard(id = StatsModules.RADAR) {
-                        com.simpleaccount.app.ui.components.RadarView(state.radar, pal.expense, pal.income)
-                    }
+                    Text(if (advancedOpen) "收起" else "展开", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                }
+            }
+            if (advancedOpen) {
+                advancedIds.forEach { id ->
+                    StatsModuleBlock(id, state, layout, pal, legendExpanded, legendShowAll,
+                        onExpand = {}, onShowAll = {}, onCollapse = {},
+                        onCategory = { categorySheet = it },
+                        onMonth = { viewModel.setMonth(it) },
+                        viewModel = viewModel,
+                    )
                 }
             }
         }
@@ -200,6 +196,79 @@ fun StatsScreen(viewModel: StatsViewModel) {
 }
 
 @Composable
+private fun StatsModuleBlock(
+    id: String,
+    state: StatsUiState,
+    layout: StatsLayoutUi,
+    pal: AppPalette,
+    legendExpanded: Boolean,
+    legendShowAll: Boolean,
+    onExpand: () -> Unit,
+    onShowAll: () -> Unit,
+    onCollapse: () -> Unit,
+    onCategory: (String) -> Unit,
+    onMonth: (String) -> Unit,
+    viewModel: StatsViewModel,
+) {
+    when (id) {
+        StatsModules.PIE -> PieCard(
+            state = state,
+            previewCount = layout.pieLegendCount,
+            expanded = legendExpanded,
+            showAll = legendShowAll,
+            onExpand = onExpand,
+            onShowAll = onShowAll,
+            onCollapse = onCollapse,
+            onCategory = onCategory,
+        )
+        StatsModules.COMPARE -> if (state.total > 0) CompareCard(state)
+        StatsModules.MERCHANTS -> if (state.topMerchants.isNotEmpty()) MerchantsCard(state)
+        StatsModules.CALENDAR -> CalendarCard(viewModel, state)
+        StatsModules.TREND -> TrendCard(state, pal.expense, pal.income, onMonth)
+        StatsModules.BARS -> if (state.trend.any { it.expense > 0 || it.income > 0 }) {
+            SoftCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Text("近 12 个月柱", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 18.dp, top = 14.dp))
+                Text("点一根看那个月。和上面的曲线不是同一件事：这里比高低，曲线比走势。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 18.dp))
+                com.simpleaccount.app.ui.components.BarChartView(state.trend, pal.expense, pal.income, onMonth)
+            }
+        }
+        StatsModules.WEEKDAY -> if (state.weekdayTotals.any { it.second > 0 }) DimBarCard("星期分布", "按账单日期的星期几合计。", state.weekdayTotals, pal.expense)
+        StatsModules.HOURS -> if (state.hourBuckets.any { it.second > 0 }) DimBarCard("时段分布", "按账单上的时刻归入五个时段。没填时间的不算。", state.hourBuckets, pal.expense)
+        StatsModules.FREQ -> if (state.freqPoints.size >= 2) PerspectiveCard(id = StatsModules.FREQ) {
+            com.simpleaccount.app.ui.components.FreqCurveView(state.freqPoints, pal.expense)
+        }
+        StatsModules.SHARE -> if (state.shareMonths.size >= 2) PerspectiveCard(id = StatsModules.SHARE) {
+            com.simpleaccount.app.ui.components.ShareAreaView(state.shareMonths)
+        }
+        StatsModules.MOM_DELTA -> if (state.momDeltas.any { it.deltaFen != 0L }) PerspectiveCard(id = StatsModules.MOM_DELTA) {
+            com.simpleaccount.app.ui.components.MomWaterView(state.momDeltas, pal.expense, pal.income)
+        }
+        StatsModules.CONC -> if (state.conc.merchantCount > 0) PerspectiveCard(id = StatsModules.CONC) {
+            com.simpleaccount.app.ui.components.ConcNumbers(state.conc)
+            com.simpleaccount.app.ui.components.LorenzView(state.conc, pal.expense)
+        }
+        StatsModules.ELASTIC -> if (state.elastic.size >= 2) PerspectiveCard(id = StatsModules.ELASTIC) {
+            com.simpleaccount.app.ui.components.ScatterElasticView(state.elastic, pal.expense)
+        }
+        StatsModules.PARETO -> if (state.pareto.size >= 2) PerspectiveCard(id = StatsModules.PARETO) {
+            com.simpleaccount.app.ui.components.ParetoCurveView(state.pareto, pal.expense)
+        }
+        StatsModules.HEAT -> if (state.heat.isNotEmpty()) PerspectiveCard(id = StatsModules.HEAT) {
+            com.simpleaccount.app.ui.components.HeatGridView(state.heat, pal.expense)
+        }
+        StatsModules.SPARK -> if (state.spark.any { it.amount > 0 }) PerspectiveCard(id = StatsModules.SPARK) {
+            com.simpleaccount.app.ui.components.SparklineView(state.spark, pal.expense)
+        }
+        StatsModules.FLOW -> if (state.flowIncome.isNotEmpty() || state.flowExpense.isNotEmpty()) PerspectiveCard(id = StatsModules.FLOW) {
+            com.simpleaccount.app.ui.components.FlowColumnsView(state.flowIncome, state.flowExpense, pal.income, pal.expense)
+        }
+        StatsModules.RADAR -> if (state.radar.labels.size >= 3) PerspectiveCard(id = StatsModules.RADAR) {
+            com.simpleaccount.app.ui.components.RadarView(state.radar, pal.expense, pal.income)
+        }
+    }
+}
+
+@Composable
 private fun PieCard(
     state: StatsUiState,
     previewCount: Int,
@@ -210,11 +279,25 @@ private fun PieCard(
     onCollapse: () -> Unit,
     onCategory: (String) -> Unit,
 ) {
+    // 已展开二级的一级分类名
+    var openParents by remember { mutableStateOf(setOf<String>()) }
     SoftCard(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
+        Text(
+            "分类构成",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 18.dp, top = 12.dp)
+        )
+        Text(
+            "一级占比；点右侧 › 展开二级，再点二级看账单明细。",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 18.dp, bottom = 4.dp)
+        )
         PieChartView(
             slices = state.slices,
             centerLabel = if (state.type == Transaction.TYPE_EXPENSE) "总支出" else "总收入",
@@ -249,9 +332,31 @@ private fun PieCard(
                         showAll || preview == 0 -> state.slices
                         else -> state.slices.take(preview)
                     }
-                    Column(Modifier.height((shown.size * 48).dp)) {
-                        shown.forEach { s ->
-                            PieLegendRow(s, state.total) { onCategory(s.categoryName) }
+                    shown.forEach { s ->
+                        val open = s.categoryName in openParents
+                        PieLegendRow(
+                            s = s,
+                            total = state.total,
+                            hasChildren = s.children.isNotEmpty(),
+                            childrenOpen = open,
+                            onToggleChildren = {
+                                openParents = if (open) openParents - s.categoryName
+                                else openParents + s.categoryName
+                            },
+                            onClick = { onCategory(s.categoryName) },
+                        )
+                        if (open && s.children.isNotEmpty()) {
+                            s.children.forEach { child ->
+                                PieLegendRow(
+                                    s = child,
+                                    total = state.total,
+                                    hasChildren = false,
+                                    childrenOpen = false,
+                                    indented = true,
+                                    onToggleChildren = {},
+                                    onClick = { onCategory(child.categoryName) },
+                                )
+                            }
                         }
                     }
                     Row(
@@ -264,7 +369,10 @@ private fun PieCard(
                             }
                         }
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onCollapse) {
+                        TextButton(onClick = {
+                            openParents = emptySet()
+                            onCollapse()
+                        }) {
                             Text("收起", fontSize = 13.sp)
                         }
                     }
@@ -275,21 +383,33 @@ private fun PieCard(
 }
 
 @Composable
-private fun PieLegendRow(s: PieSlice, total: Long, onClick: () -> Unit) {
+private fun PieLegendRow(
+    s: PieSlice,
+    total: Long,
+    hasChildren: Boolean = false,
+    childrenOpen: Boolean = false,
+    indented: Boolean = false,
+    onToggleChildren: () -> Unit = {},
+    onClick: () -> Unit,
+) {
     val percent = if (total > 0) s.value.toFloat() / total else 0f
     Column(
         Modifier
             .fillMaxWidth()
-            .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp, horizontal = 2.dp)
+            .padding(start = if (indented) 18.dp else 0.dp)
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).clip(CircleShape).background(parseColor(s.colorHex)))
             Spacer(Modifier.width(10.dp))
-            Text(s.categoryName, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.weight(1f))
+            Text(
+                if (indented && s.isSub) s.categoryName.substringAfter('/') else s.categoryName,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
             Text(
                 "%.0f%%".format(percent * 100),
                 style = MaterialTheme.typography.bodySmall,
@@ -301,6 +421,19 @@ private fun PieLegendRow(s: PieSlice, total: Long, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold
             )
+            if (hasChildren) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (childrenOpen) "˅" else "›",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onToggleChildren)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         Box(
@@ -518,13 +651,19 @@ private fun CategoryTxSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(
+Text(
                                     listOf(t.merchant, t.product).filter { it.isNotBlank() }
-                                        .joinToString(" · ").ifBlank { t.category },
+                                        .joinToString(" · ").ifBlank {
+                                            if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+                                        },
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1
                                 )
-                                Text(t.date, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    t.date + if (t.subCategory.isNotBlank()) " · ${t.category}/${t.subCategory}" else " · ${t.category}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             Text(
                                 (if (t.type == Transaction.TYPE_INCOME) "+" else "-") +

@@ -33,6 +33,10 @@ class AgentTools @Inject constructor(
         const val NEED_CONFIRM_PREFIX = "[NEED_CONFIRM]"
     }
 
+    /** 只读工具统一口径：排除草稿，并应用退款/投资开关。 */
+    private suspend fun scopedTxs(): List<Transaction> =
+        settingsRepository.filterByLedgerScope(accountRepository.getAll())
+
     /** 全部工具定义（提供给模型） */
     val specs: List<AgentToolSpec> = listOf(
         AgentToolSpec(
@@ -135,13 +139,22 @@ class AgentTools @Inject constructor(
         ),
         AgentToolSpec(
             name = "reclassify_transactions",
-            description = "把选定的若干笔改到新分类，调用后立刻写库并返回 rows_affected。优先 ids；也可 merchant / from_category / amount / month。筛选命中最多 800 笔。禁止口头说已完成。rows_affected=0 就是失败。",
+            description = "把选定的若干笔改到新分类并落库，返回 rows_affected。" +
+                "选择集：ids 优先；或 merchant（含「企鹅」等商家名）+ 金额条件 + from_category/month。" +
+                "金额条件：amount=精确元；amount_lt/amount_lte/amount_gt/amount_gte（元，可组合，如 <0.5 用 amount_lt=0.5，≥0.5 用 amount_gte=0.5）。" +
+                "例：企鹅消费按金额归类 → 先 reclassify(merchant=企鹅, amount_lt=0.5, category=餐饮)，再 reclassify(merchant=企鹅, amount_gte=0.5, category=居住)。" +
+                "命中最多 800 笔。禁止口头说已完成；rows_affected=0 即失败。",
             parameters = mapOf(
                 "ids" to ("string" to "流水号，逗号或空格分隔，例如 12,15,18"),
-                "category" to ("string" to "目标分类，必须是现有分类之一"),
-                "merchant" to ("string" to "可选：只改该商家名下的匹配笔；ids 已给时忽略"),
+                "category" to ("string" to "目标一级分类，必须是现有分类之一"),
+                "sub_category" to ("string" to "可选：同时写入二级分类名"),
+                "merchant" to ("string" to "可选：只改该商家名下的匹配笔（含部分匹配，如「企鹅」）；ids 已给时仍可叠加金额条件"),
                 "from_category" to ("string" to "可选：只改当前属于该类的笔"),
-                "amount" to ("number" to "可选：只改这一金额（元），例如 50 表示五十元那一笔"),
+                "amount" to ("number" to "可选：精确金额（元），例如 50"),
+                "amount_lt" to ("number" to "可选：金额 < 该值（元），如 0.5 表示不足五毛"),
+                "amount_lte" to ("number" to "可选：金额 ≤ 该值（元）"),
+                "amount_gt" to ("number" to "可选：金额 > 该值（元）"),
+                "amount_gte" to ("number" to "可选：金额 ≥ 该值（元），如 0.5"),
                 "month" to ("string" to "可选：yyyy-MM 或「本月」"),
                 "date" to ("string" to "可选：某一天 yyyy-MM-dd"),
             ),
@@ -394,7 +407,8 @@ class AgentTools @Inject constructor(
             "withdraw_transaction" -> {
                 val id = a.optLong("transaction_id", -1L)
                 val t = if (id > 0) accountRepository.getById(id)
-                else accountRepository.getAll().maxByOrNull { it.id }
+                else accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                    ?: accountRepository.getAll().maxByOrNull { it.id }
                 if (t == null) "没有可撤回的记录。"
                 else {
                     val dir = if (t.type == Transaction.TYPE_EXPENSE) "支出" else "收入"
@@ -539,7 +553,7 @@ class AgentTools @Inject constructor(
             else -> null
         }
 
-        val matched = accountRepository.getAll().asSequence()
+val matched = scopedTxs().asSequence()
             .filter { date.isEmpty() || it.date == date }
             .filter { date.isNotEmpty() || month.isEmpty() || it.date.startsWith(month) }
             .filter { typeFilter == null || it.type == typeFilter }
@@ -579,7 +593,7 @@ class AgentTools @Inject constructor(
         // end 用"区间边界"（次月首日/次日），配合 date < boundary 天然包含结束日，
         // 修复旧实现 yyyy-MM-dd 会被拼成 "2026-03-15-31" 非法串的问题
         val endExcl = endBound?.second ?: ""
-        val all = accountRepository.getAll()
+val all = scopedTxs()
         val filtered = all.filter { t ->
             (startIncl.isEmpty() || t.date >= startIncl) && (endExcl.isEmpty() || t.date < endExcl)
         }
@@ -595,12 +609,16 @@ class AgentTools @Inject constructor(
         val endBound = monthBounds(a.optString("end"))
         val startIncl = startBound?.first ?: ""
         val endExcl = endBound?.second ?: ""
-        val all = accountRepository.getAll()
+        val all = scopedTxs()
             .filter { it.type == type }
             .filter { startIncl.isEmpty() || it.date >= startIncl }
             .filter { endExcl.isEmpty() || it.date < endExcl }
+        // 二级维度：有二级用「一级/二级」
         val byCat = mutableMapOf<String, Long>()
-        all.forEach { byCat[it.category] = byCat.getOrDefault(it.category, 0L) + it.amount }
+        all.forEach { t ->
+            val key = if (t.subCategory.isNotBlank()) "${t.category}/${t.subCategory}" else t.category
+            byCat[key] = byCat.getOrDefault(key, 0L) + t.amount
+        }
         if (byCat.isEmpty()) return "没有该类型/区间的记录。"
         val label = if (type == Transaction.TYPE_EXPENSE) "支出" else "收入"
         val sb = StringBuilder()
@@ -615,7 +633,7 @@ class AgentTools @Inject constructor(
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val type = a.optString("type").ifBlank { Transaction.TYPE_EXPENSE }
         val limit = a.optInt("limit", 10).coerceIn(1, 30)
-        val all = accountRepository.getAll()
+        val all = scopedTxs()
             .filter { it.type == type }
             .filter { month.isEmpty() || it.date.startsWith(month) }
         if (all.isEmpty()) return "没有符合条件的记录。"
@@ -740,7 +758,8 @@ class AgentTools @Inject constructor(
         val t = if (id > 0) {
             accountRepository.getById(id)
         } else {
-            accountRepository.getAll().maxByOrNull { it.id }
+            accountRepository.getAll().filter { it.source != Transaction.SOURCE_DRAFT }.maxByOrNull { it.id }
+                ?: accountRepository.getAll().maxByOrNull { it.id }
         } ?: return if (id > 0) "没有找到流水号 $id 的记录（可能已删除）。" else "账本是空的，没有可撤回的。"
         accountRepository.delete(t.id)
         if (accountRepository.getById(t.id) != null) {
@@ -801,14 +820,39 @@ class AgentTools @Inject constructor(
         return out.filter { it > 0 }.distinct()
     }
 
-    private fun parseAmountFen(a: JSONObject): Long? {
-        if (!a.has("amount") || a.isNull("amount")) return null
-        val raw = a.opt("amount") ?: return null
+    private fun parseAmountFen(a: JSONObject, key: String = "amount"): Long? {
+        if (!a.has(key) || a.isNull(key)) return null
+        val raw = a.opt(key) ?: return null
         val s = when (raw) {
             is Number -> raw.toString()
             else -> raw.toString()
         }
         return MoneyUtil.parseToFen(s) ?: MoneyUtil.parseChineseToFen(s)
+    }
+
+    /** 金额区间：元 → 分；支持 amount 精确 + amount_lt/lte/gt/gte。 */
+    private fun amountPredicate(a: JSONObject): ((Long) -> Boolean)? {
+        val exact = parseAmountFen(a, "amount")
+        val lt = parseAmountFen(a, "amount_lt")
+        val lte = parseAmountFen(a, "amount_lte")
+        val gt = parseAmountFen(a, "amount_gt")
+        val gte = parseAmountFen(a, "amount_gte")
+        if (exact == null && lt == null && lte == null && gt == null && gte == null) return null
+        return { fen ->
+            (exact == null || fen == exact) &&
+                (lt == null || fen < lt) &&
+                (lte == null || fen <= lte) &&
+                (gt == null || fen > gt) &&
+                (gte == null || fen >= gte)
+        }
+    }
+
+    private fun hasReclassifySelector(a: JSONObject): Boolean {
+        if (parseIds(a).isNotEmpty()) return true
+        if (a.optString("merchant").trim().isNotEmpty()) return true
+        if (a.optString("from_category").trim().isNotEmpty()) return true
+        if (amountPredicate(a) != null) return true
+        return false
     }
 
     private suspend fun matchReclassify(a: JSONObject): List<Transaction> {
@@ -817,29 +861,39 @@ class AgentTools @Inject constructor(
         val fromCat = a.optString("from_category").trim()
         val month = normalizeMonth(a.optString("month").trim()) ?: ""
         val date = normalizeDate(a.optString("date").trim()) ?: ""
-        val amountFen = parseAmountFen(a)
+        val amtPred = amountPredicate(a)
         val all = accountRepository.getAll()
-        return if (ids.isNotEmpty()) {
-            val set = ids.toSet()
-            all.filter { it.id in set }
-        } else {
-            all.filter {
-                (merchant.isEmpty() || it.merchant.contains(merchant) || it.product.contains(merchant)) &&
-                    (fromCat.isEmpty() || it.category == fromCat) &&
-                    (month.isEmpty() || it.date.startsWith(month)) &&
-                    (date.isEmpty() || it.date == date) &&
-                    (amountFen == null || it.amount == amountFen)
-            }
+        // ids 可与金额/商家条件叠加（便于「这些 id 里金额≥0.5 的」）
+        return all.filter { t ->
+            if (t.source == Transaction.SOURCE_DRAFT && ids.isEmpty()) return@filter false
+            if (ids.isNotEmpty() && t.id !in ids) return@filter false
+            if (merchant.isNotEmpty() &&
+                !t.merchant.contains(merchant, ignoreCase = true) &&
+                !t.product.contains(merchant, ignoreCase = true) &&
+                !t.note.contains(merchant, ignoreCase = true)
+            ) return@filter false
+            if (fromCat.isNotEmpty() && t.category != fromCat) return@filter false
+            if (month.isNotEmpty() && !t.date.startsWith(month)) return@filter false
+            if (date.isNotEmpty() && t.date != date) return@filter false
+            if (amtPred != null && !amtPred(t.amount)) return@filter false
+            true
         }
+    }
+
+    private fun amountRuleLabel(a: JSONObject): String {
+        val parts = mutableListOf<String>()
+        parseAmountFen(a, "amount")?.let { parts += "=¥${MoneyUtil.fenToYuan(it)}" }
+        parseAmountFen(a, "amount_lt")?.let { parts += "<¥${MoneyUtil.fenToYuan(it)}" }
+        parseAmountFen(a, "amount_lte")?.let { parts += "≤¥${MoneyUtil.fenToYuan(it)}" }
+        parseAmountFen(a, "amount_gt")?.let { parts += ">¥${MoneyUtil.fenToYuan(it)}" }
+        parseAmountFen(a, "amount_gte")?.let { parts += "≥¥${MoneyUtil.fenToYuan(it)}" }
+        return parts.joinToString(" ")
     }
 
     private suspend fun previewReclassify(a: JSONObject): String {
         val category = a.optString("category").trim()
-        val ids = parseIds(a)
-        val merchant = a.optString("merchant").trim()
-        val fromCat = a.optString("from_category").trim()
-        if (ids.isEmpty() && merchant.isEmpty() && fromCat.isEmpty()) {
-            return "缺少流水号。请先查出要改的几笔，再把 ids 传给 reclassify_transactions。"
+        if (!hasReclassifySelector(a)) {
+            return "缺少选择集。请提供流水号 ids，或商家 merchant，或金额条件 amount/amount_lt/amount_gte 等。"
         }
         val targets = matchReclassify(a)
         if (targets.isEmpty()) return "没有匹配到要改分类的账单。"
@@ -847,46 +901,70 @@ class AgentTools @Inject constructor(
             "流水号${it.id} ${it.merchant.ifBlank { it.product.ifBlank { it.category } }} ¥${MoneyUtil.fenToYuan(it.amount)}"
         }
         val extra = if (targets.size > 6) " 等 ${targets.size} 笔" else ""
-        val via = if (ids.isNotEmpty()) "按流水号" else "按商家/分类筛选"
-        return "将把 $via 选中的 ${targets.size} 笔改到「$category」：$sample$extra。不会改商家映射，也不会动没选中的账。"
+        val merch = a.optString("merchant").trim()
+        val via = buildString {
+            if (parseIds(a).isNotEmpty()) append("按流水号")
+            if (merch.isNotEmpty()) append(if (isEmpty()) "按商家「$merch」" else "+商家「$merch」")
+            val ar = amountRuleLabel(a)
+            if (ar.isNotEmpty()) append(if (isEmpty()) "按金额$ar" else "+金额$ar")
+            if (isEmpty()) append("按筛选")
+        }
+        val sub = a.optString("sub_category").trim()
+        val catLabel = if (sub.isNotBlank()) "$category/$sub" else category
+        return "将把 $via 选中的 ${targets.size} 笔改到「$catLabel」：$sample$extra。不会改商家映射，也不会动没选中的账。"
     }
 
-    /** 选择集级改分类：只动传入的流水，不写商家映射。 */
+    /** 选择集级改分类：商家/金额区间/流水号，不写商家映射。 */
     private suspend fun reclassifyTransactions(args: String): String {
         val a = parseArgs(args)
         val category = a.optString("category").trim()
+        val subCategory = a.optString("sub_category").trim()
         val valid = categoryRepository.getAll().map { it.name }.toSet()
         if (category !in valid) return "参数错误：分类「$category」不存在，可用：${valid.joinToString("、")}。"
-        val ids = parseIds(a)
-        val merchant = a.optString("merchant").trim()
-        val fromCat = a.optString("from_category").trim()
-        if (ids.isEmpty() && merchant.isEmpty() && fromCat.isEmpty()) {
-            return "失败 rows_affected=0。请提供流水号 ids，或商家/原分类。不要整本账一刀切。"
+        if (!hasReclassifySelector(a)) {
+            return "失败 rows_affected=0。请提供流水号 ids，或商家 merchant，或金额条件（amount_lt/amount_gte 等）。不要整本账一刀切。"
         }
         val targets = matchReclassify(a)
         if (targets.isEmpty()) return "失败 rows_affected=0。没有匹配的账单。"
-        if (ids.isEmpty() && targets.size > 800) {
-            return "失败 rows_affected=0。匹配 ${targets.size} 笔超过 800。请加 month/from_category/amount 收窄，或分批传 ids。"
+        if (parseIds(a).isEmpty() && targets.size > 800) {
+            return "失败 rows_affected=0。匹配 ${targets.size} 笔超过 800。请加 month/from_category/amount 条件收窄，或分批传 ids。"
         }
         var n = 0
-        targets.forEach {
-            if (it.category != category) {
-                accountRepository.update(it.copy(category = category, updatedAt = System.currentTimeMillis()))
+        targets.forEach { t ->
+            val needCat = t.category != category
+            val needSub = subCategory.isNotEmpty() && t.subCategory != subCategory
+            if (needCat || needSub) {
+                accountRepository.update(
+                    t.copy(
+                        category = category,
+                        subCategory = if (subCategory.isNotEmpty()) subCategory else t.subCategory,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                )
                 n++
             }
         }
         val verified = targets.mapNotNull { accountRepository.getById(it.id) }
-        val mismatch = verified.filter { it.category != category }
+        val mismatch = verified.filter {
+            it.category != category || (subCategory.isNotEmpty() && it.subCategory != subCategory)
+        }
         if (mismatch.isNotEmpty()) {
-            return "失败 rows_affected=$n。写库后核验失败：${mismatch.size} 笔仍不是「$category」。"
+            return "失败 rows_affected=$n。写库后核验失败：${mismatch.size} 笔仍不符合目标分类。"
         }
+        val catLabel = if (subCategory.isNotBlank()) "$category/$subCategory" else category
         if (n == 0) {
-            return "rows_affected=0。选中的 ${verified.size} 笔本来就是「$category」，账本没有新的改动。"
+            return "rows_affected=0。选中的 ${verified.size} 笔本来就是「$catLabel」，账本没有新的改动。"
         }
+        val rule = amountRuleLabel(a)
+        val merch = a.optString("merchant").trim()
         val sample = verified.take(8).joinToString("\n") {
-            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} 现分类=${it.category}"
+            "- 流水号 ${it.id} ${it.date} ${it.merchant.ifBlank { it.product }} ¥${MoneyUtil.fenToYuan(it.amount)} 现分类=${it.category}" +
+                if (it.subCategory.isNotBlank()) "/${it.subCategory}" else ""
         }
-        return "【账本已核验】rows_affected=$n matched=${verified.size} 改到「$category」。未改商家映射。\n$sample"
+        return "【账本已核验】rows_affected=$n matched=${verified.size} 改到「$catLabel」" +
+            (if (merch.isNotEmpty()) "（商家含「$merch」）" else "") +
+            (if (rule.isNotEmpty()) "（金额$rule）" else "") +
+            "。未改商家映射。\n$sample"
     }
 
     /** 操控：跳转页面 */
@@ -1051,8 +1129,8 @@ class AgentTools @Inject constructor(
     }
 
     /** 列出账本覆盖的所有月份及各月收支，供模型核对"某月有没有数据" */
-    private suspend fun listMonths(args: String): String {
-        val all = accountRepository.getAll()
+private suspend fun listMonths(args: String): String {
+        val all = scopedTxs()
         if (all.isEmpty()) return "账本还没有任何数据，请先在「导入」页导入微信/支付宝账单。"
         val byMonth = sortedMapOf<String, LongArray>()
         all.forEach {
@@ -1074,7 +1152,7 @@ class AgentTools @Inject constructor(
             ?: normalizeDate(a.optString("month").trim())?.take(7)
             ?: normalizeDate(a.optString("date").trim())?.take(7)
             ?: return "参数错误：month 必须是月份（yyyy-MM，如 2026-08；也接受 本月/上个月/昨天）。"
-        val all = accountRepository.getAll().filter { it.date.startsWith(month) }
+val all = scopedTxs().filter { it.date.startsWith(month) }
         if (all.isEmpty()) return "$month 没有记账记录。"
         val byDay = sortedMapOf<String, LongArray>()
         all.forEach {
@@ -1142,11 +1220,11 @@ class AgentTools @Inject constructor(
         return "已归类 $updated 个商家，$skipped 个因分类名无效跳过。"
     }
 
-    private suspend fun getInsights(args: String): String {
+private suspend fun getInsights(args: String): String {
         val a = parseArgs(args)
         val month = normalizeMonth(a.optString("month").trim()) ?: DateUtil.thisMonth()
         val health = InsightsEngine.compute(
-            accountRepository.getAll(),
+            scopedTxs(),
             settingsRepository.monthlyBudget(),
             month,
         )
