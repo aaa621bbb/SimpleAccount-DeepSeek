@@ -258,34 +258,97 @@ val lastCats = lastTx.filter { it.type == Transaction.TYPE_EXPENSE }
         return Triple(wAvg, eAvg, night)
     }
 
-/**
+/** 测算明细中的一条聚类。 */
+    data class ProjectionCluster(
+        val label: String,
+        val category: String,
+        val totalFen: Long,
+        val dayCount: Int,
+        val oneShot: Boolean,
+        val reason: String,
+    )
+
+    /** 月底测算完整拆解（供详情页展示口径/纳入豁免/日摊与一次性）。 */
+    data class ProjectionBreakdown(
+        val month: String,
+        val dayOfMonth: Int,
+        val daysInMonth: Int,
+        val spentFen: Long,
+        val oneShotFen: Long,
+        val recurringSpentFen: Long,
+        val recurringProjectedFen: Long,
+        val projectedFen: Long,
+        val budgetFen: Long,
+        val includeRefund: Boolean,
+        val includeInvestIncome: Boolean,
+        val includeInvestExpense: Boolean,
+        val clusters: List<ProjectionCluster>,
+        val formula: String,
+    )
+
+    /**
      * 月底支出预估（v2.31.0 修正）：
      * - **可复发（日频）支出**：地铁、公交、餐饮外卖等，按「已发生日均 × 剩余天数」外推；
      * - **一次性/低频**：月初话费、单次火车票、大额装修等，只计已发生金额一次，不摊销。
      * 判定从严：仅当「本月出现 ≤2 天 且 非交通/餐饮日频类」才豁免日均；地铁等仍按日折算。
      */
     fun projectMonthEnd(monthTx: List<Transaction>, dayOfMonth: Int, daysInMonth: Int): Long {
-        if (dayOfMonth <= 0) return 0L
-        val exp = monthTx.filter { it.type == Transaction.TYPE_EXPENSE }
-        if (exp.isEmpty()) return 0L
-        val remainDays = (daysInMonth - dayOfMonth).coerceAtLeast(0)
-        if (remainDays == 0) return exp.sumOf { it.amount }
+        return projectMonthEndBreakdown(monthTx, dayOfMonth, daysInMonth).projectedFen
+    }
 
-        // 按「商家|分类|金额桶」聚类，识别一次性
+    fun projectMonthEndBreakdown(
+        monthTx: List<Transaction>,
+        dayOfMonth: Int,
+        daysInMonth: Int,
+        month: String = "",
+        budgetFen: Long = 0L,
+        includeRefund: Boolean = true,
+        includeInvestIncome: Boolean = true,
+        includeInvestExpense: Boolean = true,
+    ): ProjectionBreakdown {
+        val exp = monthTx.filter { it.type == Transaction.TYPE_EXPENSE }
+        val spent = exp.sumOf { it.amount }
+        if (dayOfMonth <= 0 || exp.isEmpty()) {
+            return ProjectionBreakdown(
+                month = month, dayOfMonth = dayOfMonth, daysInMonth = daysInMonth,
+                spentFen = spent, oneShotFen = 0, recurringSpentFen = 0, recurringProjectedFen = 0,
+                projectedFen = spent, budgetFen = budgetFen,
+                includeRefund = includeRefund, includeInvestIncome = includeInvestIncome,
+                includeInvestExpense = includeInvestExpense, clusters = emptyList(),
+                formula = "本月尚无支出，测算为 0。",
+            )
+        }
+        val remainDays = (daysInMonth - dayOfMonth).coerceAtLeast(0)
+        if (remainDays == 0) {
+            return ProjectionBreakdown(
+                month = month, dayOfMonth = dayOfMonth, daysInMonth = daysInMonth,
+                spentFen = spent, oneShotFen = spent, recurringSpentFen = 0, recurringProjectedFen = 0,
+                projectedFen = spent, budgetFen = budgetFen,
+                includeRefund = includeRefund, includeInvestIncome = includeInvestIncome,
+                includeInvestExpense = includeInvestExpense, clusters = emptyList(),
+                formula = "已到月末，测算 = 本月已花 ¥${MoneyUtil.fenToYuan(spent)}。",
+            )
+        }
+
         data class Cluster(
+            val label: String,
+            val category: String,
             val days: Set<String>,
             val total: Long,
             val dailyLike: Boolean,
             val oneShotHint: Boolean,
         )
         val clusters = exp.groupBy { t ->
-            val amtBucket = t.amount / 100 // 元级
+            val amtBucket = t.amount / 100
             "${t.merchant.ifBlank { t.category }}|${t.category}|$amtBucket"
         }.map { (_, list) ->
             val days = list.map { it.date }.toSet()
             val cat = list.first().category
+            val merch = list.first().merchant.ifBlank { cat }
             val product = list.joinToString(" ") { it.product + it.merchant + it.note }
             Cluster(
+                label = merch,
+                category = cat,
                 days = days,
                 total = list.sumOf { it.amount },
                 dailyLike = isDailyLikeExpense(cat, product),
@@ -295,20 +358,54 @@ val lastCats = lastTx.filter { it.type == Transaction.TYPE_EXPENSE }
 
         var oneShot = 0L
         var recurring = 0L
+        val detail = mutableListOf<ProjectionCluster>()
         for (c in clusters) {
-            // 从严：显式一次性关键词 → 只计一次；
-            // 或（非日频 且 本月出现 ≤2 天）→ 一次性。地铁等 dailyLike 永不豁免。
             val treatAsOneShot = when {
                 c.dailyLike -> false
                 c.oneShotHint -> true
                 c.days.size <= 2 -> true
                 else -> false
             }
+            val reason = when {
+                c.dailyLike -> "日频/常态（按日均外推）"
+                c.oneShotHint -> "一次性关键词（只计已发生）"
+                c.days.size <= 2 -> "本月仅 ${c.days.size} 天出现（豁免日摊）"
+                else -> "多日复发（按日均外推）"
+            }
             if (treatAsOneShot) oneShot += c.total else recurring += c.total
+            detail += ProjectionCluster(
+                label = c.label,
+                category = c.category,
+                totalFen = c.total,
+                dayCount = c.days.size,
+                oneShot = treatAsOneShot,
+                reason = reason,
+            )
         }
-        // 可复发部分：按已发生日数日均 × 整月天数
         val recurringProjected = if (dayOfMonth > 0) recurring * daysInMonth / dayOfMonth else recurring
-        return oneShot + recurringProjected
+        val projected = oneShot + recurringProjected
+        val formula = buildString {
+            append("测算 = 一次性已发生 ¥${MoneyUtil.fenToYuan(oneShot)}")
+            append(" + 日频已发生 ¥${MoneyUtil.fenToYuan(recurring)}")
+            append(" × ${daysInMonth}/${dayOfMonth}")
+            append(" = ¥${MoneyUtil.fenToYuan(projected)}")
+        }
+        return ProjectionBreakdown(
+            month = month,
+            dayOfMonth = dayOfMonth,
+            daysInMonth = daysInMonth,
+            spentFen = spent,
+            oneShotFen = oneShot,
+            recurringSpentFen = recurring,
+            recurringProjectedFen = recurringProjected,
+            projectedFen = projected,
+            budgetFen = budgetFen,
+            includeRefund = includeRefund,
+            includeInvestIncome = includeInvestIncome,
+            includeInvestExpense = includeInvestExpense,
+            clusters = detail.sortedWith(compareByDescending<ProjectionCluster> { it.totalFen }),
+            formula = formula,
+        )
     }
 
     /**
@@ -655,6 +752,8 @@ if (projected > budgetFen && dayOfMonth < daysInMonth) {
                         section = "动作",
                     )
                 )
+            } else {
+                // 既未回到上月水平、占比也未过半：不给多余动作建议
             }
         }
         if (budgetFen > 0 && expense < budgetFen && dayOfMonth < daysInMonth) {

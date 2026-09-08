@@ -166,7 +166,10 @@ composable(Routes.AI_SETTINGS) {
                 composable(Routes.ONDEVICE_MODELS) {
                     com.simpleaccount.app.ui.settings.OnDeviceModelScreen(navController)
                 }
-composable(Routes.AUTO_RECORD) {
+                composable(Routes.PROJECTION_DETAIL) {
+                    com.simpleaccount.app.ui.home.ProjectionDetailScreen(navController)
+                }
+                composable(Routes.AUTO_RECORD) {
                     com.simpleaccount.app.ui.settings.AutoRecordScreen(navController)
                 }
                 composable(Routes.LEDGER_SCOPE) {

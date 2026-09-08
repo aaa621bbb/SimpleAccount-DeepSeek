@@ -105,6 +105,21 @@ class SettingsRepository @Inject constructor(
         const val BACKEND_ONDEVICE = "ondevice"
 
         /**
+         * 记账识别引擎模式（互斥/级联，由用户明确选择）：
+         * - api：仅云端 API Agent
+         * - ondevice：仅端侧模型
+         * - rules：仅本地规则（LocalAccountant / UtteranceParser）
+         * - api_rules：规则优先，吃不准再 API
+         * - ondevice_rules：规则优先，吃不准再端侧
+         */
+        const val KEY_ACCOUNTING_ENGINE = "accounting_engine"
+        const val ENGINE_API = "api"
+        const val ENGINE_ONDEVICE = "ondevice"
+        const val ENGINE_RULES = "rules"
+        const val ENGINE_API_RULES = "api_rules"
+        const val ENGINE_ONDEVICE_RULES = "ondevice_rules"
+
+        /**
          * 智能体执行授权：
          * - confirm：每次写操作前需用户确认（默认）
          * - auto：授权后自动执行，写工具直接落库
@@ -306,6 +321,52 @@ class SettingsRepository @Inject constructor(
         val norm = if (v == BACKEND_ONDEVICE) BACKEND_ONDEVICE else BACKEND_CLOUD
         setSetting(KEY_MODEL_BACKEND, norm)
         _modelBackend.value = norm
+    }
+
+    // ---------------- 记账识别引擎模式 ----------------
+
+    private val _accountingEngine = MutableStateFlow(accountingEngine())
+    val accountingEngineFlow: StateFlow<String> = _accountingEngine.asStateFlow()
+
+    fun accountingEngine(): String {
+        val v = readSetting(KEY_ACCOUNTING_ENGINE)
+        return when (v) {
+            ENGINE_API, ENGINE_ONDEVICE, ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> v
+            else -> {
+                // 兼容旧 model_backend：端侧 → ondevice_rules；云端 → api_rules
+                if (modelBackend() == BACKEND_ONDEVICE) ENGINE_ONDEVICE_RULES else ENGINE_API_RULES
+            }
+        }
+    }
+
+    suspend fun setAccountingEngine(v: String) {
+        val norm = when (v) {
+            ENGINE_API, ENGINE_ONDEVICE, ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> v
+            else -> ENGINE_API_RULES
+        }
+        setSetting(KEY_ACCOUNTING_ENGINE, norm)
+        _accountingEngine.value = norm
+        // 同步 model_backend，供既有 AgentLoop / OnDevice 路径读取
+        val backend = when (norm) {
+            ENGINE_ONDEVICE, ENGINE_ONDEVICE_RULES -> BACKEND_ONDEVICE
+            else -> BACKEND_CLOUD
+        }
+        setModelBackend(backend)
+    }
+
+    /** 当前模式是否允许规则引擎先吃。 */
+    fun engineAllowsRules(): Boolean = when (accountingEngine()) {
+        ENGINE_RULES, ENGINE_API_RULES, ENGINE_ONDEVICE_RULES -> true
+        else -> false
+    }
+
+    /** 当前模式是否允许模型（API 或端侧）兜底。 */
+    fun engineAllowsModel(): Boolean = accountingEngine() != ENGINE_RULES
+
+    /** 当前模式是否走端侧（纯端侧或端侧×规则）。 */
+    fun engineUsesOnDevice(): Boolean = when (accountingEngine()) {
+        ENGINE_ONDEVICE, ENGINE_ONDEVICE_RULES -> true
+        else -> false
     }
 
     // ---------------- 智能体执行授权（每次确认 / 授权后自动执行） ----------------

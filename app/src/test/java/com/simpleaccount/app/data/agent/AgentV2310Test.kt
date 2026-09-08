@@ -85,15 +85,37 @@ class AgentV2310Test {
         assertEquals(QueryIntent.LEDGER_WRITE, IntentGate.classify("帮我记一笔午餐 25 元"))
         assertEquals(QueryIntent.LEDGER_READ, IntentGate.classify("本月花了多少"))
         assertEquals(QueryIntent.CHAT, IntentGate.classify("今天天气怎么样"))
+        // 高置信消费：时间+商户+买了，无金额 → WRITE（追问金额，不降级闲聊）
+        assertEquals(
+            QueryIntent.LEDGER_WRITE,
+            IntentGate.classify("今天上午9:25在蜜雪冰城买了个雪糕"),
+        )
+        assertTrue(IntentGate.isHighConfidenceSpend("今天上午9:25在蜜雪冰城买了个雪糕"))
+    }
+
+    @Test
+    fun accountingEngine_modesExclusive() {
+        // 五档常量互不重复且覆盖纯/混用
+        val modes = setOf(
+            SettingsRepository.ENGINE_API,
+            SettingsRepository.ENGINE_ONDEVICE,
+            SettingsRepository.ENGINE_RULES,
+            SettingsRepository.ENGINE_API_RULES,
+            SettingsRepository.ENGINE_ONDEVICE_RULES,
+        )
+        assertEquals(5, modes.size)
     }
 
     @Test
     fun onDeviceCatalog_tiersAndSizes() {
         assertTrue(OnDeviceModelCatalog.ALL.size >= 3)
         OnDeviceModelCatalog.ALL.forEach {
-            assertTrue(it.paramsLabel.contains("B"))
+            assertTrue(it.paramsLabel.isNotBlank())
             assertTrue(it.sizeBytes > 0)
-            assertTrue(it.downloadUrl.startsWith("http"))
+            // 内置模型有直连 URL；本地导入可为空（走 import 路径）
+            if (it.downloadUrl.isNotBlank()) assertTrue(it.downloadUrl.startsWith("http"))
+            assertTrue(it.displayName.isNotBlank())
+            assertTrue(it.description.isNotBlank())
             assertTrue(it.estTokPerSec > 0)
         }
         val entry = OnDeviceModelCatalog.recommended(DeviceTier.ENTRY, freeDiskBytes = 8L * 1024 * 1024 * 1024)

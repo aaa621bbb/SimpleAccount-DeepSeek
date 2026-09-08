@@ -123,37 +123,42 @@ fun AiSettingsScreen(
             )
             Spacer(Modifier.height(16.dp))
 
-            // --------- 智能体模型后端 ---------
-            Text("智能体大脑", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            // --------- 记账识别引擎（五档互斥） ---------
+            Text("记账识别引擎", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "云端大模型理解最强；端侧小模型下载后全离线可用（0.6B–1.5B，免费、数据不出设备）。本地管家始终可用。",
+                "五档互斥，切换即时全局生效，禁止双引擎抢同一输入。混用档：规则先吃，吃不准再交给模型。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
             listOf(
-                SettingsRepository.BACKEND_CLOUD to "云端大模型（推荐）",
-                SettingsRepository.BACKEND_ONDEVICE to "端侧小模型（离线免费）",
+                SettingsRepository.ENGINE_API to "纯 API（仅云端大模型）",
+                SettingsRepository.ENGINE_ONDEVICE to "纯端侧（仅本地小模型）",
+                SettingsRepository.ENGINE_RULES to "纯规则（仅本地会计，秒回）",
+                SettingsRepository.ENGINE_API_RULES to "API × 规则（推荐）",
+                SettingsRepository.ENGINE_ONDEVICE_RULES to "端侧 × 规则（离线混用）",
             ).forEach { (value, label) ->
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { viewModel.setModelBackend(value) }
+                        .clickable { viewModel.setAccountingEngine(value) }
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(
-                        selected = state.modelBackend == value,
-                        onClick = { viewModel.setModelBackend(value) }
+                        selected = state.accountingEngine == value,
+                        onClick = { viewModel.setAccountingEngine(value) }
                     )
                     Text(label, style = MaterialTheme.typography.bodyLarge)
                 }
             }
-            if (state.modelBackend == SettingsRepository.BACKEND_ONDEVICE) {
+            if (state.accountingEngine == SettingsRepository.ENGINE_ONDEVICE ||
+                state.accountingEngine == SettingsRepository.ENGINE_ONDEVICE_RULES
+            ) {
                 TextButton(onClick = { navController.navigate(com.simpleaccount.app.ui.navigation.Routes.ONDEVICE_MODELS) }) {
-                    Text("管理端侧模型（下载 / 基准 / 引导）")
+                    Text("管理端侧模型（下载 / 导入 / 基准）")
                 }
             }
             Spacer(Modifier.height(16.dp))

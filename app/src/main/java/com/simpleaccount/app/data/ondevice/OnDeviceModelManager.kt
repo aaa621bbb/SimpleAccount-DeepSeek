@@ -75,6 +75,7 @@ class OnDeviceModelManager @Inject constructor(
     }
 
     fun refresh() {
+        restoreImported()
         val map = LinkedHashMap<String, ModelLocalState>()
         for (spec in OnDeviceModelCatalog.ALL) {
             map[spec.id] = inspect(spec)
@@ -144,6 +145,8 @@ class OnDeviceModelManager @Inject constructor(
         cancelFlags[id] = true
         File(rootDir, "$id.bin").delete()
         File(rootDir, "$id.part").delete()
+        File(rootDir, "$id.meta.json").delete()
+        OnDeviceModelCatalog.unregisterImported(id)
         if (_activeId.value == id) {
             _activeId.value = null
             File(rootDir, "active.txt").delete()
@@ -160,6 +163,30 @@ class OnDeviceModelManager @Inject constructor(
      */
     suspend fun download(id: String, maxRetries: Int = 4): Boolean = withContext(Dispatchers.IO) {
         val spec = OnDeviceModelCatalog.byId(id) ?: return@withContext false
+        if (spec.downloadUrl.isBlank()) {
+            // 本地导入模型无下载地址：若已就绪直接成功，否则提示改走导入
+            val final = File(rootDir, "$id.bin")
+            if (final.exists() && final.length() > 0) {
+                patch(id) {
+                    it.copy(
+                        status = ModelLocalState.Status.READY,
+                        progress = 1f,
+                        downloadedBytes = final.length(),
+                        filePath = final.absolutePath,
+                        error = null,
+                    )
+                }
+                setActive(id)
+                return@withContext true
+            }
+            patch(id) {
+                it.copy(
+                    status = ModelLocalState.Status.FAILED,
+                    error = "该模型为本地导入，无下载地址。请用「从本机导入」注册。",
+                )
+            }
+            return@withContext false
+        }
         cancelFlags[id] = false
 
         // 磁盘空间预检（1.15x + 50MB 余量）
@@ -334,4 +361,82 @@ class OnDeviceModelManager @Inject constructor(
     }
 
     fun deviceProfile() = profiler.profile()
+
+    /**
+     * 从本地文件导入模型包并注册到目录。
+     * 复制到 ondevice_models/{id}.bin，生成/更新 [OnDeviceModelSpec] 元数据后标记 READY。
+     */
+    suspend fun importLocalFile(
+        sourcePath: String,
+        displayName: String? = null,
+        paramsLabel: String = "自定义",
+        description: String = "用户本地导入的模型包。",
+    ): String? = withContext(Dispatchers.IO) {
+        val src = File(sourcePath)
+        if (!src.exists() || !src.isFile || src.length() < 1024) return@withContext null
+        val base = displayName?.trim()?.ifBlank { null }
+            ?: src.nameWithoutExtension.take(32).ifBlank { "local-model" }
+        val id = "local-" + base.replace(Regex("[^A-Za-z0-9_\\-\\u4e00-\\u9fa5]"), "_")
+            .take(40).ifBlank { "import" } + "-" + (src.length() % 9973)
+        val final = File(rootDir, "$id.bin")
+        try {
+            src.inputStream().use { input ->
+                final.outputStream().use { output -> input.copyTo(output) }
+            }
+        } catch (e: Exception) {
+            final.delete()
+            return@withContext null
+        }
+        val spec = OnDeviceModelSpec(
+            id = id,
+            displayName = base,
+            paramsLabel = paramsLabel,
+            quant = src.extension.ifBlank { "bin" }.uppercase(),
+            sizeBytes = final.length(),
+            minTier = DeviceTier.ENTRY,
+            estTokPerSec = 10f,
+            estFirstTokenMs = 400,
+            downloadUrl = "",
+            sha256 = "",
+            runtimeHint = "gguf_cpu",
+            description = description,
+        )
+        OnDeviceModelCatalog.registerImported(spec)
+        // 写入 sidecar 元数据，refresh 后可恢复
+        runCatching {
+            File(rootDir, "$id.meta.json").writeText(
+                """{"id":"$id","displayName":"${spec.displayName}","paramsLabel":"${spec.paramsLabel}","quant":"${spec.quant}","sizeBytes":${spec.sizeBytes},"description":${org.json.JSONObject.quote(spec.description)}}"""
+            )
+        }
+        refresh()
+        setActive(id)
+        id
+    }
+
+    /** 启动时扫描已导入的 sidecar，重新挂到目录。 */
+    fun restoreImported() {
+        rootDir.listFiles()?.filter { it.name.endsWith(".meta.json") }?.forEach { meta ->
+            runCatching {
+                val j = org.json.JSONObject(meta.readText())
+                val id = j.getString("id")
+                val bin = File(rootDir, "$id.bin")
+                if (!bin.exists()) return@forEach
+                val spec = OnDeviceModelSpec(
+                    id = id,
+                    displayName = j.optString("displayName", id),
+                    paramsLabel = j.optString("paramsLabel", "自定义"),
+                    quant = j.optString("quant", "BIN"),
+                    sizeBytes = j.optLong("sizeBytes", bin.length()),
+                    minTier = DeviceTier.ENTRY,
+                    estTokPerSec = 10f,
+                    estFirstTokenMs = 400,
+                    downloadUrl = "",
+                    sha256 = "",
+                    runtimeHint = "gguf_cpu",
+                    description = j.optString("description", "用户本地导入的模型包。"),
+                )
+                OnDeviceModelCatalog.registerImported(spec)
+            }
+        }
+    }
 }

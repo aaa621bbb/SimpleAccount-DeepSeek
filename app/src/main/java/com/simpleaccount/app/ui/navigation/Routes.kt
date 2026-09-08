@@ -27,6 +27,8 @@ const val AI_SETTINGS = "ai_settings"
     const val PICKER_STYLE = "picker_style"
     const val MEMORY = "memory"
     const val AI_SHOT = "ai_shot"
+    /** 月底测算详情：口径 / 纳入豁免 / 日摊与一次性 */
+    const val PROJECTION_DETAIL = "projection_detail"
 
     fun edit(id: Long) = "edit/$id"
 }

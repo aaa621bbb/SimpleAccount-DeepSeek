@@ -40,18 +40,21 @@ class LocalAccountant @Inject constructor(
 /**
      * 写提案：预览文案 + 用户批准后执行的落库动作。
      * [needsConfirm]=false 表示仅追问补齐信息（金额/时刻未明示），直接展示、不弹确认、不落库。
+     *
+     * 参数顺序固定为 (preview, needsConfirm, commit)，保证尾随 lambda 绑定到 commit，
+     * 而不是 Boolean。
      */
     data class WriteProposal(
         val preview: String,
-        val commit: suspend () -> String,
         val needsConfirm: Boolean = true,
+        val commit: suspend () -> String,
     )
 
-    /** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
+/** 只读快答：查实数秒回；写意图返回 null（走 [tryProposeWrite]）。 */
     suspend fun tryAnswer(userMessage: String, modelAvailable: Boolean): String? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
         if (s.isEmpty()) return null
-        val writeLike = WRITE_LIKE.containsMatchIn(s)
+        val writeLike = WRITE_LIKE.containsMatchIn(s) || IntentGate.isHighConfidenceSpend(s)
         if (writeLike) return null
         if (s.length > 80) return null
         if (s.length > 4000) return null
@@ -83,7 +86,9 @@ class LocalAccountant @Inject constructor(
     suspend fun tryProposeWrite(userMessage: String): WriteProposal? {
         val s = userMessage.trim().trim('？', '?', '。', '！', '!')
         if (s.isEmpty() || s.length > 4000) return null
-        if (!WRITE_LIKE.containsMatchIn(s)) return null
+// 显式写指令，或高置信消费叙述（含时间+商户+消费动词，金额可缺）
+        val spendLike = IntentGate.isHighConfidenceSpend(s)
+        if (!WRITE_LIKE.containsMatchIn(s) && !spendLike) return null
         proposeAdd(s)?.let { return it }
         proposeWithdraw(s)?.let { return it }
         proposeRecategorize(s)?.let { return it }
@@ -240,18 +245,24 @@ class LocalAccountant @Inject constructor(
      */
     private suspend fun proposeAdd(s: String): WriteProposal? {
         val want = Regex("记(?:一笔|上|账|一下)|帮我记|入账").containsMatchIn(s)
-        if (!want) return null
-        if (s.contains("多少") && !Regex("\\d").containsMatchIn(s)) return null
+        val spendLike = IntentGate.isHighConfidenceSpend(s)
+        if (!want && !spendLike) return null
+        if (s.contains("多少") && !Regex("\\d").containsMatchIn(s) && !spendLike) return null
         val valid = categoryRepository.getAll().map { it.name }.toSet()
         val knownMerchants = accountRepository.getAll()
             .map { it.merchant.trim() }.filter { it.isNotEmpty() }.distinct()
         val p = UtteranceParser.parse(s, valid, knownMerchants)
-        // 金额未明示 → 必须先追问，禁止臆测填充
+        // 金额未明示 → 必须先追问，禁止臆测填充（高置信消费同样追问，不降级闲聊）
         val amountFen = p.amountFen
         if (amountFen == null || amountFen <= 0) {
             val hint = listOf(p.merchant, p.product).filter { it.isNotBlank() }.joinToString(" · ")
-            val ask = if (hint.isBlank()) "这笔要记多少钱？说个金额我马上帮你记上。"
-            else "「$hint」要记多少钱？说个金额我马上帮你记上。"
+            val whenHint = listOfNotNull(p.date, p.time).joinToString(" ").trim()
+            val ask = buildString {
+                if (hint.isNotBlank()) append("「$hint」")
+                if (whenHint.isNotBlank()) append("（$whenHint）")
+                if (isNotEmpty()) append(" ")
+                append("要记多少钱？说个金额我马上帮你记上。")
+            }
             return WriteProposal(preview = ask, needsConfirm = false) { ask }
         }
         val date = p.date ?: DateUtil.today()

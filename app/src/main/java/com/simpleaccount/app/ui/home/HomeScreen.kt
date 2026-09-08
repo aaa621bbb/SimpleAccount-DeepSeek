@@ -124,9 +124,19 @@ fun HomeScreen(
                             .verticalScroll(rememberScrollState())
                     ) {
                         if (isDense) {
-                            DenseTop(state, navController, onSetBudget = { showBudgetDialog = true }, onOpenInsight = { showInsight = true })
+                            DenseTop(
+                                state, navController,
+                                onSetBudget = { showBudgetDialog = true },
+                                onOpenInsight = { showInsight = true },
+                                onOpenProjection = { navController.navigate(Routes.PROJECTION_DETAIL) },
+                            )
                         } else {
-                            SimpleTop(state, navController, onSetBudget = { showBudgetDialog = true }, onOpenInsight = { showInsight = true })
+                            SimpleTop(
+                                state, navController,
+                                onSetBudget = { showBudgetDialog = true },
+                                onOpenInsight = { showInsight = true },
+                                onOpenProjection = { navController.navigate(Routes.PROJECTION_DETAIL) },
+                            )
                         }
                     }
 
@@ -362,8 +372,9 @@ private fun SimpleTop(
     navController: NavHostController,
     onSetBudget: () -> Unit,
     onOpenInsight: () -> Unit,
+    onOpenProjection: () -> Unit = {},
 ) {
-    CompactSummary(state, onSetBudget)
+    CompactSummary(state, onSetBudget, onOpenProjection)
 
     // 体检一句话（可点开详情）
     if (state.evidenceTips.isNotEmpty() || state.insightHeadline.isNotBlank()) {
@@ -432,12 +443,45 @@ private fun DenseTop(
     navController: NavHostController,
     onSetBudget: () -> Unit,
     onOpenInsight: () -> Unit,
+    onOpenProjection: () -> Unit = {},
 ) {
     // 本月支出卡
-    SummaryCards(state, onSetBudget = onSetBudget)
+    SummaryCards(state, onSetBudget = onSetBudget, onOpenProjection = onOpenProjection)
 
     // 一屏概览条：今日/预计/日均/结余横滑
-    OverviewStrip(state)
+    OverviewStrip(state, onOpenProjection = onOpenProjection)
+
+    // 近 7 天消费热力
+    if (state.weekHeat.any { it.second > 0 }) {
+        DenseWeekHeat(state.weekHeat)
+    }
+    // 高频商户 + 类目占比并排
+    if (state.topMerchants.isNotEmpty() || state.catShares.isNotEmpty()) {
+        DenseMerchantsAndCats(state, navController)
+    }
+
+    if (state.draftCount > 0) {
+        com.simpleaccount.app.ui.components.SoftCard(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .clickable { navController.navigate(Routes.AUTO_RECORD) }
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(
+                    "待确认草稿 · ${state.draftCount} 笔",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "无感记账低置信或「每次确认」模式下的流水，确认后才计入统计。点这里处理。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+    }
 
     // 近 7 天消费热力
     if (state.weekHeat.any { it.second > 0 }) {
@@ -694,19 +738,23 @@ private fun DenseMerchantsAndCats(state: HomeUiState, navController: NavHostCont
 
 /** 密集风专属：一屏概览条（今日/预计/日均/结余），横滑不占纵向空间。 */
 @Composable
-private fun OverviewStrip(state: HomeUiState) {
+private fun OverviewStrip(state: HomeUiState, onOpenProjection: () -> Unit = {}) {
     val day = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
     val dailyAvg = if (state.expense > 0) state.expense / day else 0L
+    data class Cell(val label: String, val value: String, val onClick: (() -> Unit)? = null)
     val cells = buildList {
-        add("今日" to "¥" + MoneyUtil.fenToYuan(state.todayFen))
-        if (state.projectedFen > 0) add("预计月底" to "¥" + MoneyUtil.fenToYuan(state.projectedFen))
-        if (dailyAvg > 0) add("本月日均" to "¥" + MoneyUtil.fenToYuan(dailyAvg))
+        add(Cell("今日", "¥" + MoneyUtil.fenToYuan(state.todayFen)))
+        if (state.projectedFen > 0) add(Cell("预计月底", "¥" + MoneyUtil.fenToYuan(state.projectedFen), onOpenProjection))
+        if (dailyAvg > 0) add(Cell("本月日均", "¥" + MoneyUtil.fenToYuan(dailyAvg)))
         if (state.todayCapFen > 0) {
             val left = state.todayCapFen - state.todayFen
-            add(if (left >= 0) "今天还能花" to "¥" + MoneyUtil.fenToYuan(left) else "今天已超" to "¥" + MoneyUtil.fenToYuan(-left))
+            add(
+                if (left >= 0) Cell("今天还能花", "¥" + MoneyUtil.fenToYuan(left))
+                else Cell("今天已超", "¥" + MoneyUtil.fenToYuan(-left))
+            )
         }
-        add("结余" to "¥" + MoneyUtil.fenToYuan(state.balance))
-        add("收入" to "¥" + MoneyUtil.fenToYuan(state.income))
+        add(Cell("结余", "¥" + MoneyUtil.fenToYuan(state.balance)))
+        add(Cell("收入", "¥" + MoneyUtil.fenToYuan(state.income)))
     }
     Row(
         Modifier
@@ -715,15 +763,16 @@ private fun OverviewStrip(state: HomeUiState) {
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        cells.forEach { (label, value) ->
+        cells.forEach { cell ->
             Column(
                 Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .then(if (cell.onClick != null) Modifier.clickable(onClick = cell.onClick) else Modifier)
                     .padding(horizontal = 12.dp, vertical = 7.dp)
             ) {
-                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(cell.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(cell.value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -731,7 +780,7 @@ private fun OverviewStrip(state: HomeUiState) {
 
 /** 简约风统计卡：单卡收敛（支出/结余/预算/今日/进度），纵向只占一小卡。 */
 @Composable
-private fun CompactSummary(state: HomeUiState, onSetBudget: () -> Unit) {
+private fun CompactSummary(state: HomeUiState, onSetBudget: () -> Unit, onOpenProjection: () -> Unit = {}) {
     val pal = com.simpleaccount.app.ui.theme.LocalAppPalette.current
     Box(
         Modifier
@@ -803,7 +852,8 @@ private fun CompactSummary(state: HomeUiState, onSetBudget: () -> Unit) {
                 Text(
                     bits.joinToString(" · "),
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.8f)
+                    color = Color.White.copy(alpha = 0.8f),
+                    modifier = if (state.projectedFen > 0) Modifier.clickable(onClick = onOpenProjection) else Modifier,
                 )
             }
         }
@@ -811,7 +861,7 @@ private fun CompactSummary(state: HomeUiState, onSetBudget: () -> Unit) {
 }
 
 @Composable
-private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
+private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit, onOpenProjection: () -> Unit = {}) {
     val pal = com.simpleaccount.app.ui.theme.LocalAppPalette.current
     Column(
         Modifier
@@ -952,7 +1002,8 @@ private fun SummaryCards(state: HomeUiState, onSetBudget: () -> Unit) {
                     Text(
                         paceBits.joinToString(" · "),
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.8f)
+                        color = Color.White.copy(alpha = 0.8f),
+                        modifier = if (state.projectedFen > 0) Modifier.clickable(onClick = onOpenProjection) else Modifier,
                     )
                 }
             }

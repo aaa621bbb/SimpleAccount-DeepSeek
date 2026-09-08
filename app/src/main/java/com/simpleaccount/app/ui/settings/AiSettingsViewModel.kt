@@ -134,6 +134,10 @@ data class AiSettingsUiState(
     /** 智能体模型后端：cloud 云端大模型 / ondevice 端侧小模型。 */
     val modelBackend: String = SettingsRepository.BACKEND_CLOUD,
     /**
+     * 记账识别引擎（互斥）：api / ondevice / rules / api_rules / ondevice_rules
+     */
+    val accountingEngine: String = SettingsRepository.ENGINE_API_RULES,
+    /**
      * 智能体执行授权：
      * confirm=每次执行前需确认（默认）；auto=授权后自动执行。
      */
@@ -176,6 +180,7 @@ class AiSettingsViewModel @Inject constructor(
                 useMainForVision = settingsRepository.useMainModelForVision(),
                 thinkingLevel = settingsRepository.thinkingLevel(),
                 modelBackend = settingsRepository.modelBackend(),
+                accountingEngine = settingsRepository.accountingEngine(),
                 agentExecAuth = settingsRepository.agentExecAuth(),
             )
             // 已配好 Key → 自动拉取该接口的可用模型列表
@@ -290,7 +295,26 @@ class AiSettingsViewModel @Inject constructor(
     fun setModelBackend(backend: String) {
         viewModelScope.launch {
             settingsRepository.setModelBackend(backend)
-            _state.value = _state.value.copy(modelBackend = backend)
+            // 与引擎模式对齐：切换 backend 时同步到对应混用档
+            val eng = if (backend == SettingsRepository.BACKEND_ONDEVICE)
+                SettingsRepository.ENGINE_ONDEVICE_RULES
+            else SettingsRepository.ENGINE_API_RULES
+            settingsRepository.setAccountingEngine(eng)
+            _state.value = _state.value.copy(
+                modelBackend = backend,
+                accountingEngine = eng,
+            )
+        }
+    }
+
+    /** 记账识别引擎五档（互斥），即时全局生效。 */
+    fun setAccountingEngine(engine: String) {
+        viewModelScope.launch {
+            settingsRepository.setAccountingEngine(engine)
+            _state.value = _state.value.copy(
+                accountingEngine = settingsRepository.accountingEngine(),
+                modelBackend = settingsRepository.modelBackend(),
+            )
         }
     }
 

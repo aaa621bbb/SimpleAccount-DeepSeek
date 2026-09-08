@@ -34,14 +34,28 @@ data class OnDeviceModelSpec(
 
 object OnDeviceModelCatalog {
 
+    /** 用户本地导入的模型（运行时追加，不入 APK 资源）。 */
+    private val imported = mutableListOf<OnDeviceModelSpec>()
+
+    fun registerImported(spec: OnDeviceModelSpec) {
+        synchronized(imported) {
+            imported.removeAll { it.id == spec.id }
+            imported.add(spec)
+        }
+    }
+
+    fun unregisterImported(id: String) {
+        synchronized(imported) { imported.removeAll { it.id == id } }
+    }
+
     /**
-     * 内置模型清单。
+     * 内置 + 本地导入。
      *
      * 体积与 URL：使用可公开拉取的小体积演示包（真实 GGUF 头 + 权重切片的 stub），
      * 安装后由 [OnDeviceInferenceEngine] 识别并启用本地精简推理链路。
      * 更换正式权重时只需改 URL / sha256 / sizeBytes。
      */
-    val ALL: List<OnDeviceModelSpec> = listOf(
+    private val BUILTIN: List<OnDeviceModelSpec> = listOf(
         OnDeviceModelSpec(
             id = "sa-qwen06b-q4",
             displayName = "记账精简 0.6B Q4",
@@ -101,6 +115,9 @@ object OnDeviceModelCatalog {
         ),
     )
 
+    val ALL: List<OnDeviceModelSpec>
+        get() = synchronized(imported) { BUILTIN + imported.toList() }
+
     fun byId(id: String): OnDeviceModelSpec? = ALL.firstOrNull { it.id == id }
 
     /** 按设备档位给出推荐列表（可装得下的靠前）。 */
@@ -119,5 +136,11 @@ object OnDeviceModelCatalog {
         if (spec.sizeBytes * 115 / 100 > freeDiskBytes) return false
         val needRam = (spec.sizeBytes / (1024 * 1024)) * 13 / 10
         return needRam < totalRamMb * 60 / 100
+    }
+
+    /** 人类可读体积。 */
+    fun sizeLabel(bytes: Long): String {
+        val mb = bytes / (1024.0 * 1024.0)
+        return if (mb >= 1024) "%.1f GB".format(mb / 1024) else "%.0f MB".format(mb)
     }
 }

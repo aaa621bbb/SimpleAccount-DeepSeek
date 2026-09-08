@@ -190,6 +190,7 @@ val backend = backends.current()
         }
 val intent = IntentGate.classify(userMessage)
         val writeFast = intent == QueryIntent.LEDGER_WRITE ||
+            IntentGate.isHighConfidenceSpend(userMessage) ||
             Regex("删|撤回|帮我记|记一笔|记上|撤销|无感|自动记账|改成|改到|归类|归入|改分类|批量改").containsMatchIn(userMessage)
         // 写操作授权：confirm=每次确认（默认）/ auto=授权后自动执行
         val autoExecute = settingsRepository.isAgentAutoExecute()

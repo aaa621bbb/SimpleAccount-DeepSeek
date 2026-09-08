@@ -17,9 +17,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Speed
@@ -40,9 +43,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +57,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import com.simpleaccount.app.data.ondevice.DeviceTier
 import com.simpleaccount.app.data.ondevice.ModelLocalState
+import java.io.File
 
 /**
  * 端侧小模型落地页：设备画像、分级推荐、下载管理、基准验证、使用引导。
@@ -60,7 +68,29 @@ fun OnDeviceModelScreen(
     viewModel: OnDeviceModelViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    var importMsg by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { viewModel.refresh() }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        // 复制到缓存再导入（content:// 不能直接当 File）
+        runCatching {
+            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "local-model.gguf"
+            val cache = File(context.cacheDir, "od_import_${System.currentTimeMillis()}_$name")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                cache.outputStream().use { output -> input.copyTo(output) }
+            }
+            viewModel.importLocal(cache.absolutePath, displayName = name.substringBeforeLast('.')) { ok, msg ->
+                importMsg = if (ok) "已导入并启用：$msg" else msg
+                cache.delete()
+            }
+        }.onFailure {
+            importMsg = "导入失败：${it.message}"
+        }
+    }
 
     Scaffold(
         topBar = { SettingsSubToolbar("端侧小模型", onBack = { navController.popBackStack() }) }
@@ -83,12 +113,27 @@ fun OnDeviceModelScreen(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "下载 0.6B–1.5B 量化模型后，飞行模式也能查账、记账。无账号、无订阅，数据不出设备。" +
-                            "引擎自动选 GPU 加速（Vulkan/OpenCL），不支持则回退 CPU。",
+                            "引擎自动选 GPU 加速（Vulkan/OpenCL），不支持则回退 CPU。下载走直连，不经业务 API，飞行模式外均可拉。",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         lineHeight = 18.sp,
                     )
                 }
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = {
+                    importLauncher.launch(arrayOf("*/*", "application/octet-stream"))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("从本机导入模型包（GGUF/bin）")
+            }
+            importMsg?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.height(16.dp))
 
@@ -214,11 +259,12 @@ fun OnDeviceModelScreen(
             Text("使用说明", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             val steps = listOf(
-                "1. 按设备档位选一个「推荐」模型，点下载（支持断点续传）。",
-                "2. 下载完成后点「启用」，再到 AI 设置把「智能体大脑」切到端侧小模型。",
-                "3. 可跑基准看本机 tok/s；满意后再日常使用。",
-                "4. 飞行模式/无网下照常查账记账；数据全程留在本机。",
-                "5. 磁盘不够或不想用了，点删除即可释放空间。",
+                "1. 按设备档位选「推荐」模型点下载（支持断点续传）；或点「从本机导入」注册已有 GGUF。",
+                "2. 下载/导入完成后点「启用」，再到 AI 设置把「记账引擎」切到纯端侧或端侧×规则。",
+                "3. 卡片展示名称、简介、参数量、体积、量化与预估吞吐。",
+                "4. 可跑基准看本机 tok/s；满意后再日常使用。",
+                "5. 飞行模式/无网下照常查账记账；数据全程留在本机。下载本身需网络，不经业务断网开关。",
+                "6. 磁盘不够或不想用了，点删除即可释放空间。",
             )
             steps.forEach {
                 Text(it, fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -107,8 +107,8 @@ class OnDeviceModelViewModel @Inject constructor(
             manager.setActive(id)
             settingsRepository.setOnDeviceModelId(id)
             engine.unload() // 下次 chat 时按新模型加载
-            // 启用端侧后端，方便用户一键开用
-            settingsRepository.setModelBackend(SettingsRepository.BACKEND_ONDEVICE)
+            // 启用端侧后端 + 端侧×规则引擎，方便用户一键开用
+            settingsRepository.setAccountingEngine(SettingsRepository.ENGINE_ONDEVICE_RULES)
             settingsRepository.setAiEnabled(true)
         }
     }
@@ -132,4 +132,22 @@ class OnDeviceModelViewModel @Inject constructor(
     }
 
     fun fmtSize(bytes: Long): String = manager.fmtMb(bytes)
+
+    /**
+     * 从本机文件路径导入模型包并注册（名称/简介/参数量/体积由文件与用户输入决定）。
+     * @return 新模型 id；失败返回 null
+     */
+    fun importLocal(path: String, displayName: String? = null, onDone: (Boolean, String) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            val id = manager.importLocalFile(path, displayName = displayName)
+            if (id != null) {
+                settingsRepository.setOnDeviceModelId(id)
+                settingsRepository.setModelBackend(SettingsRepository.BACKEND_ONDEVICE)
+                settingsRepository.setAccountingEngine(SettingsRepository.ENGINE_ONDEVICE_RULES)
+                onDone(true, id)
+            } else {
+                onDone(false, "导入失败：文件无效或过小")
+            }
+        }
+    }
 }
