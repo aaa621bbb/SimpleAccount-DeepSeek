@@ -255,10 +255,22 @@ class AgentTools @Inject constructor(
             required = emptyList(),
         ),
         AgentToolSpec(
+            name = "suggest_merchant_categories",
+            description = "为待归类/指定商家给出分类建议（关键词+历史映射），不落库。用户说「帮我归类商家」「这些商家该分哪类」时先调本工具，再让用户确认后 classify_merchants 落库。可一次给几十上百个建议，禁止以「数量太多」推脱。",
+            parameters = mapOf(
+                "pending_only" to ("boolean" to "true 只建议待归类商家，默认 true"),
+                "keyword" to ("string" to "可选：只处理商家名含该词的"),
+                "limit" to ("integer" to "最多建议条数，默认 80，最大 300"),
+                "merchants" to ("string" to "可选：逗号分隔的商家名列表；给出则只建议这些"),
+            ),
+            required = emptyList(),
+        ),
+        AgentToolSpec(
             name = "classify_merchants",
-            description = "给指定商家批量设置分类（覆盖写回账本）。输入 JSON 格式 {\"商家名\":\"分类名\"}。分类名必须是下列之一：餐饮、交通、购物、娱乐、医疗、教育、居住、通讯、转账、其它（支出）；工资、奖金、投资、兼职、退款、其它收入（收入）。返回实际更新的条数。",
+            description = "批量把商家归入分类并写回映射+追改历史账单。mappings 为 JSON {\"商家\":\"分类\"}。可一次处理大量商家，禁止说「没有批量工具」「数量太多分不了」。分类名须为现有分类。若不知分哪类，先调 suggest_merchant_categories。",
             parameters = mapOf(
                 "mappings" to ("string" to "JSON 字符串，形如 {\"瑞幸咖啡\":\"餐饮\",\"滴滴出行\":\"交通\"}"),
+                "apply_history" to ("boolean" to "是否追改该商家历史账单，默认 true"),
             ),
             required = listOf("mappings"),
         ),
@@ -334,6 +346,7 @@ class AgentTools @Inject constructor(
                 "set_theme" -> setTheme(call.arguments)
                 "set_auto_record" -> setAutoRecord(call.arguments)
                 "list_merchants" -> listMerchants(call.arguments)
+                "suggest_merchant_categories" -> suggestMerchantCategories(call.arguments)
                 "classify_merchants" -> classifyMerchants(call.arguments)
                 "get_insights" -> getInsights(call.arguments)
                 "memory_get" -> {
@@ -443,6 +456,7 @@ class AgentTools @Inject constructor(
             }
             "delete_category" -> "将删除分类「${a.optString("name")}」（预置分类无法删除；仍有账单的分类会失败）"
             "set_merchant_category" -> "将设置商家映射：以后「${a.optString("merchant").trim()}」的账都归「${a.optString("category").trim()}」（不影响已有账单）。"
+            "suggest_merchant_categories" -> "将生成商家分类建议（只读，不落库）"
             "classify_merchants" -> "将批量改写商家分类并追改历史账单：${a.optString("mappings").take(120)}"
             "set_monthly_budget" -> {
                 val yuan = a.optDouble("amount")
@@ -1238,36 +1252,101 @@ val all = scopedTxs().filter { it.date.startsWith(month) }
         return sb.toString()
     }
 
+    
+    private suspend fun suggestMerchantCategories(args: String): String {
+        val a = parseArgs(args)
+        val pendingOnly = if (a.has("pending_only")) a.optBoolean("pending_only") else true
+        val keyword = a.optString("keyword").trim()
+        val limit = a.optInt("limit", 80).coerceIn(1, 300)
+        val explicit = a.optString("merchants").split(',', '，', ' ', '\n')
+            .map { it.trim() }.filter { it.isNotEmpty() }
+        val valid = categoryRepository.getAll().map { it.name }.toSet()
+        val pool = when {
+            explicit.isNotEmpty() -> explicit.map { name ->
+                merchantRepository.getByMerchant(name) ?: com.simpleaccount.app.data.entity.Merchant(
+                    merchant = name, category = "", status = com.simpleaccount.app.data.entity.Merchant.STATUS_PENDING
+                )
+            }
+            pendingOnly -> merchantRepository.getByStatus(com.simpleaccount.app.data.entity.Merchant.STATUS_PENDING)
+            else -> merchantRepository.getAll()
+        }.filter { keyword.isEmpty() || it.merchant.contains(keyword, ignoreCase = true) }
+            .take(limit)
+        if (pool.isEmpty()) return "没有待建议的商家。可用 list_merchants 查看，或把商家名通过 merchants 参数传入。"
+        val sb = StringBuilder()
+        sb.appendLine("共 ${pool.size} 个商家分类建议（未落库；确认后调用 classify_merchants 传入 mappings）：")
+        val mappings = org.json.JSONObject()
+        var auto = 0
+        for (m in pool.sortedBy { it.merchant }) {
+            val suggested = suggestCategoryForMerchant(m.merchant, valid)
+            val conf = if (suggested != null) "建议" else "需你指定"
+            val cat = suggested ?: "其它"
+            if (suggested != null) auto++
+            mappings.put(m.merchant, cat)
+            sb.appendLine("- ${m.merchant} → $cat（$conf；当前=${m.category.ifBlank { "未设" }}）")
+        }
+        sb.appendLine("自动命中 $auto/${pool.size}。mappings JSON：")
+        sb.appendLine(mappings.toString())
+        sb.appendLine("用户确认后请调用 classify_merchants(mappings=上述 JSON)。")
+        return sb.toString()
+    }
+
+    /** 商家名 → 分类建议：关键词规则优先，其次模糊历史映射。 */
+    private suspend fun suggestCategoryForMerchant(merchant: String, valid: Set<String>): String? {
+        val name = merchant.trim()
+        if (name.isEmpty()) return null
+        val byKw = com.simpleaccount.app.util.KeywordRules.classify(name)
+        if (byKw != null && byKw in valid) return byKw
+        // 历史：同名前缀商家已归类
+        val known = merchantRepository.getAll()
+            .filter { it.category.isNotBlank() && it.category in valid }
+            .filter { name.contains(it.merchant) || it.merchant.contains(name) }
+            .maxByOrNull { it.merchant.length }
+        if (known != null) return known.category
+        // 账单里该商家最常见分类
+        val txs = accountRepository.getAll().filter { it.merchant.contains(name) || name.contains(it.merchant) }
+        if (txs.isNotEmpty()) {
+            val top = txs.groupingBy { it.category }.eachCount().maxByOrNull { it.value }?.key
+            if (top != null && top in valid) return top
+        }
+        return null
+    }
+
     private suspend fun classifyMerchants(args: String): String {
         val a = parseArgs(args)
         val raw = a.optString("mappings")
+        val applyHistory = if (a.has("apply_history")) a.optBoolean("apply_history") else true
         val valid = categoryRepository.getAll().map { it.name }.toSet()
         val map = try {
             val obj = JSONObject(raw)
             obj.keys().asSequence().associateWith { obj.getString(it).trim() }
         } catch (e: Exception) {
-            return "参数解析失败：$raw"
+            return "参数解析失败：请传 JSON mappings，例如 {\"瑞幸\":\"餐饮\"}。原始=$raw"
         }
-        var updated = 0; var skipped = 0
+        if (map.isEmpty()) return "失败 rows_affected=0。mappings 为空。可先 suggest_merchant_categories 生成建议。"
+        var updated = 0; var skipped = 0; var txRows = 0
         for ((merchant, category) in map) {
             if (category !in valid) { skipped++; continue }
-            val existing = merchantRepository.getByMerchant(merchant.trim())
             val name = merchant.trim()
             if (name.isEmpty()) { skipped++; continue }
+            val existing = merchantRepository.getByMerchant(name)
             if (existing == null) {
                 merchantRepository.insert(
                     Merchant(merchant = name, category = category, status = Merchant.STATUS_USER_SET)
                 )
             } else {
-                merchantRepository.update(existing.copy(category = category, status = Merchant.STATUS_USER_SET))
+                merchantRepository.update(existing.copy(category = category, status = Merchant.STATUS_USER_SET, updatedAt = System.currentTimeMillis()))
             }
-            // 同步追改账本里该商家的分类
-            accountRepository.getAllImport()
-                .filter { it.merchant.trim() == name }
-                .forEach { accountRepository.update(it.copy(category = category)) }
+            if (applyHistory) {
+                val targets = accountRepository.getAll()
+                    .filter { it.merchant.trim() == name || it.merchant.contains(name) }
+                targets.forEach {
+                    accountRepository.update(it.copy(category = category, updatedAt = System.currentTimeMillis()))
+                    txRows++
+                }
+            }
             updated++
         }
-        return "已归类 $updated 个商家，$skipped 个因分类名无效跳过。"
+        return "【账本已核验】rows_affected=$txRows 已归类商家 $updated 个（映射已写），追改账单 $txRows 笔；$skipped 个因分类名无效跳过。"
     }
 
 private suspend fun getInsights(args: String): String {

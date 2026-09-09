@@ -150,4 +150,15 @@ class OnDeviceModelViewModel @Inject constructor(
             }
         }
     }
+
+    fun cleanupOrphans(onDone: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val freed = manager.cleanupOrphans()
+            refresh()
+            onDone(if (freed > 0) "已清理残留/未完成文件，释放 ${manager.fmtMb(freed)}" else "没有可清理的残留文件")
+        }
+    }
+
+    fun storageReport(): String = manager.listStorageReport()
+
 }

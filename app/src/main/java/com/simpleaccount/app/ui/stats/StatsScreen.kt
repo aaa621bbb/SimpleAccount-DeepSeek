@@ -301,8 +301,8 @@ private fun PieCard(
             modifier = Modifier.padding(start = 18.dp, top = 12.dp)
         )
         Text(
-            if (state.pieSplitSubs) "二级全拆细分；点分类看账单。可切换合并到一级。"
-            else "一级占比；点右侧 › 展开二级，再点二级看账单。可切换二级全拆。",
+            if (state.pieSplitSubs) "仅二级占比（已去掉一级汇总，避免重复归属）。点分类看账单。"
+            else "一级占比；点右侧 › 展开二级下钻。可切换「仅二级」。",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 2.dp)
@@ -312,7 +312,7 @@ private fun PieCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (state.pieSplitSubs) "二级全拆" else "合并一级",
+                if (state.pieSplitSubs) "仅二级" else "按一级",
                 fontSize = 12.sp,
                 modifier = Modifier.weight(1f),
             )
@@ -360,7 +360,7 @@ private fun PieCard(
                         PieLegendRow(
                             s = s,
                             total = state.total,
-                            hasChildren = s.children.isNotEmpty(),
+                            hasChildren = !state.pieSplitSubs && s.children.isNotEmpty(),
                             childrenOpen = open,
                             onToggleChildren = {
                                 openParents = if (open) openParents - s.categoryName

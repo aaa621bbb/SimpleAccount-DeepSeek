@@ -80,6 +80,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var showBudgetDialog by remember { mutableStateOf(false) }
+    var showProjection by remember { mutableStateOf(false) }
     var showInsight by remember { mutableStateOf(false) }
     var showLedgers by remember { mutableStateOf(false) }
     var evidenceTip by remember { mutableStateOf<com.simpleaccount.app.data.insights.InsightTip?>(null) }
@@ -128,14 +129,14 @@ fun HomeScreen(
                                 state, navController,
                                 onSetBudget = { showBudgetDialog = true },
                                 onOpenInsight = { showInsight = true },
-                                onOpenProjection = { try { navController.navigate(Routes.PROJECTION_DETAIL) { launchSingleTop = true } } catch (_: Exception) { } },
+                                onOpenProjection = { showProjection = true },
                             )
                         } else {
                             SimpleTop(
                                 state, navController,
                                 onSetBudget = { showBudgetDialog = true },
                                 onOpenInsight = { showInsight = true },
-                                onOpenProjection = { try { navController.navigate(Routes.PROJECTION_DETAIL) { launchSingleTop = true } } catch (_: Exception) { } },
+                                onOpenProjection = { showProjection = true },
                             )
                         }
                     }
@@ -363,6 +364,25 @@ fun HomeScreen(
             }
         )
     }
+
+    if (showProjection) {
+        ProjectionLiteSheet(
+            projectedFen = state.projectedFen,
+            expenseFen = state.expense,
+            budgetFen = state.budgetFen,
+            todayFen = state.todayFen,
+            onDismiss = { showProjection = false },
+            onOpenFull = {
+                showProjection = false
+                runCatching {
+                    navController.navigate(Routes.PROJECTION_DETAIL) {
+                        launchSingleTop = true
+                    }
+                }
+            },
+        )
+    }
+
 }
 
 /** 简约风顶部：收敛卡片体量，关键信息（支出/结余/预算/今日/体检一句话）一行式呈现。 */
@@ -1040,3 +1060,71 @@ private fun UploadBillButton(onClick: () -> Unit) {
         Text("上传账单", fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { contentDescription = "上传账单" })
     }
 }
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProjectionLiteSheet(
+    projectedFen: Long,
+    expenseFen: Long,
+    budgetFen: Long,
+    todayFen: Long,
+    onDismiss: () -> Unit,
+    onOpenFull: () -> Unit,
+) {
+    val day = java.time.LocalDate.now().dayOfMonth.coerceAtLeast(1)
+    val days = java.time.YearMonth.now().lengthOfMonth()
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text("月底测算", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "按这速度月底约",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "¥" + MoneyUtil.fenToYuan(projectedFen),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "本月已花 ¥${MoneyUtil.fenToYuan(expenseFen)} · 第 $day/$days 天 · 今天 ¥${MoneyUtil.fenToYuan(todayFen)}",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (budgetFen > 0) {
+                val delta = projectedFen - budgetFen
+                Text(
+                    if (delta > 0) "相对预算将超 ¥${MoneyUtil.fenToYuan(delta)}"
+                    else "相对预算结余约 ¥${MoneyUtil.fenToYuan(-delta)}",
+                    fontSize = 13.sp,
+                    color = if (delta > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "测算按「日频支出外推 + 一次性只计已发生」；完整公式与聚类明细见详情。",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onOpenFull) { Text("查看详情") }
+            }
+        }
+    }
+}
+

@@ -210,6 +210,25 @@ fun OnDeviceModelScreen(
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
 
+            
+            // ---- 存储与残留 ----
+            Text("本地文件", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                "模型保存在应用私有目录，升级后自动恢复索引。若显示「残留」可启用或清理。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    importMsg = viewModel.storageReport()
+                }) { Text("查看文件列表") }
+                TextButton(onClick = {
+                    viewModel.cleanupOrphans { importMsg = it }
+                }) { Text("清理残留") }
+            }
+            Spacer(Modifier.height(12.dp))
+
             // ---- 基准验证 ----
             Text("性能基准", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Text(

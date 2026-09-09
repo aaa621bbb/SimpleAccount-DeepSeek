@@ -199,17 +199,43 @@ private fun computeStats(
             )
         }
         val displaySlices = if (pieSplitSubs) {
-            // 二级全拆：所有有二级的展开为独立扇区；无二级的一级保留
+            // 二级全拆：只保留二级（及「一级/未细分」），图例与饼图均不再出现一级汇总行，避免双重归属
             val flat = mutableListOf<PieSlice>()
-            slices.forEach { p ->
-                if (p.children.isNotEmpty()) {
-                    p.children.filter { it.isSub }.forEach { flat += it }
-                    val rest = p.value - p.children.filter { it.isSub }.sumOf { it.value }
-                    if (rest > 0) flat += p.copy(value = rest, children = emptyList())
-                } else flat += p
+            slices.forEach { parent ->
+                val subs = parent.children.filter { it.isSub }
+                val subSum = subs.sumOf { it.value }
+                val rest = (parent.value - subSum).coerceAtLeast(0L)
+                if (subs.isEmpty() && rest <= 0L) {
+                    // 无二级且金额为 0 跳过
+                } else if (subs.isEmpty()) {
+                    // 整笔都无二级：用「一级/未细分」叶子，不保留一级汇总
+                    flat += PieSlice(
+                        categoryName = "${parent.categoryName}/未细分",
+                        colorHex = parent.colorHex,
+                        value = parent.value,
+                        parentCategory = parent.parentCategory,
+                        children = emptyList(),
+                        isSub = true,
+                    )
+                } else {
+                    flat.addAll(subs)
+                    if (rest > 0L) {
+                        flat += PieSlice(
+                            categoryName = "${parent.categoryName}/未细分",
+                            colorHex = parent.colorHex,
+                            value = rest,
+                            parentCategory = parent.parentCategory,
+                            children = emptyList(),
+                            isSub = true,
+                        )
+                    }
+                }
             }
             flat.sortedByDescending { it.value }
-        } else slices
+        } else {
+            // 合并模式：一级行 + children 供下钻，不把二级并进饼图主扇区
+            slices.map { it.copy(children = it.children) }
+        }
         val total = filtered.sumOf { it.amount }
 
         // 趋势：固定按最近 12 个连续月份（无数据的月为 0），与上方选择器的数据月份列表无关

@@ -102,7 +102,8 @@ class AgentLoop @Inject constructor(
                     "add_transaction", "withdraw_transaction", "delete_transaction",
                     "edit_transaction", "update_transaction_category", "reclassify_transactions",
                     "query_transactions", "list_merchants", "set_merchant_category",
-                    "create_category", "set_auto_record", "navigate",
+                    "suggest_merchant_categories", "classify_merchants",
+                    "create_category", "create_sub_category", "set_auto_record", "navigate",
                 )
             }
         }
@@ -119,6 +120,9 @@ class AgentLoop @Inject constructor(
                 names += setOf("get_summary", "get_category_totals")
             }
             if (Regex("商家|哪家|商户").containsMatchIn(s)) names += "get_merchant_totals"
+            if (Regex("归类|分类商家|待归类").containsMatchIn(s)) {
+                names += setOf("list_merchants", "suggest_merchant_categories", "classify_merchants", "query_transactions")
+            }
             if (Regex("哪天|每天|按天|昨天|今天|前天|上个月|本月").containsMatchIn(s)) {
                 names += setOf("get_daily_totals", "query_transactions")
             }
@@ -134,7 +138,9 @@ class AgentLoop @Inject constructor(
         return all.filter {
             it.name in setOf(
                 "get_summary", "get_insights", "list_months", "navigate", "query_transactions",
-                "add_transaction", "reclassify_transactions", "update_transaction_category", "create_category", "create_sub_category",
+                "add_transaction", "reclassify_transactions", "update_transaction_category",
+                "create_category", "create_sub_category",
+                "list_merchants", "suggest_merchant_categories", "classify_merchants", "set_merchant_category",
                 "edit_transaction", "delete_transaction", "withdraw_transaction",
             )
         }

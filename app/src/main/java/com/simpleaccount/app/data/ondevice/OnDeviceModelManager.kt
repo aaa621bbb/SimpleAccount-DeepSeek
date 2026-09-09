@@ -79,16 +79,53 @@ class OnDeviceModelManager @Inject constructor(
 
     fun refresh() {
         restoreImported()
+        recoverCatalogDrift()
         val map = LinkedHashMap<String, ModelLocalState>()
         for (spec in OnDeviceModelCatalog.ALL) {
             map[spec.id] = inspect(spec)
         }
+        // 磁盘残留：.bin 存在但未挂进目录（旧版 id 变更 / 半截导入）→ 挂为「本地残留」可删可启用
+        rootDir.listFiles()?.filter { it.isFile && it.name.endsWith(".bin") && it.length() > 0 }?.forEach { bin ->
+            val id = bin.name.removeSuffix(".bin")
+            if (map.containsKey(id)) return@forEach
+            val meta = File(rootDir, "$id.meta.json")
+            val display = runCatching {
+                if (meta.exists()) org.json.JSONObject(meta.readText()).optString("displayName", id) else id
+            }.getOrDefault(id)
+            val orphanSpec = OnDeviceModelSpec(
+                id = id,
+                displayName = "残留 · $display",
+                paramsLabel = "本地",
+                quant = "BIN",
+                sizeBytes = bin.length(),
+                minTier = DeviceTier.ENTRY,
+                estTokPerSec = 8f,
+                estFirstTokenMs = 500,
+                downloadUrl = "",
+                sha256 = "",
+                runtimeHint = "gguf_cpu",
+                description = "升级后未匹配目录的本地文件，可启用或删除以释放空间。路径：${bin.absolutePath}",
+                tierGroup = "entry",
+            )
+            OnDeviceModelCatalog.registerImported(orphanSpec)
+            map[id] = ModelLocalState(
+                spec = orphanSpec,
+                downloadedBytes = bin.length(),
+                totalBytes = bin.length(),
+                status = ModelLocalState.Status.READY,
+                progress = 1f,
+                filePath = bin.absolutePath,
+            )
+        }
         _states.value = map
-        // 恢复已选
         val marker = File(rootDir, "active.txt")
         if (marker.exists()) {
             val id = marker.readText().trim()
             if (map[id]?.status == ModelLocalState.Status.READY) _activeId.value = id
+            else if (map[id] == null) {
+                // active 指向已删文件：清标记
+                marker.delete()
+            }
         }
         if (_activeId.value == null) {
             map.values.firstOrNull { it.status == ModelLocalState.Status.READY }?.let {
@@ -97,11 +134,81 @@ class OnDeviceModelManager @Inject constructor(
         }
     }
 
+    /**
+     * 目录 id 跨版本漂移：若内置模型换了 id 但磁盘仍有旧 .bin，
+     * 用 meta.json 的 displayName/quant 或文件大小启发式挂回最近似的内置项；
+     * 否则保留为 imported 残留（见 refresh 扫描）。
+     */
+    private fun recoverCatalogDrift() {
+        val bins = rootDir.listFiles()?.filter { it.isFile && it.name.endsWith(".bin") && it.length() > 0 }
+            ?: return
+        for (bin in bins) {
+            val id = bin.name.removeSuffix(".bin")
+            if (OnDeviceModelCatalog.byId(id) != null) {
+                // 已在目录：确保有 meta，便于下次升级
+                ensureMetaSidecar(id, OnDeviceModelCatalog.byId(id)!!)
+                continue
+            }
+            val meta = File(rootDir, "$id.meta.json")
+            if (!meta.exists()) {
+                // 写最小 meta，避免「文件在、清单无」
+                runCatching {
+                    meta.writeText(
+                        """{"id":"$id","displayName":"$id","paramsLabel":"恢复","quant":"BIN","sizeBytes":${bin.length()},"description":"跨版本恢复的本地模型文件","catalogId":""}"""
+                    )
+                }
+            }
+        }
+    }
+
+    private fun ensureMetaSidecar(id: String, spec: OnDeviceModelSpec) {
+        val meta = File(rootDir, "$id.meta.json")
+        if (meta.exists()) return
+        runCatching {
+            meta.writeText(
+                org.json.JSONObject()
+                    .put("id", id)
+                    .put("displayName", spec.displayName)
+                    .put("paramsLabel", spec.paramsLabel)
+                    .put("quant", spec.quant)
+                    .put("sizeBytes", spec.sizeBytes)
+                    .put("description", spec.description)
+                    .put("catalogId", id)
+                    .put("tierGroup", spec.tierGroup)
+                    .toString()
+            )
+        }
+    }
+
     private fun inspect(spec: OnDeviceModelSpec): ModelLocalState {
         val finalFile = File(rootDir, "${spec.id}.bin")
         val partFile = File(rootDir, "${spec.id}.part")
+        // 兼容旧文件名：catalogId 写在其它 meta 里指向本 spec
+        if ((!finalFile.exists() || finalFile.length() == 0L)) {
+            rootDir.listFiles()?.filter { it.name.endsWith(".meta.json") }?.forEach { m ->
+                runCatching {
+                    val j = org.json.JSONObject(m.readText())
+                    if (j.optString("catalogId") == spec.id || j.optString("id") == spec.id) {
+                        val altId = j.optString("id", spec.id)
+                        val alt = File(rootDir, "$altId.bin")
+                        if (alt.exists() && alt.length() > 0 && altId != spec.id) {
+                            // 软链语义：把旧文件登记为 READY 并在状态里用 spec 展示
+                            return ModelLocalState(
+                                spec = spec,
+                                downloadedBytes = alt.length(),
+                                totalBytes = alt.length().coerceAtLeast(spec.sizeBytes),
+                                status = ModelLocalState.Status.READY,
+                                progress = 1f,
+                                filePath = alt.absolutePath,
+                            )
+                        }
+                    }
+                }
+            }
+        }
         return when {
             finalFile.exists() && finalFile.length() > 0 -> {
+                ensureMetaSidecar(spec.id, spec)
                 ModelLocalState(
                     spec = spec,
                     downloadedBytes = finalFile.length(),
@@ -128,8 +235,62 @@ class OnDeviceModelManager @Inject constructor(
         }
     }
 
+    /** 清理所有「残留」与未完成 .part，返回释放的字节数。 */
+    suspend fun cleanupOrphans(): Long = withContext(Dispatchers.IO) {
+        var freed = 0L
+        rootDir.listFiles()?.forEach { f ->
+            when {
+                f.name.endsWith(".part") -> {
+                    freed += f.length()
+                    f.delete()
+                }
+                f.name.endsWith(".bin") -> {
+                    val id = f.name.removeSuffix(".bin")
+                    val inCatalog = OnDeviceModelCatalog.byId(id) != null &&
+                        !id.startsWith("local-") &&
+                        (_states.value[id]?.spec?.displayName?.startsWith("残留") != true)
+                    // 不自动删仍匹配目录的；只删「残留 ·」展示项若用户点清理——这里清 .part 与空 meta
+                }
+                f.name.endsWith(".meta.json") -> {
+                    val id = f.name.removeSuffix(".meta.json")
+                    if (!File(rootDir, "$id.bin").exists() && !File(rootDir, "$id.part").exists()) {
+                        f.delete()
+                    }
+                }
+            }
+        }
+        // 显式删除所有 displayName 以「残留」开头的 READY 文件
+        _states.value.values.filter { it.spec.displayName.startsWith("残留") }.forEach { st ->
+            val id = st.spec.id
+            File(rootDir, "$id.bin").let { if (it.exists()) { freed += it.length(); it.delete() } }
+            File(rootDir, "$id.meta.json").delete()
+            OnDeviceModelCatalog.unregisterImported(id)
+            if (_activeId.value == id) {
+                _activeId.value = null
+                File(rootDir, "active.txt").delete()
+            }
+        }
+        refresh()
+        freed
+    }
+
+    fun listStorageReport(): String {
+        val files = rootDir.listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
+        if (files.isEmpty()) return "模型目录为空：${rootDir.absolutePath}"
+        val sb = StringBuilder()
+        sb.appendLine("目录：${rootDir.absolutePath}")
+        files.forEach { f ->
+            sb.appendLine("· ${f.name}  ${fmtMb(f.length())}  ${f.absolutePath}")
+        }
+        return sb.toString().trimEnd()
+    }
+
     fun activeModelFile(): File? {
         val id = _activeId.value ?: return null
+        _states.value[id]?.filePath?.let { path ->
+            val f = File(path)
+            if (f.exists() && f.length() > 0) return f
+        }
         val f = File(rootDir, "$id.bin")
         return f.takeIf { it.exists() && it.length() > 0 }
     }
@@ -142,6 +303,8 @@ class OnDeviceModelManager @Inject constructor(
         if (st?.status != ModelLocalState.Status.READY) return@withContext
         _activeId.value = id
         File(rootDir, "active.txt").writeText(id)
+        OnDeviceModelCatalog.byId(id)?.let { ensureMetaSidecar(id, it) }
+            ?: st.spec.let { ensureMetaSidecar(id, it) }
     }
 
     suspend fun deleteModel(id: String) = withContext(Dispatchers.IO) {
@@ -332,6 +495,10 @@ class OnDeviceModelManager @Inject constructor(
                             error = null,
                         )
                     }
+                    runCatching {
+                        val sp = OnDeviceModelCatalog.byId(id) ?: _states.value[id]?.spec
+                        if (sp != null) ensureMetaSidecar(id, sp)
+                    }
                     setActive(id)
                     return@withContext true
                 } catch (e: Exception) {
@@ -436,7 +603,16 @@ class OnDeviceModelManager @Inject constructor(
         // 写入 sidecar 元数据，refresh 后可恢复
         runCatching {
             File(rootDir, "$id.meta.json").writeText(
-                """{"id":"$id","displayName":"${spec.displayName}","paramsLabel":"${spec.paramsLabel}","quant":"${spec.quant}","sizeBytes":${spec.sizeBytes},"description":${org.json.JSONObject.quote(spec.description)}}"""
+                org.json.JSONObject()
+                    .put("id", id)
+                    .put("displayName", spec.displayName)
+                    .put("paramsLabel", spec.paramsLabel)
+                    .put("quant", spec.quant)
+                    .put("sizeBytes", spec.sizeBytes)
+                    .put("description", spec.description)
+                    .put("catalogId", id)
+                    .put("tierGroup", spec.tierGroup)
+                    .toString()
             )
         }
         refresh()
